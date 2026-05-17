@@ -75,5 +75,54 @@
     "matchType": "contains",
     "reply": "⏰ *Operating Hours*\n\n📅 Mon - Sat: 9:00 AM - 9:00 PM\n📅 Sun: Closed",
     "enabled": true
+  },
+  {
+    "id": "rule_stop_ok",
+    "trigger": "ok",
+    "matchType": "exact",
+    "skipReply": true,
+    "enabled": true
+  },
+  {
+    "id": "rule_stop_okay",
+    "trigger": "okay",
+    "matchType": "exact",
+    "skipReply": true,
+    "enabled": true
+  },
+  {
+    "id": "rule_stop_thik",
+    "trigger": "thik hai",
+    "matchType": "exact",
+    "skipReply": true,
+    "enabled": true
+  },
+  {
+    "id": "rule_stop_bye",
+    "trigger": "bye",
+    "matchType": "exact",
+    "skipReply": true,
+    "enabled": true
+  },
+  {
+    "id": "rule_stop_goodbye",
+    "trigger": "goodbye",
+    "matchType": "exact",
+    "skipReply": true,
+    "enabled": true
+  },
+  {
+    "id": "rule_stop_thanks",
+    "trigger": "thanks",
+    "matchType": "exact",
+    "skipReply": true,
+    "enabled": true
+  },
+  {
+    "id": "rule_stop_thankyou",
+    "trigger": "thank you",
+    "matchType": "exact",
+    "skipReply": true,
+    "enabled": true
   }
 ]

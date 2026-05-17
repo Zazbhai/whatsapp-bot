@@ -18,6 +18,25 @@ if (fs.existsSync(envPath)) {
   });
 }
 
+// Auto-detect Chrome/Chromium executable path across platforms
+function findChrome() {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
+  const candidates = process.platform === 'win32'
+    ? ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+       `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+       `${process.env.LOCALAPPDATA}\\Chromium\\Application\\chrome.exe`]
+    : process.platform === 'darwin'
+    ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+       `${process.env.HOME}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`]
+    : ['/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium'];
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch {}
+  }
+  try { return require('puppeteer').executablePath(); } catch {}
+  return null;
+}
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -170,7 +189,14 @@ const defaultRulesTemplate = [
   { "id": "rule_cash", "trigger": "💰 Win $1000 Cash", "matchType": "exact", "reply": "💵 *$1000 Cash Prize!*\n\nYou're one step away! 🏆\n\nReply *claim* to enter!", "enabled": true },
   { "id": "rule_support", "trigger": "📞 Contact Support", "matchType": "exact", "reply": "📞 *Customer Support*\n\n📧 Email: support@example.com\n⏰ Hours: 24/7\n\nReply with your question!", "enabled": true },
   { "id": "rule_info", "trigger": "info", "matchType": "exact", "reply": "🤖 *WhatsApp Automation Bot v1.0.0*\n\n✅ Real-time message logs\n✅ Interactive Auto-Responders\n✅ Manual Messaging & File Sharing\n✅ AI Smart Replies", "enabled": true },
-  { "id": "rule_hours", "trigger": "hours", "matchType": "contains", "reply": "⏰ *Operating Hours*\n\n📅 Mon - Sat: 9:00 AM - 9:00 PM\n📅 Sun: Closed", "enabled": true }
+  { "id": "rule_hours", "trigger": "hours", "matchType": "contains", "reply": "⏰ *Operating Hours*\n\n📅 Mon - Sat: 9:00 AM - 9:00 PM\n📅 Sun: Closed", "enabled": true },
+  { "id": "rule_stop_ok", "trigger": "ok", "matchType": "exact", "skipReply": true, "enabled": true },
+  { "id": "rule_stop_okay", "trigger": "okay", "matchType": "exact", "skipReply": true, "enabled": true },
+  { "id": "rule_stop_thik", "trigger": "thik hai", "matchType": "exact", "skipReply": true, "enabled": true },
+  { "id": "rule_stop_bye", "trigger": "bye", "matchType": "exact", "skipReply": true, "enabled": true },
+  { "id": "rule_stop_goodbye", "trigger": "goodbye", "matchType": "exact", "skipReply": true, "enabled": true },
+  { "id": "rule_stop_thanks", "trigger": "thanks", "matchType": "exact", "skipReply": true, "enabled": true },
+  { "id": "rule_stop_thankyou", "trigger": "thank you", "matchType": "exact", "skipReply": true, "enabled": true }
 ];
 
 function loadInstanceRules(slug) {
@@ -411,6 +437,7 @@ function initInstanceClient(slug) {
       dataPath: path.join(__dirname, '.wwebjs_auth')
     }),
     puppeteer: {
+      executablePath: findChrome(),
       headless: true,
       args: [
         '--no-sandbox',
@@ -419,9 +446,17 @@ function initInstanceClient(slug) {
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
         '--no-zygote',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-sync',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--mute-audio',
+        '--hide-scrollbars',
+        '--disable-field-trial-config'
       ]
-    }
+    },
+    puppeteerTimeout: 90000
   });
 
   client.on('qr', async (qr) => {
@@ -545,6 +580,13 @@ function initInstanceClient(slug) {
 
       if (isMatch) {
         ruleMatched = true;
+
+        // skipReply: conversation-ending signals — log and stop, no reply sent
+        if (rule.skipReply) {
+          logInstanceEvent(slug, 'system', `Stop signal "${rule.trigger}" — skipping AI reply.`);
+          break;
+        }
+
         logInstanceEvent(slug, 'system', `Rule match: "${rule.trigger}" -> Sending auto-reply...`);
 
         // Randomized human-reply typing delay
@@ -867,7 +909,7 @@ app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {
 
 app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
-  const { trigger, matchType, reply, enabled, format, buttons } = req.body;
+  const { trigger, matchType, reply, enabled, format, buttons, skipReply } = req.body;
   if (!trigger || !matchType || !reply) {
     return res.status(400).json({ error: 'Missing required rules parameters' });
   }
@@ -882,6 +924,7 @@ app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
   };
   if (format) newRule.format = format;
   if (buttons) newRule.buttons = buttons;
+  if (skipReply !== undefined) newRule.skipReply = skipReply;
   rules.push(newRule);
   
   if (saveInstanceRules(slug, rules)) {
@@ -894,7 +937,7 @@ app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
 app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
   const { id } = req.params;
-  const { trigger, matchType, reply, enabled, format, buttons } = req.body;
+  const { trigger, matchType, reply, enabled, format, buttons, skipReply } = req.body;
   
   let rules = loadInstanceRules(slug);
   const index = rules.findIndex(r => r.id === id);
@@ -911,6 +954,7 @@ app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
   };
   if (format !== undefined) rules[index].format = format;
   if (buttons !== undefined) rules[index].buttons = buttons;
+  if (skipReply !== undefined) rules[index].skipReply = skipReply;
 
   if (saveInstanceRules(slug, rules)) {
     res.json(rules[index]);

@@ -1,3 +1,7 @@
-node_modules
+node_modules/
+.wwebjs_auth/
+.wwebjs_cache/
+uploads/*
+!uploads/.gitkeep
 .env
-.wwebjs_auth
+data/memory.json
