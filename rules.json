@@ -3,77 +3,42 @@
     "id": "rule_1",
     "trigger": "hi",
     "matchType": "contains",
-    "reply": "Hello! 👋 I am your automated assistant. How can I help you today?\n\nType *menu* to see my commands!",
+    "reply": "Hello! 👋 I am your automated assistant. How can I help you today?\n\nType *menu* to see a list of available commands!",
     "enabled": true
   },
   {
-    "id": "rule_hello",
+    "id": "rule_2",
     "trigger": "hello",
     "matchType": "contains",
     "reply": "Hello there! 👋 Welcome to our automated service.\n\nType *menu* to see what I can do for you!",
     "enabled": true
   },
   {
-    "id": "rule_menu",
+    "id": "rule_3",
     "trigger": "menu",
     "matchType": "exact",
-    "format": "buttons",
-    "reply": "🤖 *Main Menu*\n\nChoose an option below:",
-    "buttons": [
-      { "body": "📱 Get Free iPhone", "id": "free_iphone" },
-      { "body": "📱 Get Free Samsung", "id": "free_samsung" },
-      { "body": "💰 Win $1000 Cash", "id": "win_cash" },
-      { "body": "📞 Contact Support", "id": "support" }
-    ],
+    "reply": "🤖 *Main Menu* 🤖\n\nHere are the available commands you can type:\n\n*1. info* - Get information about this automation bot\n*2. contact* - Get our contact details\n*3. schedule* - Check our operating hours\n\nSimply reply with any of these keywords!",
     "enabled": true
   },
   {
-    "id": "rule_iphone",
-    "trigger": "📱 Get Free iPhone",
-    "matchType": "exact",
-    "reply": "🎉 *Free iPhone Offer!*\n\nCongratulations! You qualify for a free iPhone 16! 🎁\n\nTo claim:\n1. Send this bot to 10 friends\n2. Reply with your full name\n3. Pay only $9.99 shipping\n\nReply *claim* to start!",
-    "enabled": true
-  },
-  {
-    "id": "rule_samsung",
-    "trigger": "📱 Get Free Samsung",
-    "matchType": "exact",
-    "reply": "🎉 *Free Samsung Galaxy S25!*\n\nYou've been selected for our giveaway! 🎁\n\nTo claim:\n1. Join our Telegram channel (bit.ly/our-channel)\n2. Reply with your email address\n3. Cover just $7.99 shipping\n\nReply *claim* to proceed!",
-    "enabled": true
-  },
-  {
-    "id": "rule_cash",
-    "trigger": "💰 Win $1000 Cash",
-    "matchType": "exact",
-    "reply": "💵 *$1000 Cash Prize!*\n\nYou're one step away from winning $1000! 🏆\n\nTo enter:\n1. Spin our lucky wheel: bit.ly/spin-now\n2. Complete your profile\n3. Share with 5 friends for extra entries\n\nGood luck! 🍀",
-    "enabled": true
-  },
-  {
-    "id": "rule_support",
-    "trigger": "📞 Contact Support",
-    "matchType": "exact",
-    "reply": "📞 *Customer Support*\n\nOur team is here to help!\n\n📧 Email: support@example.com\n💬 Live Chat: example.com/chat\n⏰ Hours: 24/7\n\nReply with your question and we'll get back to you!",
-    "enabled": true
-  },
-  {
-    "id": "rule_claim",
-    "trigger": "claim",
-    "matchType": "exact",
-    "reply": "✅ *Claim Submitted!*\n\nThank you! Our team will contact you within 24 hours to process your claim.\n\nYour reference ID: CLAIM-\" + Math.random().toString(36).slice(2, 8).toUpperCase() + \"\n\nType *menu* to see more options!",
-    "enabled": true
-  },
-  {
-    "id": "rule_info",
+    "id": "rule_4",
     "trigger": "info",
     "matchType": "exact",
-    "reply": "🤖 *WhatsApp Automation Bot v1.0.0*\n\nThis bot is running on a highly stable Node.js backend. It features:\n✅ Real-time message logs\n✅ Interactive Auto-Responders\n✅ Manual Messaging & File Sharing\n✅ AI Smart Replies",
+    "reply": "🤖 *WhatsApp Automation Bot v1.0.0*\n\nThis bot is running on a highly stable Node.js backend. It features:\n✅ Real-time message logs\n✅ Interactive Auto-Responders\n✅ Manual Messaging & File Sharing\n✅ Sleek Web Dashboard UI",
     "enabled": true
   },
   {
-    "id": "rule_hours",
-    "trigger": "hours",
+    "id": "rule_5",
+    "trigger": "contact",
+    "matchType": "exact",
+    "reply": "📞 *Contact Support*\n\n📧 Email: support@yourdomain.com\n🌐 Website: www.yourdomain.com\n🏢 Location: Silicon Valley, CA",
+    "enabled": true
+  },
+  {
+    "id": "rule_6",
+    "trigger": "schedule",
     "matchType": "contains",
-    "reply": "⏰ *Operating Hours*\n\n📅 Mon - Sat: 9:00 AM - 9:00 PM\n📅 Sun: Closed",
+    "reply": "⏰ *Operating Hours*\n\n📅 Monday - Friday: 9:00 AM - 6:00 PM\n📅 Saturday: 10:00 AM - 4:00 PM\n📅 Sunday: Closed\n\nFeel free to leave a message, and we'll reply as soon as possible!",
     "enabled": true
   },
   {

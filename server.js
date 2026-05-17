@@ -182,14 +182,9 @@ const globalRulesFilePath = path.join(dataDir, 'rules.json');
 
 const defaultRulesTemplate = [
   { "id": "rule_1", "trigger": "hi", "matchType": "contains", "reply": "Hello! 👋 I am your automated assistant. Type *menu* to see my commands!", "enabled": true },
-  { "id": "rule_hello", "trigger": "hello", "matchType": "contains", "reply": "Hello there! 👋 Welcome to our automated service.\n\nType *menu* to see what I can do for you!", "enabled": true },
-  { "id": "rule_menu", "trigger": "menu", "matchType": "exact", "format": "buttons", "reply": "🤖 *Main Menu*\n\nChoose an option below:", "buttons": [{"body": "📱 Get Free iPhone", "id": "free_iphone"}, {"body": "📱 Get Free Samsung", "id": "free_samsung"}, {"body": "💰 Win $1000 Cash", "id": "win_cash"}, {"body": "📞 Contact Support", "id": "support"}], "enabled": true },
-  { "id": "rule_iphone", "trigger": "📱 Get Free iPhone", "matchType": "exact", "reply": "🎉 *Free iPhone Offer!*\n\nYou qualify for a free iPhone 16! 🎁\n\nReply *claim* to start!", "enabled": true },
-  { "id": "rule_samsung", "trigger": "📱 Get Free Samsung", "matchType": "exact", "reply": "🎉 *Free Samsung Galaxy S25!*\n\nYou've been selected for our giveaway! 🎁\n\nReply *claim* to proceed!", "enabled": true },
-  { "id": "rule_cash", "trigger": "💰 Win $1000 Cash", "matchType": "exact", "reply": "💵 *$1000 Cash Prize!*\n\nYou're one step away! 🏆\n\nReply *claim* to enter!", "enabled": true },
-  { "id": "rule_support", "trigger": "📞 Contact Support", "matchType": "exact", "reply": "📞 *Customer Support*\n\n📧 Email: support@example.com\n⏰ Hours: 24/7\n\nReply with your question!", "enabled": true },
-  { "id": "rule_info", "trigger": "info", "matchType": "exact", "reply": "🤖 *WhatsApp Automation Bot v1.0.0*\n\n✅ Real-time message logs\n✅ Interactive Auto-Responders\n✅ Manual Messaging & File Sharing\n✅ AI Smart Replies", "enabled": true },
-  { "id": "rule_hours", "trigger": "hours", "matchType": "contains", "reply": "⏰ *Operating Hours*\n\n📅 Mon - Sat: 9:00 AM - 9:00 PM\n📅 Sun: Closed", "enabled": true },
+  { "id": "rule_2", "trigger": "menu", "matchType": "exact", "reply": "🤖 *Auto Bot Menu* 🤖\n\n*1. info* - Check instance specifications\n*2. hours* - Operating schedules", "enabled": true },
+  { "id": "rule_3", "trigger": "info", "matchType": "exact", "reply": "🤖 *WhatsApp Bot Instance*\n\nThis browser sandbox engine is completely isolated from other platform bots.", "enabled": true },
+  { "id": "rule_4", "trigger": "hours", "matchType": "contains", "reply": "⏰ *Operating Hours*\n\n📅 Mon - Sat: 9:00 AM - 9:00 PM\n📅 Sun: Closed", "enabled": true },
   { "id": "rule_stop_ok", "trigger": "ok", "matchType": "exact", "skipReply": true, "enabled": true },
   { "id": "rule_stop_okay", "trigger": "okay", "matchType": "exact", "skipReply": true, "enabled": true },
   { "id": "rule_stop_thik", "trigger": "thik hai", "matchType": "exact", "skipReply": true, "enabled": true },
