@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp Bot - Premium Automation Hub</title>
+  <!-- Google Fonts: Plus Jakarta Sans for a premium tech feel -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons for clean sleek dashboard iconography -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Ambient background blobs -->
+  <div class="blob-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+
+  <!-- AUTHENTICATION PORTAL OVERLAY -->
+  <div class="auth-portal active" id="auth-portal">
+    <div class="auth-card glass-card">
+      <div class="auth-header">
+        <div class="auth-logo">
+          <i data-lucide="bot"></i>
+        </div>
+        <h2 id="auth-title">WA Bot Hub</h2>
+        <p id="auth-subtitle">Log in to access your automated WhatsApp instance.</p>
+      </div>
+      
+      <form id="auth-form" class="sleek-form">
+        <div class="form-group">
+          <label for="auth-username">Username</label>
+          <div class="input-with-icon">
+            <i data-lucide="user"></i>
+            <input type="text" id="auth-username" placeholder="Enter username..." required>
+          </div>
+        </div>
+        
+        <div class="form-group">
+          <label for="auth-password">Password</label>
+          <div class="input-with-icon">
+            <i data-lucide="lock"></i>
+            <input type="password" id="auth-password" placeholder="Enter password..." required>
+          </div>
+        </div>
+        
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="auth-submit-btn">
+          <span>Sign In</span>
+          <i data-lucide="arrow-right"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="app-container" style="display: none;">
+    <!-- Mobile Sidebar Overlay -->
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="app-sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-logo">
+          <i data-lucide="bot"></i>
+        </div>
+        <div class="brand-text">
+          <h2>WA Bot Hub</h2>
+          <span>Automation Core</span>
+        </div>
+        <button class="btn-action mobile-only-btn" id="mobile-sidebar-close" title="Close Menu">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+
+      <nav class="sidebar-menu">
+        <a href="#" class="menu-item active" data-tab="dashboard">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="#" class="menu-item" data-tab="responders">
+          <i data-lucide="message-square-code"></i>
+          <span>Auto-Responders</span>
+        </a>
+        <a href="#" class="menu-item" data-tab="messenger">
+          <i data-lucide="send"></i>
+          <span>Manual Messenger</span>
+        </a>
+        <a href="#" class="menu-item" data-tab="logs">
+          <i data-lucide="terminal"></i>
+          <span>System Logs</span>
+          <span class="log-indicator" id="unread-logs">0</span>
+        </a>
+        <a href="#" class="menu-item" data-tab="instances" id="menu-item-instances">
+          <i data-lucide="cpu"></i>
+          <span>Bot Instances</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-profile" id="bot-profile" style="display: none;">
+          <div class="avatar" id="bot-avatar">WA</div>
+          <div class="user-details">
+            <h4 id="bot-name">WhatsApp Bot</h4>
+            <span id="bot-wid">Loading...</span>
+          </div>
+        </div>
+        <button id="logout-btn" class="btn btn-danger btn-logout" style="display: none;">
+          <i data-lucide="log-out"></i>
+          <span>Disconnect WhatsApp</span>
+        </button>
+        <button id="dashboard-logout-btn" class="btn btn-secondary btn-sm" style="display: none; width: 100%;">
+          <i data-lucide="power"></i>
+          <span>Exit Dashboard</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="content-area">
+      <header class="content-header" style="display: flex; justify-content: space-between; align-items: center; gap: 15px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <button class="hamburger-btn" id="mobile-menu-toggle" title="Open Menu">
+            <i data-lucide="menu"></i>
+          </button>
+          <div class="header-title">
+            <h1 id="page-title">Overview</h1>
+            <p id="page-subtitle">Real-time status and operational health of your WhatsApp Bot.</p>
+          </div>
+        </div>
+        <div class="header-controls" style="display: flex; align-items: center; gap: 12px; margin-left: auto;">
+          <!-- Dynamic Bot Instance Selector -->
+          <div class="bot-selector-wrapper" id="header-bot-selector" style="display: none;">
+            <i data-lucide="bot" class="selector-icon"></i>
+            <select id="active-instance-select" class="sleek-select">
+              <!-- Dynamically populated options -->
+            </select>
+          </div>
+          <div class="connection-status-badge disconnected" id="header-status">
+            <span class="status-dot"></span>
+            <span class="status-text">Disconnected</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- TAB: DASHBOARD -->
+      <section class="tab-pane active" id="tab-dashboard">
+        <!-- Status Showcase Container -->
+        <div class="dashboard-grid">
+          <!-- Connection Card -->
+          <div class="glass-card status-card">
+            <div class="card-header">
+              <h3>Connection Portal</h3>
+              <div class="badge" id="portal-badge">Offline</div>
+            </div>
+            
+            <!-- Connection Body: QR Code Scan -->
+            <div class="portal-body" id="portal-body">
+              <!-- QR Showcase -->
+              <div id="qr-container" class="qr-container" style="display: none;">
+                <div class="qr-frame">
+                  <img id="qr-image" src="" alt="WhatsApp QR Code">
+                  <div class="scan-bar"></div>
+                </div>
+                <div class="qr-instructions">
+                  <h4>Scan QR Code</h4>
+                  <ol>
+                    <li>Open <strong>WhatsApp</strong> on your phone</li>
+                    <li>Tap <strong>Menu</strong> or <strong>Settings</strong> and select <strong>Linked Devices</strong></li>
+                    <li>Tap <strong>Link a Device</strong> and point your phone to this screen</li>
+                  </ol>
+                </div>
+              </div>
+
+              <!-- Connecting State -->
+              <div id="connecting-container" class="state-container" style="display: none;">
+                <div class="spinner-loader">
+                  <div class="double-bounce1"></div>
+                  <div class="double-bounce2"></div>
+                </div>
+                <h4>Initializing Core Engines...</h4>
+                <p id="connecting-progress">Establishing browser context & connection.</p>
+              </div>
+
+              <!-- Connected State -->
+              <div id="connected-container" class="state-container" style="display: none;">
+                <div class="success-glow">
+                  <i data-lucide="check-circle" class="success-icon"></i>
+                </div>
+                <h4>System Fully Operational</h4>
+                <p>The bot is currently linked and actively listening for incoming messages.</p>
+                <div class="device-details-grid">
+                  <div class="detail-item">
+                    <span class="label">Device Name:</span>
+                    <strong id="card-device-name">--</strong>
+                  </div>
+                  <div class="detail-item">
+                    <span class="label">Platform:</span>
+                    <strong id="card-device-platform">--</strong>
+                  </div>
+                  <div class="detail-item">
+                    <span class="label">Session Mode:</span>
+                    <strong>Local Persistence</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Disconnected State -->
+              <div id="disconnected-container" class="state-container">
+                <i data-lucide="alert-triangle" class="warning-icon"></i>
+                <h4>Bot is Stopped</h4>
+                <p>The WhatsApp automation engine is offline. Start the bot server to generate a scanner code.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Statistics -->
+          <div class="glass-card stats-card">
+            <div class="card-header">
+              <h3>Engine Metrics</h3>
+            </div>
+            <div class="stats-grid">
+              <div class="stat-box">
+                <div class="stat-icon sent">
+                  <i data-lucide="arrow-up-right"></i>
+                </div>
+                <div class="stat-number" id="stat-sent">0</div>
+                <div class="stat-label">Manual Sent</div>
+              </div>
+              
+              <div class="stat-box">
+                <div class="stat-icon received">
+                  <i data-lucide="arrow-down-left"></i>
+                </div>
+                <div class="stat-number" id="stat-received">0</div>
+                <div class="stat-label">Messages Logged</div>
+              </div>
+
+              <div class="stat-box">
+                <div class="stat-icon automated">
+                  <i data-lucide="message-square"></i>
+                </div>
+                <div class="stat-number" id="stat-replies">0</div>
+                <div class="stat-label">Auto-Replies Triggered</div>
+              </div>
+
+              <div class="stat-box">
+                <div class="stat-icon active-time">
+                  <i data-lucide="clock"></i>
+                </div>
+                <div class="stat-number" id="stat-uptime">00:00</div>
+                <div class="stat-label">Session Uptime</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Logs Preview -->
+        <div class="glass-card full-width-card logs-preview-card">
+          <div class="card-header">
+            <h3>Live Telemetry Stream</h3>
+            <button class="btn btn-secondary btn-sm" id="view-all-logs-btn">
+              <span>View Full Terminal</span>
+              <i data-lucide="arrow-right"></i>
+            </button>
+          </div>
+          <div class="terminal-body compact" id="dashboard-terminal-logs">
+            <!-- Feed will update dynamically -->
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: AUTO-RESPONDERS -->
+      <section class="tab-pane" id="tab-responders">
+        <!-- AI Agent Configuration Card -->
+        <div class="glass-card full-width-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <i data-lucide="sparkles" style="color: var(--secondary); width: 24px; height: 24px;"></i>
+              <div>
+                <h3 style="margin: 0;">AI Smart Responder (LLM)</h3>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Replies intelligently when no keyword triggers match, powered by open-source LLMs in the cloud.</p>
+              </div>
+            </div>
+            <label class="toggle-container">
+              <input type="checkbox" id="ai-enabled-toggle">
+              <span class="toggle-slider"></span>
+              <span class="toggle-label" id="ai-toggle-label">Disabled</span>
+            </label>
+          </div>
+          
+          <div id="ai-prompt-container" style="margin-top: 15px; display: none;">
+            <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <label for="ai-system-prompt" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">AI Persona & Instructions</label>
+              <textarea id="ai-system-prompt" rows="3" placeholder="Explain how the AI should behave (e.g. 'You are a polite receptionist for zazbhai's store. Brief answers only...')" style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed); resize: vertical;"></textarea>
+            </div>
+            <div style="display: flex; justify-content: flex-end;">
+              <button class="btn btn-secondary btn-sm" id="save-ai-settings-btn">
+                <i data-lucide="save" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                <span>Save AI Persona</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions-bar">
+          <div class="search-box">
+            <i data-lucide="search"></i>
+            <input type="text" id="rule-search-input" placeholder="Search rules by triggers or replies...">
+          </div>
+          <button class="btn btn-primary" id="open-add-rule-btn">
+            <i data-lucide="plus"></i>
+            <span>Add Auto-Reply Rule</span>
+          </button>
+        </div>
+
+        <!-- Rules Grid -->
+        <div class="rules-grid" id="rules-list-container">
+          <!-- Dynamic Rules will be rendered here -->
+        </div>
+      </section>
+
+      <!-- TAB: MANUAL MESSENGER -->
+      <section class="tab-pane" id="tab-messenger">
+        <div class="messenger-container">
+          <!-- Send Box Form -->
+          <div class="glass-card messenger-card">
+            <div class="card-header">
+              <h3>Compose Broadcast</h3>
+            </div>
+            
+            <form id="messenger-form" class="sleek-form">
+              <div class="form-group">
+                <label for="recipient-number">Recipient Number (with country code)</label>
+                <div class="input-with-icon">
+                  <i data-lucide="phone"></i>
+                  <input type="text" id="recipient-number" placeholder="e.g. +91 98765 43210 or 15551234567" required>
+                </div>
+                <span class="input-tip">Ensure you include the country code (no leading '+' is required, but accepted). Space and dashes will be cleaned automatically.</span>
+              </div>
+
+              <div class="form-group">
+                <label>Message Content Type</label>
+                <div class="type-selectors">
+                  <label class="type-selector active">
+                    <input type="radio" name="message-type" value="text" checked>
+                    <i data-lucide="type"></i>
+                    <span>Text Message</span>
+                  </label>
+                  <label class="type-selector">
+                    <input type="radio" name="message-type" value="file">
+                    <i data-lucide="file-up"></i>
+                    <span>File / Media Attachment</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Message Body Option -->
+              <div id="text-message-group" class="form-group animate-slide">
+                <label for="message-body">Message Body</label>
+                <textarea id="message-body" placeholder="Write your automated message here... Markdown styles like *bold*, _italic_, and ~strikethrough~ are supported." rows="6" required></textarea>
+              </div>
+
+              <!-- File Attachment Option -->
+              <div id="file-attachment-group" class="form-group animate-slide" style="display: none;">
+                <label>Attach Media File</label>
+                <div class="dropzone" id="file-dropzone">
+                  <input type="file" id="file-input" class="hidden-input">
+                  <div class="dropzone-prompt">
+                    <i data-lucide="cloud-upload" class="dropzone-icon"></i>
+                    <p>Drag and drop file here or <span>browse local files</span></p>
+                    <span class="file-limits">Supports Images (PNG, JPG), PDFs, Audio, Videos up to 16MB</span>
+                  </div>
+                  <div class="dropzone-file-preview" style="display: none;">
+                    <i data-lucide="file" class="preview-file-icon"></i>
+                    <div class="preview-details">
+                      <span class="preview-name">file_name.pdf</span>
+                      <span class="preview-size">0.0 KB</span>
+                    </div>
+                    <button type="button" class="btn-clear-file" id="btn-clear-file">
+                      <i data-lucide="x"></i>
+                    </button>
+                  </div>
+                </div>
+
+                <label for="file-caption" style="margin-top: 15px;">Attachment Caption (Optional)</label>
+                <div class="input-with-icon">
+                  <i data-lucide="align-left"></i>
+                  <input type="text" id="file-caption" placeholder="Add a caption description to go with your file...">
+                </div>
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-block btn-lg" id="send-message-btn">
+                  <i data-lucide="send"></i>
+                  <span>Transmit Message</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Tips & Help Guide -->
+          <div class="glass-card instructions-card">
+            <div class="card-header">
+              <h3>Broadcast Guidelines</h3>
+            </div>
+            <div class="instructions-body">
+              <div class="step-guide">
+                <div class="step-num">!</div>
+                <div class="step-text">
+                  <h5>Keep it Personal</h5>
+                  <p>Sending highly repetitive messages to hundreds of users might trigger WhatsApp ban filters. Try adding user names or personalizing content.</p>
+                </div>
+              </div>
+              <div class="step-guide">
+                <div class="step-num">i</div>
+                <div class="step-text">
+                  <h5>Attachment Limits</h5>
+                  <p>Large files (especially videos or PDFs over 16MB) can fail to send. Check file sizes prior to uploading.</p>
+                </div>
+              </div>
+              <div class="step-guide">
+                <div class="step-num">✓</div>
+                <div class="step-text">
+                  <h5>Country Code Format</h5>
+                  <p>Numbers must be prefixed with the country code (e.g., 91 for India, 1 for United States, 44 for United Kingdom) without symbols.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: SYSTEM LOGS -->
+      <section class="tab-pane" id="tab-logs">
+        <div class="logs-container">
+          <div class="glass-card console-card">
+            <div class="console-header">
+              <div class="console-actions">
+                <button class="filter-btn active" data-filter="all">All Logs</button>
+                <button class="filter-btn" data-filter="system">System</button>
+                <button class="filter-btn" data-filter="receive">Received</button>
+                <button class="filter-btn" data-filter="send">Sent</button>
+                <button class="filter-btn" data-filter="error">Errors</button>
+              </div>
+              <button class="btn btn-secondary btn-sm" id="clear-logs-btn">
+                <i data-lucide="trash-2"></i>
+                <span>Clear Console</span>
+              </button>
+            </div>
+            
+            <div class="terminal-body full-height" id="full-terminal-logs">
+              <!-- Logs stream dynamically -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: BOT INSTANCES -->
+      <section class="tab-pane" id="tab-instances">
+        <div class="actions-bar">
+          <div class="search-box">
+            <i data-lucide="search"></i>
+            <input type="text" id="instance-search-input" placeholder="Search bot instances...">
+          </div>
+          <button class="btn btn-primary" id="open-add-instance-btn">
+            <i data-lucide="plus-circle"></i>
+            <span>Create Bot Instance</span>
+          </button>
+        </div>
+
+        <!-- Instances Table -->
+        <div class="glass-card full-width-card">
+          <div class="card-header">
+            <h3>Active Bot Engines</h3>
+          </div>
+          <div class="table-container" style="overflow-x: auto; margin-top: 15px;">
+            <table class="sleek-table" style="width: 100%; border-collapse: collapse; text-align: left;">
+              <thead>
+                <tr style="border-bottom: 1px solid var(--panel-border); color: var(--text-muted); font-size: 0.85rem; font-weight: 600;">
+                  <th style="padding: 15px 20px;">Friendly Name</th>
+                  <th style="padding: 15px 20px;">Unique Slug (Identifier)</th>
+                  <th style="padding: 15px 20px;">WhatsApp Engine Status</th>
+                  <th style="padding: 15px 20px; text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="instances-list-container">
+                <!-- Dynamic instances loaded via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL: ADD / EDIT RULE -->
+  <div class="modal-overlay" id="rule-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="modal-title">Create Auto-Reply Rule</h3>
+        <button class="modal-close" id="modal-close-btn">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      
+      <form id="rule-form" class="sleek-form">
+        <input type="hidden" id="rule-id">
+        
+        <div class="form-group">
+          <label for="rule-trigger">Trigger Keyword / Phrase</label>
+          <div class="input-with-icon">
+            <i data-lucide="key-round"></i>
+            <input type="text" id="rule-trigger" placeholder="e.g. hello, help, price" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="rule-match-type">Match Condition</label>
+          <select id="rule-match-type" required>
+            <option value="exact">Exact Match (Match exactly the user text)</option>
+            <option value="contains">Contains (Trigger if user text contains keyword)</option>
+            <option value="starts_with">Starts With (Trigger if user text starts with keyword)</option>
+            <option value="regex">Regular Expression (Advanced pattern match)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="rule-reply">Automated Reply Message</label>
+          <textarea id="rule-reply" placeholder="The message the bot will send when triggered..." rows="5" required></textarea>
+        </div>
+
+        <div class="form-group row-group">
+          <label class="toggle-container">
+            <input type="checkbox" id="rule-enabled" checked>
+            <span class="toggle-slider"></span>
+            <span class="toggle-label">Enable this rule immediately</span>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="modal-submit-btn">Save Rule</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: CREATE BOT INSTANCE -->
+  <div class="modal-overlay" id="instance-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="instance-modal-title">Create Bot Instance</h3>
+        <button class="modal-close" id="instance-modal-close-btn">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      
+      <form id="instance-form" class="sleek-form">
+        <div class="form-group">
+          <label for="new-instance-name">Friendly Name</label>
+          <div class="input-with-icon">
+            <i data-lucide="tag"></i>
+            <input type="text" id="new-instance-name" placeholder="e.g. Sales Desk, Support Bot" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="new-instance-slug">Unique Slug / Identifier</label>
+          <div class="input-with-icon">
+            <i data-lucide="terminal"></i>
+            <input type="text" id="new-instance-slug" placeholder="e.g. sales-bot, customer-care" required pattern="^[a-z0-9\-]+$" title="Only lowercase letters, numbers, and hyphens allowed">
+          </div>
+          <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+            Used internally to isolate directories (e.g. <code>.wwebjs_auth/session_session_sales-bot</code>). Only lowercase letters, digits, and hyphens.
+          </p>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="instance-modal-cancel-btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Bot</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification System -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Socket.io and custom application script -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

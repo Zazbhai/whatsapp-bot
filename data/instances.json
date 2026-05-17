@@ -1,0 +1,16 @@
+[
+  {
+    "id": "inst_1779029195579",
+    "name": "Primary Bot",
+    "slug": "primary",
+    "createdAt": "2026-05-17T14:46:35.579Z",
+    "aiEnabled": true,
+    "aiSystemPrompt": "You are a multilingual assistant. Respond in the same language the user writes in. Keep replies under 2 sentences. Be concise.\nwrite like a human and when user asks for app then send https://chat.whatsapp.com/ITlGpClk0mNDk4BY4iuwuu link\n\nand if user asks for video or video link or how to claim free iphone then send https://youtube.com/shorts/B5mhbrTEgMc?si=ps4XLOvLaeDyCOFW"
+  },
+  {
+    "id": "inst_1779030431620",
+    "name": "sex",
+    "slug": "sex",
+    "createdAt": "2026-05-17T15:07:11.620Z"
+  }
+]

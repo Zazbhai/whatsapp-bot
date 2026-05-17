@@ -1,0 +1,30 @@
+[
+  {
+    "id": "rule_1",
+    "trigger": "hi",
+    "matchType": "contains",
+    "reply": "Hello! 👋 I am your personal automated assistant. Type *menu* to see my commands!",
+    "enabled": true
+  },
+  {
+    "id": "rule_2",
+    "trigger": "menu",
+    "matchType": "exact",
+    "reply": "🤖 *WhatsApp Menu* 🤖\n\n*1. info* - Bot statistics & info\n*2. hours* - Check our operating hours",
+    "enabled": true
+  },
+  {
+    "id": "rule_3",
+    "trigger": "info",
+    "matchType": "exact",
+    "reply": "🤖 *WhatsApp Tenant Bot*\n\nThis session is fully isolated and running on a multi-user automation platform.",
+    "enabled": true
+  },
+  {
+    "id": "rule_4",
+    "trigger": "hours",
+    "matchType": "contains",
+    "reply": "⏰ *Operating Hours*\n\n📅 Mon - Fri: 9:00 AM - 6:00 PM\n📅 Sun: Closed",
+    "enabled": true
+  }
+]
