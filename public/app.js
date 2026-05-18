@@ -587,6 +587,11 @@ ruleForm.addEventListener('submit', async (e) => {
   const sendApk = ruleSendApkCheckbox ? ruleSendApkCheckbox.checked : false;
   const replyMode = ruleReplyModeSelect ? ruleReplyModeSelect.value : 'sequential';
 
+  if (!reply && !sendApk) {
+    showToast('Please enter an automated reply message or check the Attach APK option!', 'error');
+    return;
+  }
+
   const payload = { trigger, matchType, reply, enabled, sendApk, replyMode };
   const url = id ? `/api/rules/${id}` : '/api/rules';
   const method = id ? 'PUT' : 'POST';

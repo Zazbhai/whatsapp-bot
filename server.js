@@ -1149,8 +1149,9 @@ app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {
 app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
   const { trigger, matchType, reply, enabled, format, buttons, skipReply, sendApk, replyMode } = req.body;
-  if (!trigger || !matchType || !reply) {
-    return res.status(400).json({ error: 'Missing required rules parameters' });
+  const hasReply = (reply !== undefined && reply !== null && reply.trim() !== '');
+  if (!trigger || !matchType || (!hasReply && !skipReply && !sendApk)) {
+    return res.status(400).json({ error: 'Missing required rules parameters. A rule must have a text reply, have skip-reply enabled, or attach an APK.' });
   }
 
   const rules = loadInstanceRules(slug);
@@ -1186,7 +1187,7 @@ app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
     return res.status(404).json({ error: 'Rule not found' });
   }
 
-  rules[index] = {
+  const updatedRule = {
     ...rules[index],
     trigger: trigger !== undefined ? trigger : rules[index].trigger,
     matchType: matchType !== undefined ? matchType : rules[index].matchType,
@@ -1195,9 +1196,16 @@ app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
     sendApk: sendApk !== undefined ? !!sendApk : rules[index].sendApk,
     replyMode: replyMode !== undefined ? replyMode : rules[index].replyMode
   };
-  if (format !== undefined) rules[index].format = format;
-  if (buttons !== undefined) rules[index].buttons = buttons;
-  if (skipReply !== undefined) rules[index].skipReply = skipReply;
+  if (format !== undefined) updatedRule.format = format;
+  if (buttons !== undefined) updatedRule.buttons = buttons;
+  if (skipReply !== undefined) updatedRule.skipReply = skipReply;
+
+  const hasReply = (updatedRule.reply !== undefined && updatedRule.reply !== null && updatedRule.reply.trim() !== '');
+  if (!updatedRule.trigger || !updatedRule.matchType || (!hasReply && !updatedRule.skipReply && !updatedRule.sendApk)) {
+    return res.status(400).json({ error: 'Missing required rules parameters. A rule must have a text reply, have skip-reply enabled, or attach an APK.' });
+  }
+
+  rules[index] = updatedRule;
 
   if (saveInstanceRules(slug, rules)) {
     res.json(rules[index]);
