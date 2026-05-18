@@ -552,8 +552,9 @@ async function transcribeAudio(slug, media) {
     logInstanceEvent(slug, 'system', `Executing local Python offline SpeechRecognition script...`);
     
     const transcription = await new Promise((resolve, reject) => {
-      // Support Python execution on Windows and Linux/MacOS environments
-      const cmd = `python transcribe.py "${tempFile}"`;
+      // Support Python execution dynamically (Windows defaults to python, Linux/macOS to python3)
+      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+      const cmd = `${pythonCmd} transcribe.py "${tempFile}"`;
       
       exec(cmd, (error, stdout, stderr) => {
         if (error) {
