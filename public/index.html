@@ -588,6 +588,9 @@
         <div class="form-group">
           <label for="rule-reply">Automated Reply Message</label>
           <textarea id="rule-reply" placeholder="The message the bot will send when triggered..." rows="5" required></textarea>
+          <span class="input-tip" style="margin-top: 4px; display: block; font-size: 0.75rem; color: var(--text-muted);">
+            💡 <strong>Multi-Reply Power:</strong> Separate replies with <code>|||</code> to send them as separate sequential messages! (e.g. <code>Welcome to Zazbhai Store!|||How can we assist you?</code>)
+          </span>
         </div>
 
         <div class="form-group row-group">
@@ -595,6 +598,14 @@
             <input type="checkbox" id="rule-enabled" checked>
             <span class="toggle-slider"></span>
             <span class="toggle-label">Enable this rule immediately</span>
+          </label>
+        </div>
+
+        <div class="form-group row-group" style="margin-top: 8px;">
+          <label class="toggle-container">
+            <input type="checkbox" id="rule-send-apk">
+            <span class="toggle-slider"></span>
+            <span class="toggle-label" style="color: var(--secondary); font-weight: 500;">Attach latest APK file to this response</span>
           </label>
         </div>
 

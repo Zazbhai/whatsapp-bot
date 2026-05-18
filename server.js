@@ -88,21 +88,32 @@ const clientStates = {};  // slug -> { status, qrCodeData, info, systemLogs, sta
 
 const tokensFilePath = path.join(dataDir, 'tokens.json');
 
+// In-memory active tokens cache
+let activeTokensCache = null;
+
 function loadActiveTokens() {
+  if (activeTokensCache) {
+    return activeTokensCache;
+  }
   try {
     if (fs.existsSync(tokensFilePath)) {
       const data = fs.readFileSync(tokensFilePath, 'utf8');
-      return JSON.parse(data);
+      activeTokensCache = JSON.parse(data);
+      return activeTokensCache;
     }
   } catch (err) {
     console.error('Failed to load active tokens:', err);
   }
-  return {};
+  activeTokensCache = {};
+  return activeTokensCache;
 }
 
 function saveActiveTokens(tokens) {
+  activeTokensCache = tokens;
   try {
-    fs.writeFileSync(tokensFilePath, JSON.stringify(tokens, null, 2), 'utf8');
+    // Write asynchronously to prevent event-loop blockings!
+    fs.promises.writeFile(tokensFilePath, JSON.stringify(tokens, null, 2), 'utf8')
+      .catch(err => console.error('[SYSTEM] Async tokens write failed:', err));
     return true;
   } catch (err) {
     console.error('Failed to save active tokens:', err);
@@ -113,21 +124,32 @@ function saveActiveTokens(tokens) {
 // Instances Persistent Database
 const instancesFilePath = path.join(dataDir, 'instances.json');
 
+// In-memory instances cache to avoid blocking disk reads during heavy concurrency
+let instancesCache = null;
+
 function loadInstances() {
+  if (instancesCache) {
+    return instancesCache;
+  }
   try {
     if (fs.existsSync(instancesFilePath)) {
       const data = fs.readFileSync(instancesFilePath, 'utf8');
-      return JSON.parse(data);
+      instancesCache = JSON.parse(data);
+      return instancesCache;
     }
   } catch (err) {
     console.error('Failed to load instances database:', err);
   }
-  return [];
+  instancesCache = [];
+  return instancesCache;
 }
 
 function saveInstances(instances) {
+  instancesCache = instances;
   try {
-    fs.writeFileSync(instancesFilePath, JSON.stringify(instances, null, 2), 'utf8');
+    // Write asynchronously to prevent thread blocking!
+    fs.promises.writeFile(instancesFilePath, JSON.stringify(instances, null, 2), 'utf8')
+      .catch(err => console.error('[SYSTEM] Async instances write failed:', err));
     return true;
   } catch (err) {
     console.error('Failed to save instances database:', err);
@@ -194,11 +216,19 @@ const defaultRulesTemplate = [
   { "id": "rule_stop_thankyou", "trigger": "thank you", "matchType": "exact", "skipReply": true, "enabled": true }
 ];
 
+// In-memory rules cache to eliminate blockings on every WhatsApp message received
+const rulesCache = {};
+
 function loadInstanceRules(slug) {
+  if (rulesCache[slug]) {
+    return rulesCache[slug];
+  }
   try {
     if (fs.existsSync(globalRulesFilePath)) {
       const data = fs.readFileSync(globalRulesFilePath, 'utf8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      rulesCache[slug] = parsed;
+      return parsed;
     } else {
       // Premium Migration Check: If rules_primary.json exists, copy it to rules.json to preserve user's data!
       const legacyPath = path.join(dataDir, 'rules_primary.json');
@@ -206,13 +236,16 @@ function loadInstanceRules(slug) {
         try {
           const legacyData = fs.readFileSync(legacyPath, 'utf8');
           fs.writeFileSync(globalRulesFilePath, legacyData, 'utf8');
-          return JSON.parse(legacyData);
+          const parsed = JSON.parse(legacyData);
+          rulesCache[slug] = parsed;
+          return parsed;
         } catch (migErr) {
           console.error('Failed to migrate legacy rules:', migErr);
         }
       }
       
       fs.writeFileSync(globalRulesFilePath, JSON.stringify(defaultRulesTemplate, null, 2), 'utf8');
+      rulesCache[slug] = defaultRulesTemplate;
       return defaultRulesTemplate;
     }
   } catch (err) {
@@ -222,13 +255,18 @@ function loadInstanceRules(slug) {
 }
 
 function saveInstanceRules(slug, rules) {
-  // Overloaded to accept rules as first parameter if only one argument is provided
   let targetRules = rules;
+  let targetSlug = slug;
   if (Array.isArray(slug)) {
     targetRules = slug;
+    targetSlug = 'primary';
   }
+  
+  rulesCache[targetSlug] = targetRules;
   try {
-    fs.writeFileSync(globalRulesFilePath, JSON.stringify(targetRules, null, 2), 'utf8');
+    // Write asynchronously to prevent blocking the event loop!
+    fs.promises.writeFile(globalRulesFilePath, JSON.stringify(targetRules, null, 2), 'utf8')
+      .catch(err => console.error(`[SYSTEM] Async rules write failed:`, err));
     return true;
   } catch (err) {
     console.error(`Failed to save global rules:`, err.message);
@@ -276,23 +314,37 @@ function loadApkCache(slug) {
 // =============================================================
 const memoryFilePath = path.join(dataDir, 'memory.json');
 
+// In-memory caching database + debounced non-blocking write throttle
+let conversationMemory = null;
+let pendingMemoryWriteTimeout = null;
+
 function loadMemory() {
+  if (conversationMemory) {
+    return conversationMemory;
+  }
   try {
     if (fs.existsSync(memoryFilePath)) {
-      return JSON.parse(fs.readFileSync(memoryFilePath, 'utf8'));
+      const data = fs.readFileSync(memoryFilePath, 'utf8');
+      conversationMemory = JSON.parse(data);
+      return conversationMemory;
     }
   } catch (err) {
     console.error('Failed to load memory:', err);
   }
-  return {};
+  conversationMemory = {};
+  return conversationMemory;
 }
 
 function saveMemory(memory) {
-  try {
-    fs.writeFileSync(memoryFilePath, JSON.stringify(memory, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Failed to save memory:', err);
-  }
+  conversationMemory = memory;
+  if (pendingMemoryWriteTimeout) return;
+  
+  // Throttle physical disk updates to once every 2 seconds under high-volume multi-user concurrency
+  pendingMemoryWriteTimeout = setTimeout(() => {
+    pendingMemoryWriteTimeout = null;
+    fs.promises.writeFile(memoryFilePath, JSON.stringify(conversationMemory, null, 2), 'utf8')
+      .catch(err => console.error('[SYSTEM] Async memory persist failed:', err));
+  }, 2000);
 }
 
 function getConversationHistory(slug, senderNumber) {
@@ -317,9 +369,10 @@ function addToMemory(slug, senderNumber, role, content) {
 // AI CONCURRENCY LIMITER — max 2 simultaneous AI calls per instance
 // Prevents OpenRouter free-tier rate-limiting under load
 // =============================================================
-const AI_MAX_CONCURRENT = 2;
+const AI_MAX_CONCURRENT = parseInt(process.env.AI_MAX_CONCURRENT || '50'); // Highly scalable parallel limit (customizable via .env)
 const AI_REQUEST_TIMEOUT = 25000; // 25s per model attempt
 const aiSemaphores = {};
+const activeAIUsers = new Set(); // Multi-user concurrency locks (squelches AI request duplicate bursts per contact)
 
 function acquireAISlot(slug) {
   if (!aiSemaphores[slug]) aiSemaphores[slug] = { count: 0, queue: [] };
@@ -344,13 +397,16 @@ function releaseAISlot(slug) {
   }
 }
 
-// Native Open-Source LLM Requester — with fallback model chain + 429 retry handling
+// Native Open-Source LLM Requester — with multi-API-key load balancing, failover, and model chain
 async function generateAIResponse(slug, userMessage, history = []) {
   const provider = process.env.LLM_PROVIDER || 'openrouter';
-  const apiKey = process.env.LLM_API_KEY;
+  
+  // Parse all configured keys from .env (comma, semicolon or space separated)
+  const keysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
+  const apiKeys = keysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
 
-  if (!apiKey) {
-    logInstanceEvent(slug, 'error', 'AI Responder triggered but LLM_API_KEY is missing in .env!');
+  if (apiKeys.length === 0) {
+    logInstanceEvent(slug, 'error', 'AI Responder triggered but no LLM API keys are configured in .env!');
     return null;
   }
 
@@ -360,7 +416,7 @@ async function generateAIResponse(slug, userMessage, history = []) {
     ? inst.aiSystemPrompt
     : 'You are a helpful customer assistant. Be polite and brief.';
 
-  // Build URL + model fallback chain per provider
+  // Build model fallback chain per provider
   let url, modelChain;
   if (provider === 'groq') {
     url = 'https://api.groq.com/openai/v1/chat/completions';
@@ -380,65 +436,76 @@ async function generateAIResponse(slug, userMessage, history = []) {
       'meta-llama/llama-3.3-70b-instruct:free'
     ];
   }
-  // Deduplicate in case LLM_MODEL is already a fallback
   modelChain = [...new Set(modelChain)];
 
-  for (let i = 0; i < modelChain.length; i++) {
-    const model = modelChain[i];
-    try {
-      logInstanceEvent(slug, 'system', `AI query -> ${model}`);
+  // Choose a random starting index to distribute the load across keys evenly (Load-Balancing)
+  const startingIndex = Math.floor(Math.random() * apiKeys.length);
+  
+  // Round-robin failover sequence
+  for (let k = 0; k < apiKeys.length; k++) {
+    const keyIndex = (startingIndex + k) % apiKeys.length;
+    const activeApiKey = apiKeys[keyIndex];
+    const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT);
+    logInstanceEvent(slug, 'system', `Routing request to API Key #${keyIndex + 1} (${maskedKey})`);
 
-      let response;
+    // For the active key, attempt to query using the model fallbacks
+    for (let m = 0; m < modelChain.length; m++) {
+      const model = modelChain[m];
       try {
-        response = await fetch(url, {
-          signal: controller.signal,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...history,
-              { role: 'user', content: userMessage }
-            ],
-            max_tokens: 300
-          })
-        });
-      } finally {
+        logInstanceEvent(slug, 'system', `AI query [Key #${keyIndex + 1}] -> ${model}`);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT);
+
+        let response;
+        try {
+          response = await fetch(url, {
+            signal: controller.signal,
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${activeApiKey}`
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                ...history,
+                { role: 'user', content: userMessage }
+              ],
+              max_tokens: 300
+            })
+          });
+        } catch (fetchErr) {
+          clearTimeout(timeoutId);
+          throw fetchErr;
+        }
+
         clearTimeout(timeoutId);
-      }
 
-      // 429 Rate Limited — skip to next model immediately (no waiting)
-      if (response.status === 429) {
-        logInstanceEvent(slug, 'system', `"${model}" rate-limited. Trying next model...`);
-        continue;
-      }
+        // If any error response status occurs, instantly trigger API Key failover!
+        if (!response.ok) {
+          const errText = await response.text();
+          logInstanceEvent(slug, 'error', `AI Query failed on Key #${keyIndex + 1} (${response.status}): ${errText.substring(0, 120)}`);
+          break; // Break the model loop to try the NEXT API key immediately!
+        }
 
-      if (!response.ok) {
-        const errText = await response.text();
-        logInstanceEvent(slug, 'error', `AI [${model}] HTTP ${response.status}: ${errText.substring(0, 150)}`);
-        continue; // try next model
+        const responseJson = await response.json();
+        const content = responseJson?.choices?.[0]?.message?.content?.trim();
+        if (content) {
+          logInstanceEvent(slug, 'system', `AI replied via "${model}" [using Key #${keyIndex + 1}]`);
+          return content;
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `AI query error on Key #${keyIndex + 1} [${model}]: ${err.message}`);
+        // Connection timeout or network error triggers instant key failover!
+        break; // Break the model loop to try the NEXT API key immediately!
       }
-
-      const responseJson = await response.json();
-      const content = responseJson?.choices?.[0]?.message?.content?.trim();
-      if (content) {
-        logInstanceEvent(slug, 'system', `AI replied via "${model}"`);
-        return content;
-      }
-    } catch (err) {
-      logInstanceEvent(slug, 'error', `AI network error [${model}]: ${err.message}`);
-      continue;
     }
   }
 
-  logInstanceEvent(slug, 'error', 'All AI models exhausted. No reply sent.');
+  logInstanceEvent(slug, 'error', 'All configured LLM API Keys and model chains have been exhausted. No reply sent.');
   return null;
 }
 
@@ -486,7 +553,8 @@ function initInstanceClient(slug) {
         '--disable-default-apps',
         '--mute-audio',
         '--hide-scrollbars',
-        '--disable-field-trial-config'
+        '--disable-field-trial-config',
+        '--js-flags=--max-old-space-size=128' // Crucial RAM tuner: Limits V8 engine memory heap in headless Chrome renderers (saves gigabytes of RAM on 8GB VPS!)
       ]
     },
     puppeteerTimeout: 90000
@@ -693,11 +761,67 @@ function initInstanceClient(slug) {
         const delay = Math.floor(Math.random() * 2000) + 1000;
         
         const sendReply = async () => {
-          if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0) {
-            const menuButtons = new Buttons(rule.reply, rule.buttons.map(b => ({ body: b.body, id: b.id })));
-            await msg.reply(menuButtons);
+          // Parse all text replies (supporting both array and string split by |||)
+          let textReplies = [];
+          if (Array.isArray(rule.replies)) {
+            textReplies = rule.replies;
+          } else if (rule.reply) {
+            textReplies = rule.reply.split('|||').map(r => r.trim()).filter(Boolean);
           } else {
-            await msg.reply(rule.reply);
+            textReplies = [];
+          }
+
+          // Send each text reply sequentially
+          for (let i = 0; i < textReplies.length; i++) {
+            const replyText = textReplies[i];
+            
+            // Re-simulate typing delay before each sequential message
+            try {
+              const chat = await msg.getChat();
+              await chat.sendStateTyping();
+            } catch {}
+            
+            // Small stagger delay between sequential text replies
+            if (i > 0) {
+              await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+
+            if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
+              const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
+              await msg.reply(menuButtons);
+            } else {
+              await msg.reply(replyText);
+            }
+
+            logInstanceEvent(slug, 'send', `Replied sequentially [${i + 1}/${textReplies.length}] to +${senderNumber}: "${replyText.substring(0, 80)}"`);
+            
+            clientStates[slug].stats.replies++;
+            io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+          }
+
+          // If sendApk option is active, automatically send the cached APK file next!
+          if (rule.sendApk) {
+            const apk = latestApkCache[slug];
+            if (apk && apk.data) {
+              try {
+                const chat = await msg.getChat();
+                await chat.sendStateTyping();
+              } catch {}
+              
+              // Wait 1.5s before attaching APK
+              await new Promise(resolve => setTimeout(resolve, 1500));
+
+              logInstanceEvent(slug, 'system', `Auto-attaching APK file for rule "${rule.trigger}" to +${senderNumber}...`);
+              const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
+              await msg.reply(media);
+
+              logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
+              
+              clientStates[slug].stats.replies++;
+              io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+            } else {
+              logInstanceEvent(slug, 'system', `Rule triggered APK attachment, but no APK is cached for instance "${slug}"`);
+            }
           }
         };
 
@@ -708,19 +832,13 @@ function initInstanceClient(slug) {
           setTimeout(async () => {
             try {
               await sendReply();
-              logInstanceEvent(slug, 'send', `Replied to +${senderNumber}: "${rule.reply.replace(/\n/g, ' ')}"`);
-              
-              clientStates[slug].stats.replies++;
-              io.to(`instance_${slug}`).emit('stat_increment', 'replies');
             } catch (replyErr) {
-              logInstanceEvent(slug, 'error', `Auto-reply dispatch failed: ${replyErr.message}`);
+              logInstanceEvent(slug, 'error', `Sequential auto-reply dispatch failed: ${replyErr.message}`);
             }
           }, delay);
         } catch (chatErr) {
           logInstanceEvent(slug, 'error', `Typing simulator failure: ${chatErr.message}`);
-          await sendReply();
-          clientStates[slug].stats.replies++;
-          io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+          await sendReply().catch(err => logInstanceEvent(slug, 'error', `Backup sequential dispatch failed: ${err.message}`));
         }
         break;
       }
@@ -732,6 +850,13 @@ function initInstanceClient(slug) {
       const inst = list.find(i => i.slug === slug);
       
       if (inst && inst.aiEnabled && process.env.LLM_API_KEY) {
+        const userLockKey = `${slug}:${senderNumber}`;
+        if (activeAIUsers.has(userLockKey)) {
+          logInstanceEvent(slug, 'system', `AI request already pending for +${senderNumber}. Squelching concurrency spam.`);
+          return;
+        }
+        
+        activeAIUsers.add(userLockKey);
         logInstanceEvent(slug, 'system', `No static keyword matched. Querying AI Core Agent...`);
         
         // Load past conversation for context (before storing current message)
@@ -740,7 +865,7 @@ function initInstanceClient(slug) {
           .slice(-10)
           .map(m => ({ role: m.role, content: m.content }));
         
-        // Acquire AI concurrency slot (max 2 simultaneous per instance)
+        // Acquire AI concurrency slot (highly parallel per instance)
         await acquireAISlot(slug);
         try {
           const chat = await msg.getChat();
@@ -763,6 +888,7 @@ function initInstanceClient(slug) {
         } catch (err) {
           logInstanceEvent(slug, 'error', `AI Auto-responder routine failed: ${err.message}`);
         } finally {
+          activeAIUsers.delete(userLockKey);
           releaseAISlot(slug);
         }
       }
@@ -1009,7 +1135,7 @@ app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {
 
 app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
-  const { trigger, matchType, reply, enabled, format, buttons, skipReply } = req.body;
+  const { trigger, matchType, reply, enabled, format, buttons, skipReply, sendApk } = req.body;
   if (!trigger || !matchType || !reply) {
     return res.status(400).json({ error: 'Missing required rules parameters' });
   }
@@ -1020,7 +1146,8 @@ app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
     trigger,
     matchType,
     reply,
-    enabled: enabled !== undefined ? enabled : true
+    enabled: enabled !== undefined ? enabled : true,
+    sendApk: sendApk !== undefined ? !!sendApk : false
   };
   if (format) newRule.format = format;
   if (buttons) newRule.buttons = buttons;
@@ -1037,7 +1164,7 @@ app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
 app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
   const { id } = req.params;
-  const { trigger, matchType, reply, enabled, format, buttons, skipReply } = req.body;
+  const { trigger, matchType, reply, enabled, format, buttons, skipReply, sendApk } = req.body;
   
   let rules = loadInstanceRules(slug);
   const index = rules.findIndex(r => r.id === id);
@@ -1050,7 +1177,8 @@ app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
     trigger: trigger !== undefined ? trigger : rules[index].trigger,
     matchType: matchType !== undefined ? matchType : rules[index].matchType,
     reply: reply !== undefined ? reply : rules[index].reply,
-    enabled: enabled !== undefined ? enabled : rules[index].enabled
+    enabled: enabled !== undefined ? enabled : rules[index].enabled,
+    sendApk: sendApk !== undefined ? !!sendApk : rules[index].sendApk
   };
   if (format !== undefined) rules[index].format = format;
   if (buttons !== undefined) rules[index].buttons = buttons;

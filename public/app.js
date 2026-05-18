@@ -70,6 +70,7 @@ const ruleTriggerInput = document.getElementById('rule-trigger');
 const ruleMatchTypeSelect = document.getElementById('rule-match-type');
 const ruleReplyTextarea = document.getElementById('rule-reply');
 const ruleEnabledCheckbox = document.getElementById('rule-enabled');
+const ruleSendApkCheckbox = document.getElementById('rule-send-apk');
 
 // UI Elements: AI Responder
 const aiEnabledToggle = document.getElementById('ai-enabled-toggle');
@@ -582,8 +583,9 @@ ruleForm.addEventListener('submit', async (e) => {
   const matchType = ruleMatchTypeSelect.value;
   const reply = ruleReplyTextarea.value.trim();
   const enabled = ruleEnabledCheckbox.checked;
+  const sendApk = ruleSendApkCheckbox ? ruleSendApkCheckbox.checked : false;
 
-  const payload = { trigger, matchType, reply, enabled };
+  const payload = { trigger, matchType, reply, enabled, sendApk };
   const url = id ? `/api/rules/${id}` : '/api/rules';
   const method = id ? 'PUT' : 'POST';
 
@@ -616,6 +618,9 @@ window.openEditRuleModal = function(id) {
   ruleMatchTypeSelect.value = rule.matchType;
   ruleReplyTextarea.value = rule.reply;
   ruleEnabledCheckbox.checked = rule.enabled;
+  if (ruleSendApkCheckbox) {
+    ruleSendApkCheckbox.checked = !!rule.sendApk;
+  }
 
   modalTitle.textContent = 'Edit Auto-Reply Rule';
   ruleModal.classList.add('active');
@@ -1291,10 +1296,32 @@ async function syncActiveInstanceData() {
 // AI SMART RESPONDER CONTROLS & LISTENERS
 // =============================================================
 if (aiEnabledToggle) {
-  aiEnabledToggle.addEventListener('change', () => {
+  aiEnabledToggle.addEventListener('change', async () => {
     const isEnabled = aiEnabledToggle.checked;
     aiToggleLabel.textContent = isEnabled ? 'Enabled' : 'Disabled';
     aiPromptContainer.style.display = isEnabled ? 'block' : 'none';
+    
+    // Automatically save state instantly to backend database!
+    try {
+      const res = await apiFetch(`/api/instances/${activeInstanceSlug}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aiEnabled: isEnabled,
+          aiSystemPrompt: aiSystemPromptTextarea.value.trim()
+        })
+      });
+      
+      if (res.ok) {
+        showToast(`AI Smart Responder successfully ${isEnabled ? 'enabled' : 'disabled'}!`, 'success');
+        fetchInstances(); // sync local list state
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to update AI state.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error, failed to save toggle state.', 'error');
+    }
   });
 }
 
