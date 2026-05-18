@@ -506,6 +506,108 @@ async function generateAIResponse(slug, userMessage, history = []) {
   return null;
 }
 
+// Voice Note Transcription engine — uses Whisper API with multi-key rotation and multi-provider compatibility (Groq, OpenRouter, OpenAI)
+async function transcribeAudio(slug, media) {
+  const keysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
+  const apiKeys = keysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+
+  if (apiKeys.length === 0) {
+    logInstanceEvent(slug, 'error', 'Transcription failed: No LLM API keys configured in .env');
+    return null;
+  }
+
+  let format = 'ogg';
+  if (media.mimetype) {
+    const mainMime = media.mimetype.split(';')[0].toLowerCase();
+    if (mainMime.includes('wav')) format = 'wav';
+    else if (mainMime.includes('mp3')) format = 'mp3';
+    else if (mainMime.includes('aac')) format = 'aac';
+    else if (mainMime.includes('m4a')) format = 'm4a';
+    else if (mainMime.includes('webm')) format = 'webm';
+    else if (mainMime.includes('ogg')) format = 'ogg';
+  }
+
+  for (let i = 0; i < apiKeys.length; i++) {
+    const key = apiKeys[i];
+    const maskedKey = key.substring(0, 8) + '...' + key.substring(key.length - 4);
+    
+    let url, isJson = false, body, headers = {};
+    
+    if (key.startsWith('sk-or-')) {
+      url = 'https://openrouter.ai/api/v1/audio/transcriptions';
+      isJson = true;
+      headers = {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      };
+      body = JSON.stringify({
+        model: 'openai/whisper-large-v3',
+        input_audio: {
+          data: media.data,
+          format: format
+        }
+      });
+    } else if (key.startsWith('gsk_')) {
+      url = 'https://api.groq.com/openai/v1/audio/transcriptions';
+      headers = {
+        'Authorization': `Bearer ${key}`
+      };
+      const formData = new FormData();
+      const audioBuffer = Buffer.from(media.data, 'base64');
+      const audioBlob = new Blob([audioBuffer], { type: media.mimetype });
+      formData.append('file', audioBlob, `audio.${format}`);
+      formData.append('model', 'whisper-large-v3');
+      body = formData;
+    } else {
+      url = 'https://api.openai.com/v1/audio/transcriptions';
+      headers = {
+        'Authorization': `Bearer ${key}`
+      };
+      const formData = new FormData();
+      const audioBuffer = Buffer.from(media.data, 'base64');
+      const audioBlob = new Blob([audioBuffer], { type: media.mimetype });
+      formData.append('file', audioBlob, `audio.${format}`);
+      formData.append('model', 'whisper-1');
+      body = formData;
+    }
+
+    try {
+      logInstanceEvent(slug, 'system', `Attempting voice transcription via Key #${i + 1} (${maskedKey})...`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000); 
+      
+      const res = await fetch(url, {
+        signal: controller.signal,
+        method: 'POST',
+        headers,
+        body
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!res.ok) {
+        const errText = await res.text();
+        logInstanceEvent(slug, 'error', `Transcription failed on Key #${i + 1} (${res.status}): ${errText.substring(0, 100)}`);
+        continue; 
+      }
+      
+      const data = await res.json();
+      const text = data.text ? data.text.trim() : '';
+      if (text) {
+        logInstanceEvent(slug, 'system', `Voice message successfully transcribed: "${text}"`);
+        return text;
+      }
+    } catch (err) {
+      logInstanceEvent(slug, 'error', `Transcription error on Key #${i + 1}: ${err.message}`);
+      continue; 
+    }
+  }
+  
+  logInstanceEvent(slug, 'error', 'All keys exhausted for audio transcription.');
+  return null;
+}
+
 // Initialize active WhatsApp Client for a Bot Instance
 function initInstanceClient(slug) {
   if (activeClients[slug]) {
@@ -684,6 +786,29 @@ function initInstanceClient(slug) {
       }
     }
 
+    // Auto-transcribe voice and audio messages to text
+    let isVoiceNote = false;
+    let transcribedText = '';
+    
+    if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
+      const senderNumber = msg.from.split('@')[0];
+      try {
+        logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Commencing Whisper auto-transcription...`);
+        const media = await msg.downloadMedia();
+        if (media && media.data) {
+          transcribedText = await transcribeAudio(slug, media);
+          if (transcribedText) {
+            msg.body = transcribedText;
+            isVoiceNote = true;
+          } else {
+            logInstanceEvent(slug, 'error', `Whisper transcription returned empty text for +${senderNumber}.`);
+          }
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Voice note transcription failed: ${err.message}`);
+      }
+    }
+
     // Return early if message contains no text content (e.g. captionless images/documents)
     if (!msg.body) return;
 
@@ -692,7 +817,9 @@ function initInstanceClient(slug) {
     
     clientStates[slug].stats.received++;
     io.to(`instance_${slug}`).emit('stat_increment', 'received');
-    logInstanceEvent(slug, 'receive', `From "${senderName}" (+${senderNumber}): "${msg.body}"`);
+    
+    const logTag = isVoiceNote ? ' [🎙️ Voice Note]' : '';
+    logInstanceEvent(slug, 'receive', `From "${senderName}" (+${senderNumber})${logTag}: "${msg.body}"`);
 
     const rules = loadInstanceRules(slug);
     const incomingText = msg.body.toLowerCase().trim();
@@ -781,9 +908,21 @@ function initInstanceClient(slug) {
             logInstanceEvent(slug, 'system', `Shuffled Multi-Reply: Randomly selected reply #${randomIndex + 1} of ${originalLength}`);
           }
 
+          // Send voice transcription if APK-only rule and voice note received
+          if (isVoiceNote && textReplies.length === 0) {
+            try {
+              await msg.reply(`🎙️ *Voice Transcribed:* _"${transcribedText}"_`);
+            } catch (vErr) {
+              logInstanceEvent(slug, 'error', `Voice note transcription reply failed: ${vErr.message}`);
+            }
+          }
+
           // Send each text reply sequentially
           for (let i = 0; i < textReplies.length; i++) {
-            const replyText = textReplies[i];
+            let replyText = textReplies[i];
+            if (isVoiceNote && i === 0) {
+              replyText = `🎙️ *Voice Transcribed:* _"${transcribedText}"_\n\n${replyText}`;
+            }
             
             // Re-simulate typing delay before each sequential message
             try {
@@ -881,8 +1020,11 @@ function initInstanceClient(slug) {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           
-          const aiResponse = await generateAIResponse(slug, msg.body, history);
+          let aiResponse = await generateAIResponse(slug, msg.body, history);
           if (aiResponse) {
+            if (isVoiceNote) {
+              aiResponse = `🎙️ *Voice Transcribed:* _"${transcribedText}"_\n\n${aiResponse}`;
+            }
             await msg.reply(aiResponse);
             logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${aiResponse.replace(/\n/g, ' ')}"`);
             
