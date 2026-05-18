@@ -525,16 +525,11 @@ async function generateAIResponse(slug, userMessage, history = []) {
   return null;
 }
 
-// Voice Note Transcription engine — uses Whisper API with multi-key rotation and multi-provider compatibility (Groq, OpenRouter, OpenAI)
+// Voice Note Transcription engine — uses a local, free, offline Python-based SpeechRecognition script
+// No API keys or external subscription/billing tokens are required!
 async function transcribeAudio(slug, media) {
-  const keysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
-  const apiKeys = keysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
-
-  if (apiKeys.length === 0) {
-    logInstanceEvent(slug, 'error', 'Transcription failed: No LLM API keys configured in .env');
-    return null;
-  }
-
+  const { exec } = require('child_process');
+  
   let format = 'ogg';
   if (media.mimetype) {
     const mainMime = media.mimetype.split(';')[0].toLowerCase();
@@ -546,85 +541,48 @@ async function transcribeAudio(slug, media) {
     else if (mainMime.includes('ogg')) format = 'ogg';
   }
 
-  for (let i = 0; i < apiKeys.length; i++) {
-    const key = apiKeys[i];
-    const maskedKey = key.substring(0, 8) + '...' + key.substring(key.length - 4);
-    
-    let url, isJson = false, body, headers = {};
-    
-    if (key.startsWith('sk-or-')) {
-      url = 'https://openrouter.ai/api/v1/audio/transcriptions';
-      isJson = true;
-      headers = {
-        'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json'
-      };
-      body = JSON.stringify({
-        model: 'openai/whisper-large-v3',
-        input_audio: {
-          data: media.data,
-          format: format
-        }
-      });
-    } else if (key.startsWith('gsk_')) {
-      url = 'https://api.groq.com/openai/v1/audio/transcriptions';
-      headers = {
-        'Authorization': `Bearer ${key}`
-      };
-      const formData = new FormData();
-      const audioBuffer = Buffer.from(media.data, 'base64');
-      const audioBlob = new Blob([audioBuffer], { type: media.mimetype });
-      formData.append('file', audioBlob, `audio.${format}`);
-      formData.append('model', 'whisper-large-v3');
-      body = formData;
-    } else {
-      url = 'https://api.openai.com/v1/audio/transcriptions';
-      headers = {
-        'Authorization': `Bearer ${key}`
-      };
-      const formData = new FormData();
-      const audioBuffer = Buffer.from(media.data, 'base64');
-      const audioBlob = new Blob([audioBuffer], { type: media.mimetype });
-      formData.append('file', audioBlob, `audio.${format}`);
-      formData.append('model', 'whisper-1');
-      body = formData;
-    }
+  // Create a unique temporary audio file in data directory
+  const tempId = Math.random().toString(36).substring(7);
+  const tempFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.${format}`);
+  
+  try {
+    logInstanceEvent(slug, 'system', `Saving voice note buffer to temporary file: "${path.basename(tempFile)}"`);
+    fs.writeFileSync(tempFile, Buffer.from(media.data, 'base64'));
 
-    try {
-      logInstanceEvent(slug, 'system', `Attempting voice transcription via Key #${i + 1} (${maskedKey})...`);
+    logInstanceEvent(slug, 'system', `Executing local Python offline SpeechRecognition script...`);
+    
+    const transcription = await new Promise((resolve, reject) => {
+      // Support Python execution on Windows and Linux/MacOS environments
+      const cmd = `python transcribe.py "${tempFile}"`;
       
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000); 
-      
-      const res = await fetch(url, {
-        signal: controller.signal,
-        method: 'POST',
-        headers,
-        body
+      exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+          return reject(new Error(stderr.trim() || error.message));
+        }
+        resolve(stdout.trim());
       });
-      
-      clearTimeout(timeoutId);
-      
-      if (!res.ok) {
-        const errText = await res.text();
-        logInstanceEvent(slug, 'error', `Transcription failed on Key #${i + 1} (${res.status}): ${errText.substring(0, 100)}`);
-        continue; 
+    });
+
+    if (transcription) {
+      logInstanceEvent(slug, 'system', `Local offline transcription completed successfully!`);
+      return transcription;
+    } else {
+      logInstanceEvent(slug, 'system', `Local transcription returned empty text (audio might be silent or unclear).`);
+      return null;
+    }
+  } catch (err) {
+    logInstanceEvent(slug, 'error', `Local offline transcription failed: ${err.message}`);
+    return null;
+  } finally {
+    // Force cleanup of temporary files to prevent disk leakages
+    if (fs.existsSync(tempFile)) {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch (cleanupErr) {
+        console.error(`[SYSTEM] Failed to clean up temp transcribe file: ${cleanupErr.message}`);
       }
-      
-      const data = await res.json();
-      const text = data.text ? data.text.trim() : '';
-      if (text) {
-        logInstanceEvent(slug, 'system', `Voice message successfully transcribed: "${text}"`);
-        return text;
-      }
-    } catch (err) {
-      logInstanceEvent(slug, 'error', `Transcription error on Key #${i + 1}: ${err.message}`);
-      continue; 
     }
   }
-  
-  logInstanceEvent(slug, 'error', 'All keys exhausted for audio transcription.');
-  return null;
 }
 
 // Initialize active WhatsApp Client for a Bot Instance
@@ -829,7 +787,7 @@ function initInstanceClient(slug) {
     if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
       const senderNumber = msg.from.split('@')[0];
       try {
-        logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Commencing Whisper auto-transcription...`);
+        logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Commencing local offline auto-transcription...`);
         const media = await msg.downloadMedia();
         if (media && media.data) {
           transcribedText = await transcribeAudio(slug, media);
@@ -837,7 +795,7 @@ function initInstanceClient(slug) {
             msg.body = transcribedText;
             isVoiceNote = true;
           } else {
-            logInstanceEvent(slug, 'error', `Whisper transcription returned empty text for +${senderNumber}.`);
+            logInstanceEvent(slug, 'error', `Local offline transcription returned empty text for +${senderNumber}.`);
           }
         }
       } catch (err) {
