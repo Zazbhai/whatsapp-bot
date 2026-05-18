@@ -237,6 +237,41 @@ function saveInstanceRules(slug, rules) {
 }
 
 // =============================================================
+// APK CACHE SYSTEM (Memory + Disk Persistence)
+// =============================================================
+const latestApkCache = {}; // slug -> { mimetype, data, filename, uploadedBy, uploadedAt }
+
+function getApkCachePath(slug) {
+  return path.join(dataDir, `latest_apk_${slug}.json`);
+}
+
+function persistApkCache(slug, apkData) {
+  try {
+    const filePath = getApkCachePath(slug);
+    fs.writeFileSync(filePath, JSON.stringify(apkData, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.error(`[SYSTEM] Failed to persist APK cache for ${slug}:`, err);
+    return false;
+  }
+}
+
+function loadApkCache(slug) {
+  try {
+    const filePath = getApkCachePath(slug);
+    if (fs.existsSync(filePath)) {
+      const fileContent = fs.readFileSync(filePath, 'utf8');
+      const apkData = JSON.parse(fileContent);
+      latestApkCache[slug] = apkData;
+      return true;
+    }
+  } catch (err) {
+    console.error(`[SYSTEM] Failed to load APK cache for ${slug}:`, err);
+  }
+  return false;
+}
+
+// =============================================================
 // USER MEMORY — per-user conversation history per instance
 // =============================================================
 const memoryFilePath = path.join(dataDir, 'memory.json');
@@ -413,6 +448,9 @@ function initInstanceClient(slug) {
     return activeClients[slug];
   }
 
+  // Load cached APK from disk to memory
+  loadApkCache(slug);
+
   logInstanceEvent(slug, 'system', `Initializing isolated Puppeteer browser sandbox...`);
 
   // Setup state tracker
@@ -539,7 +577,46 @@ function initInstanceClient(slug) {
   });
 
   client.on('message', async (msg) => {
-    if (msg.fromMe || !msg.body) return;
+    if (msg.fromMe) return;
+
+    // Detect and Cache APK Uploads in WhatsApp Group Chats
+    if (msg.hasMedia) {
+      try {
+        if (msg.from && msg.from.endsWith('@g.us')) {
+          const media = await msg.downloadMedia();
+          if (media && media.filename && media.filename.toLowerCase().endsWith('.apk')) {
+            logInstanceEvent(slug, 'system', `Group APK upload detected: "${media.filename}"`);
+            
+            latestApkCache[slug] = {
+              mimetype: media.mimetype,
+              data: media.data,
+              filename: media.filename,
+              uploadedBy: msg._data.notifyName || 'Unknown Contact',
+              uploadedAt: new Date().toISOString()
+            };
+            
+            persistApkCache(slug, latestApkCache[slug]);
+            
+            // Auto-send confirmation response to the group
+            await msg.reply(`✅ *Latest APK Received & Cached!*\n\nOriginal Name: \`${media.filename}\`\nSize: \`${(media.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB\`\n\nUsers can now request this APK by replying with *apk*.`);
+            logInstanceEvent(slug, 'system', `APK saved to memory & disk. Auto-reply sent to group.`);
+            
+            // Notify active dashboard sockets that a new APK is cached
+            io.to(`instance_${slug}`).emit('apk_cached', {
+              filename: media.filename,
+              uploadedBy: latestApkCache[slug].uploadedBy,
+              uploadedAt: latestApkCache[slug].uploadedAt,
+              size: `${(media.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB`
+            });
+          }
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Failed to process APK group upload: ${err.message}`);
+      }
+    }
+
+    // Return early if message contains no text content (e.g. captionless images/documents)
+    if (!msg.body) return;
 
     const senderName = msg._data.notifyName || 'Unknown Contact';
     const senderNumber = msg.from.split('@')[0];
@@ -550,6 +627,34 @@ function initInstanceClient(slug) {
 
     const rules = loadInstanceRules(slug);
     const incomingText = msg.body.toLowerCase().trim();
+    
+    // Check for built-in APK request keyword commands
+    if (incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk') {
+      logInstanceEvent(slug, 'system', `APK request keyword match from +${senderNumber}`);
+      try {
+        const apk = latestApkCache[slug];
+        if (apk && apk.data) {
+          const chat = await msg.getChat();
+          await chat.sendStateTyping();
+          
+          logInstanceEvent(slug, 'system', `Transmitting latest cached APK to +${senderNumber}: "${apk.filename}"...`);
+          const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
+          await msg.reply(media);
+          
+          logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" to +${senderNumber}`);
+          
+          clientStates[slug].stats.replies++;
+          io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+        } else {
+          await msg.reply("❌ *No APK File Available*\n\nNo APK has been uploaded to the WhatsApp group yet. Please upload the latest APK to the group first!");
+          logInstanceEvent(slug, 'send', `Replied to +${senderNumber} that no APK is available.`);
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Failed to send APK file to +${senderNumber}: ${err.message}`);
+      }
+      return; // Stop execution to bypass auto-responders & AI fallback
+    }
+
     let ruleMatched = false;
 
     for (const rule of rules) {
@@ -1055,6 +1160,59 @@ app.post('/api/send-file', authenticateToken, requireInstance, upload.single('fi
     if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
     logInstanceEvent(slug, 'error', `Media send error: ${err.message}`);
     res.status(500).json({ error: `Internal error: ${err.message}` });
+  }
+});
+
+// GET latest APK status
+app.get('/api/apk/status', authenticateToken, requireInstance, (req, res) => {
+  const slug = req.instanceSlug;
+  const apk = latestApkCache[slug];
+  if (apk && apk.data) {
+    res.json({
+      cached: true,
+      filename: apk.filename,
+      uploadedBy: apk.uploadedBy || 'Unknown Contact',
+      uploadedAt: apk.uploadedAt || 'Unknown Time',
+      size: `${(apk.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB`
+    });
+  } else {
+    res.json({ cached: false });
+  }
+});
+
+// POST to clear APK cache
+app.post('/api/apk/clear', authenticateToken, requireInstance, (req, res) => {
+  const slug = req.instanceSlug;
+  delete latestApkCache[slug];
+  
+  const cachePath = getApkCachePath(slug);
+  if (fs.existsSync(cachePath)) {
+    try {
+      fs.unlinkSync(cachePath);
+    } catch (err) {
+      console.error(`[SYSTEM] Failed to delete cache file: ${err.message}`);
+    }
+  }
+  
+  logInstanceEvent(slug, 'system', 'APK cache cleared by administrator.');
+  
+  // Notify active dashboard sockets that APK cache has been cleared
+  io.to(`instance_${slug}`).emit('apk_cleared');
+  
+  res.json({ success: true, message: 'APK cache cleared successfully.' });
+});
+
+// GET to download APK
+app.get('/api/apk/download', authenticateToken, requireInstance, (req, res) => {
+  const slug = req.instanceSlug;
+  const apk = latestApkCache[slug];
+  if (apk && apk.data) {
+    const fileBuffer = Buffer.from(apk.data, 'base64');
+    res.setHeader('Content-Type', apk.mimetype || 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'app.apk'}"`);
+    res.send(fileBuffer);
+  } else {
+    res.status(404).json({ error: 'No APK cached for this instance.' });
   }
 });
 

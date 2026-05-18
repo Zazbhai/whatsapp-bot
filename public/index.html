@@ -254,6 +254,64 @@
                 <div class="stat-label">Session Uptime</div>
               </div>
             </div>
+        </div>
+
+        <!-- APK Cache Manager Card -->
+        <div class="glass-card full-width-card apk-manager-card" id="apk-manager-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <i data-lucide="package" style="color: var(--secondary); width: 24px; height: 24px;"></i>
+              <div>
+                <h3 style="margin: 0;">APK Auto-Send Manager</h3>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Intercepts APK uploads in WhatsApp groups and auto-distributes them on keyword request.</p>
+              </div>
+            </div>
+            <div class="badge" id="apk-badge" style="background: rgba(34, 197, 94, 0.1); color: var(--whatsapp); border: 1px solid rgba(34, 197, 94, 0.2);">Active</div>
+          </div>
+          
+          <div class="card-body" style="margin-top: 15px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; background: rgba(255, 255, 255, 0.01); border: 1px solid var(--panel-border); border-radius: 12px; padding: 20px;">
+              <div style="display: flex; align-items: center; gap: 15px;">
+                <div id="apk-icon-wrapper" style="background: rgba(6, 182, 212, 0.08); color: var(--secondary); width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(6, 182, 212, 0.15); transition: all 0.3s ease;">
+                  <i data-lucide="package" style="width: 28px; height: 28px;"></i>
+                </div>
+                <div>
+                  <h4 id="apk-filename" style="margin: 0 0 4px 0; font-size: 1.05rem; color: var(--text-main); font-weight: 600;">No APK Cached</h4>
+                  <p id="apk-meta" style="margin: 0; font-size: 0.8rem; color: var(--text-muted);">The cache is empty. Upload an <strong>.apk</strong> file to any linked group chat to store it.</p>
+                </div>
+              </div>
+              
+              <div id="apk-details-section" style="display: none; flex-grow: 1; max-width: 400px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--panel-border); border-radius: 8px; padding: 12px; font-size: 0.8rem; font-family: inherit;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="color: var(--text-muted);">Uploaded By:</span>
+                  <strong style="color: var(--text-main);" id="apk-uploader">--</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="color: var(--text-muted);">Uploaded At:</span>
+                  <strong style="color: var(--text-main);" id="apk-time">--</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="color: var(--text-muted);">File Size:</span>
+                  <strong style="color: var(--whatsapp);" id="apk-size">--</strong>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 10px; flex-shrink: 0; min-width: 200px;">
+                <button class="btn btn-secondary btn-sm" id="btn-download-apk" style="display: none; flex-grow: 1; padding: 10px 16px;">
+                  <i data-lucide="download" style="width: 16px; height: 16px;"></i>
+                  <span>Download APK</span>
+                </button>
+                <button class="btn btn-danger btn-sm" id="btn-clear-apk" style="display: none; flex-grow: 1; padding: 10px 16px; background: rgba(244, 63, 94, 0.1); color: var(--danger); border: 1px solid rgba(244, 63, 94, 0.2); box-shadow: none;">
+                  <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+                  <span>Clear Cache</span>
+                </button>
+              </div>
+            </div>
+            
+            <div style="display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 0.75rem; color: var(--text-muted);">
+              <i data-lucide="info" style="width: 14px; height: 14px; color: var(--secondary);"></i>
+              <span>Users can download the latest APK file by texting <strong>apk</strong>, <strong>get apk</strong>, or <strong>latest apk</strong> to the bot.</span>
+            </div>
           </div>
         </div>
 

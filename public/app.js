@@ -336,6 +336,16 @@ function setupSocketListeners() {
       statReceived.textContent = stats.received;
     }
   });
+
+  socket.on('apk_cached', (data) => {
+    showToast(`New APK Cached: "${data.filename}"`, 'success');
+    updateApkCard();
+  });
+
+  socket.on('apk_cleared', () => {
+    showToast('APK Cache cleared from server.', 'info');
+    updateApkCard();
+  });
 }
 
 function updateStatusUI(data) {
@@ -830,6 +840,105 @@ logoutBtn.addEventListener('click', async () => {
   }
 });
 
+// =============================================================
+// APK CACHE UI UPDATES
+// =============================================================
+const apkFilename = document.getElementById('apk-filename');
+const apkMeta = document.getElementById('apk-meta');
+const apkDetailsSection = document.getElementById('apk-details-section');
+const apkUploader = document.getElementById('apk-uploader');
+const apkTime = document.getElementById('apk-time');
+const apkSize = document.getElementById('apk-size');
+const btnDownloadApk = document.getElementById('btn-download-apk');
+const btnClearApk = document.getElementById('btn-clear-apk');
+const apkIconWrapper = document.getElementById('apk-icon-wrapper');
+
+async function updateApkCard() {
+  if (!apkFilename) return; // Guard for non-logged in or elements missing
+  
+  try {
+    const res = await apiFetch('/api/apk/status');
+    const data = await res.json();
+    
+    if (data.cached) {
+      apkFilename.textContent = data.filename;
+      apkMeta.innerHTML = 'Latest APK currently cached in memory and disk.';
+      apkDetailsSection.style.display = 'block';
+      apkUploader.textContent = data.uploadedBy;
+      apkTime.textContent = new Date(data.uploadedAt).toLocaleString();
+      apkSize.textContent = data.size;
+      
+      btnDownloadApk.style.display = 'inline-flex';
+      btnClearApk.style.display = 'inline-flex';
+      
+      // Polish design dynamically
+      if (apkIconWrapper) {
+        apkIconWrapper.style.background = 'rgba(34, 197, 94, 0.08)';
+        apkIconWrapper.style.color = 'var(--whatsapp)';
+        apkIconWrapper.style.borderColor = 'rgba(34, 197, 94, 0.15)';
+      }
+    } else {
+      apkFilename.textContent = 'No APK Cached';
+      apkMeta.innerHTML = 'The cache is empty. Upload an <strong>.apk</strong> file to any linked group chat to store it.';
+      apkDetailsSection.style.display = 'none';
+      
+      btnDownloadApk.style.display = 'none';
+      btnClearApk.style.display = 'none';
+      
+      if (apkIconWrapper) {
+        apkIconWrapper.style.background = 'rgba(6, 182, 212, 0.08)';
+        apkIconWrapper.style.color = 'var(--secondary)';
+        apkIconWrapper.style.borderColor = 'rgba(6, 182, 212, 0.15)';
+      }
+    }
+  } catch (err) {
+    console.error('Failed to update APK Card:', err);
+  }
+}
+
+if (btnDownloadApk) {
+  btnDownloadApk.addEventListener('click', async () => {
+    try {
+      showToast('Downloading APK file...', 'info');
+      const res = await apiFetch('/api/apk/download');
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = apkFilename.textContent || 'app.apk';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        showToast('APK download started successfully!', 'success');
+      } else {
+        showToast('Failed to download APK file.', 'error');
+      }
+    } catch (err) {
+      showToast('Error downloading APK.', 'error');
+    }
+  });
+}
+
+if (btnClearApk) {
+  btnClearApk.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to delete the cached APK file from both memory and disk? Users will no longer be able to request it until a new one is uploaded.')) return;
+    
+    try {
+      const res = await apiFetch('/api/apk/clear', { method: 'POST' });
+      if (res.ok) {
+        showToast('APK Cache cleared successfully.', 'success');
+        updateApkCard();
+      } else {
+        showToast('Failed to clear APK cache.', 'error');
+      }
+    } catch (err) {
+      showToast('Error clearing APK cache.', 'error');
+    }
+  });
+}
+
 // DASHBOARD EXIT SYSTEM (AUTHENTICATION)
 function dashboardLogout() {
   localStorage.removeItem('token');
@@ -1168,6 +1277,9 @@ async function syncActiveInstanceData() {
       aiPromptContainer.style.display = data.aiEnabled ? 'block' : 'none';
       aiSystemPromptTextarea.value = data.aiSystemPrompt || '';
     }
+
+    // Refresh the APK Cache Manager Card UI
+    updateApkCard();
   } catch (err) {
     if (err.message !== 'Unauthorized') {
       showToast('Failed to sync active instance data.', 'error');
