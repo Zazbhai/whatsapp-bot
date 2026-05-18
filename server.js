@@ -438,20 +438,18 @@ async function generateAIResponse(slug, userMessage, history = []) {
   }
   modelChain = [...new Set(modelChain)];
 
-  // Choose a random starting index to distribute the load across keys evenly (Load-Balancing)
-  const startingIndex = Math.floor(Math.random() * apiKeys.length);
-  
-  // Round-robin failover sequence
-  for (let k = 0; k < apiKeys.length; k++) {
-    const keyIndex = (startingIndex + k) % apiKeys.length;
-    const activeApiKey = apiKeys[keyIndex];
-    const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
-
-    logInstanceEvent(slug, 'system', `Routing request to API Key #${keyIndex + 1} (${maskedKey})`);
-
-    // For the active key, attempt to query using the model fallbacks
-    for (let m = 0; m < modelChain.length; m++) {
-      const model = modelChain[m];
+  // Restructured model-first failover loop: try each model across all configured keys first
+  for (let m = 0; m < modelChain.length; m++) {
+    const model = modelChain[m];
+    
+    // Choose a random starting index per model to distribute the load across keys evenly (Load-Balancing)
+    const startingIndex = Math.floor(Math.random() * apiKeys.length);
+    
+    for (let k = 0; k < apiKeys.length; k++) {
+      const keyIndex = (startingIndex + k) % apiKeys.length;
+      const activeApiKey = apiKeys[keyIndex];
+      const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
+      
       try {
         logInstanceEvent(slug, 'system', `AI query [Key #${keyIndex + 1}] -> ${model}`);
 
@@ -484,11 +482,11 @@ async function generateAIResponse(slug, userMessage, history = []) {
 
         clearTimeout(timeoutId);
 
-        // If any error response status occurs, instantly trigger API Key failover!
+        // If any error response status occurs, trigger failover to the NEXT API Key for this model
         if (!response.ok) {
           const errText = await response.text();
-          logInstanceEvent(slug, 'error', `AI Query failed on Key #${keyIndex + 1} (${response.status}): ${errText.substring(0, 120)}`);
-          break; // Break the model loop to try the NEXT API key immediately!
+          logInstanceEvent(slug, 'error', `AI Query failed on Key #${keyIndex + 1} (${response.status}) using ${model}: ${errText.substring(0, 120)}`);
+          continue; 
         }
 
         const responseJson = await response.json();
@@ -499,8 +497,7 @@ async function generateAIResponse(slug, userMessage, history = []) {
         }
       } catch (err) {
         logInstanceEvent(slug, 'error', `AI query error on Key #${keyIndex + 1} [${model}]: ${err.message}`);
-        // Connection timeout or network error triggers instant key failover!
-        break; // Break the model loop to try the NEXT API key immediately!
+        continue; 
       }
     }
   }
