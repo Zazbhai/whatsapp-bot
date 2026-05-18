@@ -903,21 +903,9 @@ function initInstanceClient(slug) {
             logInstanceEvent(slug, 'system', `Shuffled Multi-Reply: Randomly selected reply #${randomIndex + 1} of ${originalLength}`);
           }
 
-          // Send voice transcription if APK-only rule and voice note received
-          if (isVoiceNote && textReplies.length === 0) {
-            try {
-              await msg.reply(`🎙️ *Voice Transcribed:* _"${transcribedText}"_`);
-            } catch (vErr) {
-              logInstanceEvent(slug, 'error', `Voice note transcription reply failed: ${vErr.message}`);
-            }
-          }
-
           // Send each text reply sequentially
           for (let i = 0; i < textReplies.length; i++) {
             let replyText = textReplies[i];
-            if (isVoiceNote && i === 0) {
-              replyText = `🎙️ *Voice Transcribed:* _"${transcribedText}"_\n\n${replyText}`;
-            }
             
             // Re-simulate typing delay before each sequential message
             try {
@@ -1017,9 +1005,6 @@ function initInstanceClient(slug) {
           
           let aiResponse = await generateAIResponse(slug, msg.body, history);
           if (aiResponse) {
-            if (isVoiceNote) {
-              aiResponse = `🎙️ *Voice Transcribed:* _"${transcribedText}"_\n\n${aiResponse}`;
-            }
             await msg.reply(aiResponse);
             logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${aiResponse.replace(/\n/g, ' ')}"`);
             
