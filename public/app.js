@@ -878,7 +878,8 @@ async function updateApkCard() {
     
     const publicLink = document.getElementById('public-apk-link');
     if (publicLink) {
-      const fullUrl = `${window.location.origin}/download/flipkart.apk?instance=${activeInstanceSlug}`;
+      const port = data.downloadPort || '3005';
+      const fullUrl = `${window.location.protocol}//${window.location.hostname}:${port}/download/flipkart.apk?instance=${activeInstanceSlug}`;
       publicLink.href = fullUrl;
       publicLink.textContent = fullUrl;
     }

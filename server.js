@@ -283,10 +283,21 @@ function getApkCachePath(slug) {
   return path.join(dataDir, `latest_apk_${slug}.json`);
 }
 
+function getRawApkPath(slug) {
+  return path.join(dataDir, `latest_apk_${slug}.apk`);
+}
+
 function persistApkCache(slug, apkData) {
   try {
     const filePath = getApkCachePath(slug);
     fs.writeFileSync(filePath, JSON.stringify(apkData, null, 2), 'utf8');
+    
+    // Also save raw binary APK to disk for high-performance streaming
+    if (apkData && apkData.data) {
+      const rawPath = getRawApkPath(slug);
+      const buffer = Buffer.from(apkData.data, 'base64');
+      fs.writeFileSync(rawPath, buffer);
+    }
     return true;
   } catch (err) {
     console.error(`[SYSTEM] Failed to persist APK cache for ${slug}:`, err);
@@ -302,6 +313,13 @@ function loadApkCache(slug) {
       const apkData = JSON.parse(fileContent);
       apkData.filename = 'flipkart.apk';
       latestApkCache[slug] = apkData;
+      
+      // Self-heal: ensure raw binary APK file exists on disk
+      const rawPath = getRawApkPath(slug);
+      if (!fs.existsSync(rawPath) && apkData.data) {
+        const buffer = Buffer.from(apkData.data, 'base64');
+        fs.writeFileSync(rawPath, buffer);
+      }
       return true;
     }
   } catch (err) {
@@ -1346,7 +1364,8 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
     stats: state.stats,
     rules: loadInstanceRules(slug),
     aiEnabled: inst ? !!inst.aiEnabled : false,
-    aiSystemPrompt: inst ? inst.aiSystemPrompt : 'You are a multilingual assistant. Respond in the same language the user writes in. Keep replies under 2 sentences. Be concise.'
+    aiSystemPrompt: inst ? inst.aiSystemPrompt : 'You are a multilingual assistant. Respond in the same language the user writes in. Keep replies under 2 sentences. Be concise.',
+    downloadPort: process.env.APK_PORT || '3005'
   });
 });
 
@@ -1552,10 +1571,11 @@ app.get('/api/apk/status', authenticateToken, requireInstance, (req, res) => {
       filename: apk.filename,
       uploadedBy: apk.uploadedBy || 'Unknown Contact',
       uploadedAt: apk.uploadedAt || 'Unknown Time',
-      size: `${(apk.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB`
+      size: `${(apk.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB`,
+      downloadPort: process.env.APK_PORT || '3005'
     });
   } else {
-    res.json({ cached: false });
+    res.json({ cached: false, downloadPort: process.env.APK_PORT || '3005' });
   }
 });
 
@@ -1570,6 +1590,15 @@ app.post('/api/apk/clear', authenticateToken, requireInstance, (req, res) => {
       fs.unlinkSync(cachePath);
     } catch (err) {
       console.error(`[SYSTEM] Failed to delete cache file: ${err.message}`);
+    }
+  }
+
+  const rawPath = getRawApkPath(slug);
+  if (fs.existsSync(rawPath)) {
+    try {
+      fs.unlinkSync(rawPath);
+    } catch (err) {
+      console.error(`[SYSTEM] Failed to delete raw APK file: ${err.message}`);
     }
   }
   
