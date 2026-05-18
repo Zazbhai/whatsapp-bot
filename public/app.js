@@ -79,6 +79,7 @@ const aiToggleLabel = document.getElementById('ai-toggle-label');
 const aiPromptContainer = document.getElementById('ai-prompt-container');
 const aiSystemPromptTextarea = document.getElementById('ai-system-prompt');
 const saveAiSettingsBtn = document.getElementById('save-ai-settings-btn');
+const clearAiMemoryBtn = document.getElementById('clear-ai-memory-btn');
 
 // UI Elements: Manual Messenger
 const messengerForm = document.getElementById('messenger-form');
@@ -1363,6 +1364,34 @@ if (saveAiSettingsBtn) {
     } finally {
       saveAiSettingsBtn.disabled = false;
       saveAiSettingsBtn.innerHTML = originalBtnText;
+    }
+  });
+}
+
+if (clearAiMemoryBtn) {
+  clearAiMemoryBtn.addEventListener('click', async () => {
+    if (!confirm('Are you absolutely sure you want to clear all conversational memory context history for this active bot? This resets the AI chat history for all of your contacts!')) {
+      return;
+    }
+    
+    clearAiMemoryBtn.disabled = true;
+    const originalBtnText = clearAiMemoryBtn.innerHTML;
+    clearAiMemoryBtn.innerHTML = '<span>Clearing Memory...</span>';
+    
+    try {
+      const res = await apiFetch('/api/memory', { method: 'DELETE' });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Bot conversational memory cleared successfully! (${data.deletedCount || 0} contacts reset)`, 'success');
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to clear memory.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error, failed to clear bot memory.', 'error');
+    } finally {
+      clearAiMemoryBtn.disabled = false;
+      clearAiMemoryBtn.innerHTML = originalBtnText;
     }
   });
 }

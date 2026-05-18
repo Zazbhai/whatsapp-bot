@@ -354,8 +354,12 @@
               <label for="ai-system-prompt" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">AI Persona & Instructions</label>
               <textarea id="ai-system-prompt" rows="3" placeholder="Explain how the AI should behave (e.g. 'You are a polite receptionist for zazbhai's store. Brief answers only...')" style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed); resize: vertical;"></textarea>
             </div>
-            <div style="display: flex; justify-content: flex-end;">
-              <button class="btn btn-secondary btn-sm" id="save-ai-settings-btn">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <button class="btn btn-danger btn-sm" id="clear-ai-memory-btn" style="padding: 6px 12px; font-size: 0.8rem; display: flex; align-items: center;" type="button">
+                <i data-lucide="trash-2" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                <span>Clear Chat Memory</span>
+              </button>
+              <button class="btn btn-secondary btn-sm" id="save-ai-settings-btn" type="button">
                 <i data-lucide="save" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                 <span>Save AI Persona</span>
               </button>

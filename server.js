@@ -1231,6 +1231,26 @@ app.delete('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
   }
 });
 
+app.delete('/api/memory', authenticateToken, requireInstance, (req, res) => {
+  const slug = req.instanceSlug;
+  const memory = loadMemory();
+  
+  let deletedCount = 0;
+  for (const key of Object.keys(memory)) {
+    if (key.startsWith(`${slug}:`)) {
+      delete memory[key];
+      deletedCount++;
+    }
+  }
+  
+  if (deletedCount > 0) {
+    saveMemory(memory);
+  }
+  
+  logInstanceEvent(slug, 'system', `AI conversational memory cache cleared successfully (${deletedCount} contacts deleted).`);
+  res.json({ message: 'Conversation memory cleared successfully.', deletedCount });
+});
+
 app.post('/api/send-message', authenticateToken, requireInstance, async (req, res) => {
   const slug = req.instanceSlug;
   const { number, message } = req.body;
