@@ -784,19 +784,22 @@ function initInstanceClient(slug) {
     // Auto-forward incoming images to Admin if configured
     const listConfig = loadInstances();
     const instConfig = listConfig.find(i => i.slug === slug);
-    if (msg.hasMedia && msg.type === 'image' && instConfig && instConfig.adminForwardNumber) {
-      try {
-        const senderNumber = msg.from.split('@')[0];
-        logInstanceEvent(slug, 'system', `Image received from +${senderNumber}. Forwarding to Admin +${instConfig.adminForwardNumber}...`);
-        const media = await msg.downloadMedia();
-        if (media && media.data) {
-          const caption = `📸 *Image Received*\n*From:* +${senderNumber}\n*Message:* ${msg.body || 'No caption'}`;
-          await client.sendMessage(`${instConfig.adminForwardNumber.replace(/[^0-9]/g, '')}@c.us`, media, { caption });
-          logInstanceEvent(slug, 'system', `Image successfully forwarded to Admin +${instConfig.adminForwardNumber}.`);
+    if (msg.hasMedia && msg.type === 'image') {
+      if (instConfig && instConfig.adminForwardNumber) {
+        try {
+          const senderNumber = msg.from.split('@')[0];
+          logInstanceEvent(slug, 'system', `Image received from +${senderNumber}. Forwarding to Admin +${instConfig.adminForwardNumber}...`);
+          const media = await msg.downloadMedia();
+          if (media && media.data) {
+            const caption = `📸 *Image Received*\n*From:* +${senderNumber}\n*Message:* ${msg.body || 'No caption'}`;
+            await client.sendMessage(`${instConfig.adminForwardNumber.replace(/[^0-9]/g, '')}@c.us`, media, { caption });
+            logInstanceEvent(slug, 'system', `Image successfully forwarded to Admin +${instConfig.adminForwardNumber}.`);
+          }
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `Failed to forward image to Admin: ${err.message}`);
         }
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to forward image to Admin: ${err.message}`);
       }
+      return; // Ignore image captions completely; do not trigger AI or rules
     }
 
     // Auto-transcribe voice and audio messages to text
