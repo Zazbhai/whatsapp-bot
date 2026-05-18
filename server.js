@@ -771,6 +771,15 @@ function initInstanceClient(slug) {
             textReplies = [];
           }
 
+          // Shuffled Mode (Random Selection): Select exactly ONE reply from the list!
+          if (rule.replyMode === 'random' && textReplies.length > 0) {
+            const originalLength = textReplies.length;
+            const randomIndex = Math.floor(Math.random() * originalLength);
+            const chosenText = textReplies[randomIndex];
+            textReplies = [chosenText]; // Override array to only send the chosen one!
+            logInstanceEvent(slug, 'system', `Shuffled Multi-Reply: Randomly selected reply #${randomIndex + 1} of ${originalLength}`);
+          }
+
           // Send each text reply sequentially
           for (let i = 0; i < textReplies.length; i++) {
             const replyText = textReplies[i];
@@ -1135,7 +1144,7 @@ app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {
 
 app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
-  const { trigger, matchType, reply, enabled, format, buttons, skipReply, sendApk } = req.body;
+  const { trigger, matchType, reply, enabled, format, buttons, skipReply, sendApk, replyMode } = req.body;
   if (!trigger || !matchType || !reply) {
     return res.status(400).json({ error: 'Missing required rules parameters' });
   }
@@ -1147,7 +1156,8 @@ app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
     matchType,
     reply,
     enabled: enabled !== undefined ? enabled : true,
-    sendApk: sendApk !== undefined ? !!sendApk : false
+    sendApk: sendApk !== undefined ? !!sendApk : false,
+    replyMode: replyMode || 'sequential'
   };
   if (format) newRule.format = format;
   if (buttons) newRule.buttons = buttons;
@@ -1164,7 +1174,7 @@ app.post('/api/rules', authenticateToken, requireInstance, (req, res) => {
 app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
   const { id } = req.params;
-  const { trigger, matchType, reply, enabled, format, buttons, skipReply, sendApk } = req.body;
+  const { trigger, matchType, reply, enabled, format, buttons, skipReply, sendApk, replyMode } = req.body;
   
   let rules = loadInstanceRules(slug);
   const index = rules.findIndex(r => r.id === id);
@@ -1178,7 +1188,8 @@ app.put('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
     matchType: matchType !== undefined ? matchType : rules[index].matchType,
     reply: reply !== undefined ? reply : rules[index].reply,
     enabled: enabled !== undefined ? enabled : rules[index].enabled,
-    sendApk: sendApk !== undefined ? !!sendApk : rules[index].sendApk
+    sendApk: sendApk !== undefined ? !!sendApk : rules[index].sendApk,
+    replyMode: replyMode !== undefined ? replyMode : rules[index].replyMode
   };
   if (format !== undefined) rules[index].format = format;
   if (buttons !== undefined) rules[index].buttons = buttons;

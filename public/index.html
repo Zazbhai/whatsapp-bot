@@ -589,8 +589,16 @@
           <label for="rule-reply">Automated Reply Message</label>
           <textarea id="rule-reply" placeholder="The message the bot will send when triggered..." rows="5" required></textarea>
           <span class="input-tip" style="margin-top: 4px; display: block; font-size: 0.75rem; color: var(--text-muted);">
-            💡 <strong>Multi-Reply Power:</strong> Separate replies with <code>|||</code> to send them as separate sequential messages! (e.g. <code>Welcome to Zazbhai Store!|||How can we assist you?</code>)
+            💡 <strong>Multi-Reply Power:</strong> Separate replies with <code>|||</code> to support multiple messages! (e.g. <code>Option 1|||Option 2|||Option 3</code>)
           </span>
+        </div>
+
+        <div class="form-group">
+          <label for="rule-reply-mode">Multi-Reply Behavior</label>
+          <select id="rule-reply-mode">
+            <option value="sequential">Send All (Sequential Messages in Order)</option>
+            <option value="random">Shuffle & Send One (Randomly picked message from the list)</option>
+          </select>
         </div>
 
         <div class="form-group row-group">

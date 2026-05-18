@@ -71,6 +71,7 @@ const ruleMatchTypeSelect = document.getElementById('rule-match-type');
 const ruleReplyTextarea = document.getElementById('rule-reply');
 const ruleEnabledCheckbox = document.getElementById('rule-enabled');
 const ruleSendApkCheckbox = document.getElementById('rule-send-apk');
+const ruleReplyModeSelect = document.getElementById('rule-reply-mode');
 
 // UI Elements: AI Responder
 const aiEnabledToggle = document.getElementById('ai-enabled-toggle');
@@ -584,8 +585,9 @@ ruleForm.addEventListener('submit', async (e) => {
   const reply = ruleReplyTextarea.value.trim();
   const enabled = ruleEnabledCheckbox.checked;
   const sendApk = ruleSendApkCheckbox ? ruleSendApkCheckbox.checked : false;
+  const replyMode = ruleReplyModeSelect ? ruleReplyModeSelect.value : 'sequential';
 
-  const payload = { trigger, matchType, reply, enabled, sendApk };
+  const payload = { trigger, matchType, reply, enabled, sendApk, replyMode };
   const url = id ? `/api/rules/${id}` : '/api/rules';
   const method = id ? 'PUT' : 'POST';
 
@@ -620,6 +622,9 @@ window.openEditRuleModal = function(id) {
   ruleEnabledCheckbox.checked = rule.enabled;
   if (ruleSendApkCheckbox) {
     ruleSendApkCheckbox.checked = !!rule.sendApk;
+  }
+  if (ruleReplyModeSelect) {
+    ruleReplyModeSelect.value = rule.replyMode || 'sequential';
   }
 
   modalTitle.textContent = 'Edit Auto-Reply Rule';
