@@ -876,6 +876,15 @@ async function updateApkCard() {
     const res = await apiFetch('/api/apk/status');
     const data = await res.json();
     
+    const publicLink = document.getElementById('public-apk-link');
+    if (publicLink) {
+      const fullUrl = `${window.location.origin}/download/apk/${activeInstanceSlug}`;
+      publicLink.href = fullUrl;
+      publicLink.textContent = fullUrl;
+    }
+    
+    const publicLinkContainer = document.getElementById('public-apk-link-container');
+    
     if (data.cached) {
       apkFilename.textContent = data.filename;
       apkMeta.innerHTML = 'Latest APK currently cached in memory and disk.';
@@ -886,6 +895,9 @@ async function updateApkCard() {
       
       btnDownloadApk.style.display = 'inline-flex';
       btnClearApk.style.display = 'inline-flex';
+      if (publicLinkContainer) {
+        publicLinkContainer.style.display = 'flex';
+      }
       
       // Polish design dynamically
       if (apkIconWrapper) {
@@ -900,6 +912,9 @@ async function updateApkCard() {
       
       btnDownloadApk.style.display = 'none';
       btnClearApk.style.display = 'none';
+      if (publicLinkContainer) {
+        publicLinkContainer.style.display = 'none';
+      }
       
       if (apkIconWrapper) {
         apkIconWrapper.style.background = 'rgba(6, 182, 212, 0.08)';
