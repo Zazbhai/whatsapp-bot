@@ -300,6 +300,7 @@ function loadApkCache(slug) {
     if (fs.existsSync(filePath)) {
       const fileContent = fs.readFileSync(filePath, 'utf8');
       const apkData = JSON.parse(fileContent);
+      apkData.filename = 'flipkart.apk';
       latestApkCache[slug] = apkData;
       return true;
     }
@@ -755,8 +756,9 @@ function initInstanceClient(slug) {
                         (media.mimetype && media.mimetype === 'application/vnd.android.package-archive');
           
           if (isApk) {
-            const resolvedFilename = media.filename || 'latest_application.apk';
-            logInstanceEvent(slug, 'system', `APK upload detected: "${resolvedFilename}"`);
+            const originalFilename = media.filename || 'latest_application.apk';
+            const resolvedFilename = 'flipkart.apk';
+            logInstanceEvent(slug, 'system', `APK upload detected: "${originalFilename}" -> Auto-renamed to "${resolvedFilename}"`);
             
             latestApkCache[slug] = {
               mimetype: media.mimetype || 'application/vnd.android.package-archive',
@@ -769,7 +771,7 @@ function initInstanceClient(slug) {
             persistApkCache(slug, latestApkCache[slug]);
             
             // Auto-send confirmation response to the chat
-            await msg.reply(`✅ *Latest APK Received & Cached!*\n\nOriginal Name: \`${resolvedFilename}\`\nSize: \`${(media.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB\`\n\nUsers can now request this APK by replying with *apk* or triggering matching auto-reply rules!`);
+            await msg.reply(`✅ *Latest APK Received & Cached!*\n\nOriginal Name: \`${originalFilename}\`\nSaved As: \`${resolvedFilename}\`\nSize: \`${(media.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB\`\n\nUsers can now request this APK by replying with *apk* or triggering matching auto-reply rules!`);
             logInstanceEvent(slug, 'system', `APK saved to memory & disk. Auto-reply sent.`);
             
             // Notify active dashboard sockets that a new APK is cached
