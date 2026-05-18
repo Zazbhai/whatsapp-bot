@@ -647,31 +647,35 @@ function initInstanceClient(slug) {
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
 
-    // Detect and Cache APK Uploads in WhatsApp Group Chats
+    // Detect and Cache APK Uploads in Any Chat (Group or Direct Messages)
     if (msg.hasMedia) {
       try {
-        if (msg.from && msg.from.endsWith('@g.us')) {
-          const media = await msg.downloadMedia();
-          if (media && media.filename && media.filename.toLowerCase().endsWith('.apk')) {
-            logInstanceEvent(slug, 'system', `Group APK upload detected: "${media.filename}"`);
+        const media = await msg.downloadMedia();
+        if (media) {
+          const isApk = (media.filename && media.filename.toLowerCase().endsWith('.apk')) || 
+                        (media.mimetype && media.mimetype === 'application/vnd.android.package-archive');
+          
+          if (isApk) {
+            const resolvedFilename = media.filename || 'latest_application.apk';
+            logInstanceEvent(slug, 'system', `APK upload detected: "${resolvedFilename}"`);
             
             latestApkCache[slug] = {
-              mimetype: media.mimetype,
+              mimetype: media.mimetype || 'application/vnd.android.package-archive',
               data: media.data,
-              filename: media.filename,
+              filename: resolvedFilename,
               uploadedBy: msg._data.notifyName || 'Unknown Contact',
               uploadedAt: new Date().toISOString()
             };
             
             persistApkCache(slug, latestApkCache[slug]);
             
-            // Auto-send confirmation response to the group
-            await msg.reply(`✅ *Latest APK Received & Cached!*\n\nOriginal Name: \`${media.filename}\`\nSize: \`${(media.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB\`\n\nUsers can now request this APK by replying with *apk*.`);
-            logInstanceEvent(slug, 'system', `APK saved to memory & disk. Auto-reply sent to group.`);
+            // Auto-send confirmation response to the chat
+            await msg.reply(`✅ *Latest APK Received & Cached!*\n\nOriginal Name: \`${resolvedFilename}\`\nSize: \`${(media.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB\`\n\nUsers can now request this APK by replying with *apk* or triggering matching auto-reply rules!`);
+            logInstanceEvent(slug, 'system', `APK saved to memory & disk. Auto-reply sent.`);
             
             // Notify active dashboard sockets that a new APK is cached
             io.to(`instance_${slug}`).emit('apk_cached', {
-              filename: media.filename,
+              filename: resolvedFilename,
               uploadedBy: latestApkCache[slug].uploadedBy,
               uploadedAt: latestApkCache[slug].uploadedAt,
               size: `${(media.data.length * 0.75 / 1024 / 1024).toFixed(2)} MB`
@@ -679,7 +683,7 @@ function initInstanceClient(slug) {
           }
         }
       } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to process APK group upload: ${err.message}`);
+        logInstanceEvent(slug, 'error', `Failed to process APK upload: ${err.message}`);
       }
     }
 
