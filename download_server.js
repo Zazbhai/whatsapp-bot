@@ -1,9 +1,22 @@
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
-const dotenv = require('dotenv');
-
-dotenv.config();
+// Load environment variables manually from .env (bulletproof, zero native dependency install risks)
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  envContent.split(/\r?\n/).forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const delimiterIndex = trimmed.indexOf('=');
+    if (delimiterIndex === -1) return;
+    const key = trimmed.slice(0, delimiterIndex).trim();
+    const val = trimmed.slice(delimiterIndex + 1).trim().replace(/(^"|"$|^'|'$)/g, '');
+    if (key) {
+      process.env[key] = val;
+    }
+  });
+}
 
 const app = express();
 const PORT = process.env.APK_PORT || 3005;
