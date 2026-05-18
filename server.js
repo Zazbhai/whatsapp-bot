@@ -1022,6 +1022,10 @@ function initInstanceClient(slug) {
           if (aiResponse) {
             const chat = await msg.getChat();
             await chat.sendStateTyping();
+            
+            // Wait 1.5s to display the typing animation naturally
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
             await msg.reply(aiResponse);
             logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${aiResponse.replace(/\n/g, ' ')}"`);
             
