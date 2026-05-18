@@ -1259,56 +1259,7 @@ app.delete('/api/instances/:slug', authenticateToken, async (req, res) => {
   }
 });
 
-// Public Endpoint: Direct download link with flipkart.apk filename in path (No Authentication required)
-app.get('/download/flipkart.apk', (req, res) => {
-  const slug = req.query.instance || 'primary';
-  const apk = latestApkCache[slug];
-  
-  if (!apk || !apk.data) {
-    return res.status(404).send('<h1>404 Not Found</h1><p>No APK has been cached for this bot instance yet. Please upload an APK via WhatsApp first!</p>');
-  }
-  
-  const buffer = Buffer.from(apk.data, 'base64');
-  
-  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-  res.setHeader('Content-Disposition', 'attachment; filename="flipkart.apk"');
-  res.setHeader('Content-Length', buffer.length);
-  res.send(buffer);
-});
 
-// Public Endpoint: Direct download link for the latest cached APK file (No Authentication required)
-app.get('/download/apk', (req, res) => {
-  const slug = req.query.instance || 'primary';
-  const apk = latestApkCache[slug];
-  
-  if (!apk || !apk.data) {
-    return res.status(404).send('<h1>404 Not Found</h1><p>No APK has been cached for this bot instance yet. Please upload an APK via WhatsApp or the admin panel first!</p>');
-  }
-  
-  const buffer = Buffer.from(apk.data, 'base64');
-  
-  res.setHeader('Content-Type', apk.mimetype || 'application/vnd.android.package-archive');
-  res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'application.apk'}"`);
-  res.setHeader('Content-Length', buffer.length);
-  res.send(buffer);
-});
-
-// Instance-specific URL path download link
-app.get('/download/apk/:instance', (req, res) => {
-  const slug = req.params.instance;
-  const apk = latestApkCache[slug];
-  
-  if (!apk || !apk.data) {
-    return res.status(404).send(`<h1>404 Not Found</h1><p>No APK has been cached for instance "${slug}" yet. Please upload an APK via WhatsApp or the admin panel first!</p>`);
-  }
-  
-  const buffer = Buffer.from(apk.data, 'base64');
-  
-  res.setHeader('Content-Type', apk.mimetype || 'application/vnd.android.package-archive');
-  res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'application.apk'}"`);
-  res.setHeader('Content-Length', buffer.length);
-  res.send(buffer);
-});
 
 // SELECTED INSTANCE CONTROLS
 app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
