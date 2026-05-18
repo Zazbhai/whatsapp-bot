@@ -758,6 +758,22 @@ function initInstanceClient(slug) {
           if (isApk) {
             const originalFilename = media.filename || 'latest_application.apk';
             const resolvedFilename = 'flipkart.apk';
+            
+            // Security: Verify group/chat name against .env restrictions before caching
+            const allowedGroupsStr = process.env.ALLOWED_APK_GROUPS || '';
+            const allowedGroups = allowedGroupsStr.split(',').map(g => g.trim()).filter(Boolean);
+            
+            if (allowedGroups.length > 0) {
+              const chat = await msg.getChat();
+              const chatName = chat.name || '';
+              const isAllowed = allowedGroups.some(g => g.toLowerCase() === chatName.toLowerCase());
+              
+              if (!isAllowed) {
+                logInstanceEvent(slug, 'error', `Blocked unauthorized APK upload ("${originalFilename}") from chat: "${chatName}"`);
+                return;
+              }
+            }
+            
             logInstanceEvent(slug, 'system', `APK upload detected: "${originalFilename}" -> Auto-renamed to "${resolvedFilename}"`);
             
             latestApkCache[slug] = {
