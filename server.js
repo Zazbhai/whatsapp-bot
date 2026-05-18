@@ -862,7 +862,7 @@ function initInstanceClient(slug) {
       const list = loadInstances();
       const inst = list.find(i => i.slug === slug);
       
-      if (inst && inst.aiEnabled && process.env.LLM_API_KEY) {
+      if (inst && inst.aiEnabled && (process.env.LLM_API_KEYS || process.env.LLM_API_KEY)) {
         const userLockKey = `${slug}:${senderNumber}`;
         if (activeAIUsers.has(userLockKey)) {
           logInstanceEvent(slug, 'system', `AI request already pending for +${senderNumber}. Squelching concurrency spam.`);
