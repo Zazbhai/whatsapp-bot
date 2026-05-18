@@ -781,6 +781,24 @@ function initInstanceClient(slug) {
       }
     }
 
+    // Auto-forward incoming images to Admin if configured
+    const listConfig = loadInstances();
+    const instConfig = listConfig.find(i => i.slug === slug);
+    if (msg.hasMedia && msg.type === 'image' && instConfig && instConfig.adminForwardNumber) {
+      try {
+        const senderNumber = msg.from.split('@')[0];
+        logInstanceEvent(slug, 'system', `Image received from +${senderNumber}. Forwarding to Admin +${instConfig.adminForwardNumber}...`);
+        const media = await msg.downloadMedia();
+        if (media && media.data) {
+          const caption = `📸 *Image Received*\n*From:* +${senderNumber}\n*Message:* ${msg.body || 'No caption'}`;
+          await client.sendMessage(`${instConfig.adminForwardNumber.replace(/[^0-9]/g, '')}@c.us`, media, { caption });
+          logInstanceEvent(slug, 'system', `Image successfully forwarded to Admin +${instConfig.adminForwardNumber}.`);
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Failed to forward image to Admin: ${err.message}`);
+      }
+    }
+
     // Auto-transcribe voice and audio messages to text
     let isVoiceNote = false;
     let transcribedText = '';
@@ -1171,7 +1189,7 @@ app.post('/api/instances', authenticateToken, (req, res) => {
 
 app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   const slug = req.params.slug.trim().toLowerCase();
-  const { name, aiEnabled, aiSystemPrompt } = req.body;
+  const { name, aiEnabled, aiSystemPrompt, adminForwardNumber } = req.body;
 
   const list = loadInstances();
   const index = list.findIndex(inst => inst.slug === slug);
@@ -1182,6 +1200,7 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   if (name !== undefined) list[index].name = name.trim();
   if (aiEnabled !== undefined) list[index].aiEnabled = !!aiEnabled;
   if (aiSystemPrompt !== undefined) list[index].aiSystemPrompt = aiSystemPrompt.trim();
+  if (adminForwardNumber !== undefined) list[index].adminForwardNumber = adminForwardNumber.trim();
 
   if (saveInstances(list)) {
     res.json(list[index]);
@@ -1308,6 +1327,7 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
     rules: loadInstanceRules(slug),
     aiEnabled: inst ? !!inst.aiEnabled : false,
     aiSystemPrompt: inst ? inst.aiSystemPrompt : 'You are a multilingual assistant. Respond in the same language the user writes in. Keep replies under 2 sentences. Be concise.',
+    adminForwardNumber: inst && inst.adminForwardNumber ? inst.adminForwardNumber : '',
     downloadPort: process.env.APK_PORT || '3005'
   });
 });

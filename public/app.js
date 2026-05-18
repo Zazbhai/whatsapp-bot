@@ -1309,6 +1309,12 @@ async function syncActiveInstanceData() {
       aiPromptContainer.style.display = data.aiEnabled ? 'block' : 'none';
       aiSystemPromptTextarea.value = data.aiSystemPrompt || '';
     }
+    
+    // Populate Admin Media Forwarding Number
+    const adminForwardNumberInput = document.getElementById('admin-forward-number');
+    if (adminForwardNumberInput) {
+      adminForwardNumberInput.value = data.adminForwardNumber || '';
+    }
 
     // Refresh the APK Cache Manager Card UI
     updateApkCard();
@@ -1380,6 +1386,39 @@ if (saveAiSettingsBtn) {
     } finally {
       saveAiSettingsBtn.disabled = false;
       saveAiSettingsBtn.innerHTML = originalBtnText;
+    }
+  });
+}
+
+const saveForwardNumberBtn = document.getElementById('save-forward-number-btn');
+if (saveForwardNumberBtn) {
+  saveForwardNumberBtn.addEventListener('click', async () => {
+    const adminForwardNumberInput = document.getElementById('admin-forward-number');
+    const adminForwardNumber = adminForwardNumberInput ? adminForwardNumberInput.value.trim() : '';
+    
+    saveForwardNumberBtn.disabled = true;
+    const originalBtnText = saveForwardNumberBtn.innerHTML;
+    saveForwardNumberBtn.innerHTML = '<span>Saving...</span>';
+    
+    try {
+      const res = await apiFetch(`/api/instances/${activeInstanceSlug}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminForwardNumber })
+      });
+      
+      if (res.ok) {
+        showToast('Admin forwarding number saved successfully!', 'success');
+        fetchInstances();
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to update forwarding number.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error, failed to update admin forwarding number.', 'error');
+    } finally {
+      saveForwardNumberBtn.disabled = false;
+      saveForwardNumberBtn.innerHTML = originalBtnText;
     }
   });
 }
