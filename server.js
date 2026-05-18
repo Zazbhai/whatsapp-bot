@@ -1000,11 +1000,10 @@ function initInstanceClient(slug) {
         // Acquire AI concurrency slot (highly parallel per instance)
         await acquireAISlot(slug);
         try {
-          const chat = await msg.getChat();
-          await chat.sendStateTyping();
-          
           let aiResponse = await generateAIResponse(slug, msg.body, history);
           if (aiResponse) {
+            const chat = await msg.getChat();
+            await chat.sendStateTyping();
             await msg.reply(aiResponse);
             logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${aiResponse.replace(/\n/g, ' ')}"`);
             
