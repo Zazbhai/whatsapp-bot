@@ -5,12 +5,12 @@ import speech_recognition as sr
 
 def main():
     if len(sys.argv) < 2:
-        print("Error: Missing audio file path argument.")
+        sys.stderr.write("Error: Missing audio file path argument.\n")
         sys.exit(1)
 
     input_path = sys.argv[1]
     if not os.path.exists(input_path):
-        print(f"Error: File not found: {input_path}")
+        sys.stderr.write(f"Error: File not found: {input_path}\n")
         sys.exit(1)
 
     # Define intermediate WAV path
@@ -30,8 +30,20 @@ def main():
         
         # Run ffmpeg command silently
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    except FileNotFoundError:
+        sys.stderr.write("Error: FFmpeg is not installed or not found in system PATH. Please install FFmpeg to enable voice note transcription.\n")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        ffmpeg_err = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        sys.stderr.write(f"Error during audio conversion (FFmpeg failed): {ffmpeg_err}\n")
+        if os.path.exists(wav_path):
+            try:
+                os.remove(wav_path)
+            except:
+                pass
+        sys.exit(1)
     except Exception as e:
-        print(f"Error during audio conversion: {str(e)}")
+        sys.stderr.write(f"Error during audio conversion setup: {str(e)}\n")
         if os.path.exists(wav_path):
             try:
                 os.remove(wav_path)
@@ -45,14 +57,15 @@ def main():
         with sr.AudioFile(wav_path) as source:
             audio_data = r.record(source)
         
-        # Perform transcription using free Google Speech recognizer (No API key or tokens required!)
+        # Perform transcription using free Google Speech recognizer
         text = r.recognize_google(audio_data)
         print(text.strip())
     except sr.UnknownValueError:
         # Could not understand audio (empty transcription is clean output)
         print("")
     except sr.RequestError as e:
-        print(f"Error: Speech service request failed: {str(e)}")
+        sys.stderr.write(f"Error: Speech service request failed: {str(e)}\n")
+        sys.exit(1)
     finally:
         # Clean up intermediate WAV file
         if os.path.exists(wav_path):

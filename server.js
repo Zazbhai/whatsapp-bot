@@ -368,6 +368,138 @@ function saveMemory(memory) {
   }, 2000);
 }
 
+// =============================================================
+// DAILY ANALYTICS — unique users responded to per 24 hours
+// =============================================================
+let analyticsCache = {};
+let pendingAnalyticsWriteTimeouts = {};
+
+function loadAnalytics(slug) {
+  if (analyticsCache[slug]) {
+    return analyticsCache[slug];
+  }
+  const analyticsFile = path.join(dataDir, `analytics_${slug}.json`);
+  try {
+    if (fs.existsSync(analyticsFile)) {
+      const data = fs.readFileSync(analyticsFile, 'utf8');
+      analyticsCache[slug] = JSON.parse(data);
+      return analyticsCache[slug];
+    }
+  } catch (err) {
+    console.error(`Failed to load analytics for ${slug}:`, err);
+  }
+  analyticsCache[slug] = [];
+  return analyticsCache[slug];
+}
+
+function saveAnalytics(slug, data) {
+  analyticsCache[slug] = data;
+  if (pendingAnalyticsWriteTimeouts[slug]) return;
+  
+  pendingAnalyticsWriteTimeouts[slug] = setTimeout(() => {
+    delete pendingAnalyticsWriteTimeouts[slug];
+    const analyticsFile = path.join(dataDir, `analytics_${slug}.json`);
+    fs.promises.writeFile(analyticsFile, JSON.stringify(analyticsCache[slug], null, 2), 'utf8')
+      .catch(err => console.error(`[SYSTEM] Async analytics write failed for ${slug}:`, err));
+  }, 2000);
+}
+
+function recordUserResponse(slug, senderNumber) {
+  try {
+    const list = loadAnalytics(slug);
+    list.push({
+      timestamp: Date.now(),
+      senderNumber
+    });
+    
+    // Keep only last 7 days of entries to prevent file bloating
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const cleanList = list.filter(entry => entry.timestamp > sevenDaysAgo);
+    
+    saveAnalytics(slug, cleanList);
+  } catch (err) {
+    console.error('[SYSTEM] recordUserResponse error:', err.message);
+  }
+}
+
+function generateDailyReport(slug) {
+  try {
+    const list = loadAnalytics(slug);
+    const now = Date.now();
+    const last24h = now - 24 * 60 * 60 * 1000;
+    
+    // Filter entries from last 24 hours
+    const recentEntries = list.filter(entry => entry.timestamp > last24h);
+    const repliesCount = recentEntries.length;
+    
+    // Count unique users and their message frequency
+    const userCounts = {};
+    recentEntries.forEach(entry => {
+      userCounts[entry.senderNumber] = (userCounts[entry.senderNumber] || 0) + 1;
+    });
+    
+    const uniqueUsersCount = Object.keys(userCounts).length;
+    
+    let details = '';
+    if (uniqueUsersCount === 0) {
+      details = 'No users handled in this period.';
+    } else {
+      details = Object.entries(userCounts)
+        .map(([num, count]) => `• +${num}: ${count} reply/replies`)
+        .join('\n');
+    }
+    
+    return {
+      uniqueUsersCount,
+      repliesCount,
+      details
+    };
+  } catch (err) {
+    console.error(`[SYSTEM] Error generating report for ${slug}:`, err.message);
+    return { uniqueUsersCount: 0, repliesCount: 0, details: `Error: ${err.message}` };
+  }
+}
+
+async function sendDailyReportToAdmin(slug) {
+  const listConfig = loadInstances();
+  const instConfig = listConfig.find(i => i.slug === slug);
+  if (!instConfig || !instConfig.adminForwardNumber) {
+    logInstanceEvent(slug, 'system', 'Daily report skipped: Admin number not configured.');
+    return false;
+  }
+  
+  const client = activeClients[slug];
+  if (!client || !clientStates[slug] || clientStates[slug].status !== 'connected') {
+    logInstanceEvent(slug, 'system', 'Daily report failed: WhatsApp client not connected.');
+    return false;
+  }
+  
+  const report = generateDailyReport(slug);
+  const reportMsg = `📊 *WhatsApp Bot Daily Activity Report*\n` +
+                    `*Instance:* ${instConfig.name || slug}\n` +
+                    `*Period:* Last 24 Hours\n\n` +
+                    `👥 *Total Unique Users Responded To:* ${report.uniqueUsersCount}\n` +
+                    `💬 *Total Automated Replies Sent:* ${report.repliesCount}\n\n` +
+                    `📞 *Activity Details:*\n${report.details}`;
+  
+  try {
+    const adminJid = `${instConfig.adminForwardNumber.replace(/[^0-9]/g, '')}@c.us`;
+    await client.sendMessage(adminJid, reportMsg);
+    logInstanceEvent(slug, 'system', `Daily activity report sent to Admin +${instConfig.adminForwardNumber}`);
+    
+    // Update lastReportSentTime in instances config
+    const index = listConfig.findIndex(i => i.slug === slug);
+    if (index !== -1) {
+      listConfig[index].lastReportSentTime = Date.now();
+      saveInstances(listConfig);
+    }
+    return true;
+  } catch (err) {
+    logInstanceEvent(slug, 'error', `Failed to send daily report: ${err.message}`);
+    return false;
+  }
+}
+
 function getConversationHistory(slug, senderNumber) {
   const memory = loadMemory();
   const key = `${slug}:${senderNumber}`;
@@ -517,6 +649,7 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
       await msg.reply("❌ App file isn't ready yet — please wait a moment, sir! 🙏");
       clientStates[slug].stats.replies++;
       io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+      recordUserResponse(slug, senderNumber);
     } catch {}
     return false;
   }
@@ -530,6 +663,7 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
     logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
     clientStates[slug].stats.replies++;
     io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+    recordUserResponse(slug, senderNumber);
     return true;
   } catch (err) {
     logInstanceEvent(slug, 'error', `Smart APK send failed for +${senderNumber}: ${err.message}`);
@@ -601,6 +735,7 @@ async function processAIUserQueue(userLockKey) {
         addToMemory(slug, senderNumber, 'assistant', processReply);
         clientStates[slug].stats.replies++;
         io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+        recordUserResponse(slug, senderNumber);
       } catch (err) {
         logInstanceEvent(slug, 'error', `Process reply failed for +${senderNumber}: ${err.message}`);
       }
@@ -638,6 +773,7 @@ async function processAIUserQueue(userLockKey) {
 
         clientStates[slug].stats.replies++;
         io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+        recordUserResponse(slug, senderNumber);
       } else if (!shouldSendApk) {
         logInstanceEvent(slug, 'system', `AI Core returned an empty response. No reply dispatched.`);
       }
@@ -755,12 +891,12 @@ function putKeyOnCooldown(keyString) {
   }
 }
 
-function reserveApiKey() {
+function reserveApiKey(attemptedKeys = new Set()) {
   const now = Date.now();
   initApiKeysRegistryIfEmpty();
   
-  // Filter active keys
-  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
+  // Filter active keys that have not been attempted in this request
+  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now && !attemptedKeys.has(k.key));
   
   // Find non-busy available keys
   const availableKeys = activeKeys.filter(k => !k.busy);
@@ -768,30 +904,30 @@ function reserveApiKey() {
     return null;
   }
   
-  // Priority 1: Hugging Face (HF)
-  const hfKey = availableKeys.find(k => k.provider === 'huggingface');
-  if (hfKey) {
-    hfKey.busy = true;
-    return hfKey;
-  }
-  
-  // Priority 2: Other (OpenRouter, Groq)
+  // Priority 1: Other (OpenRouter, Groq)
   const otherKey = availableKeys.find(k => k.provider !== 'huggingface');
   if (otherKey) {
     otherKey.busy = true;
     return otherKey;
   }
   
+  // Priority 2: Hugging Face (HF)
+  const hfKey = availableKeys.find(k => k.provider === 'huggingface');
+  if (hfKey) {
+    hfKey.busy = true;
+    return hfKey;
+  }
+  
   return null;
 }
 
-function acquireApiKey() {
-  const key = reserveApiKey();
+function acquireApiKey(attemptedKeys) {
+  const key = reserveApiKey(attemptedKeys);
   if (key) {
     return Promise.resolve(key);
   }
   return new Promise(resolve => {
-    pendingKeyRequests.push(resolve);
+    pendingKeyRequests.push({ resolve, attemptedKeys });
   });
 }
 
@@ -801,12 +937,18 @@ function releaseApiKey(keyObj) {
   }
   
   if (pendingKeyRequests.length > 0) {
-    const nextResolve = pendingKeyRequests.shift();
-    const nextKey = reserveApiKey();
-    if (nextKey) {
-      nextResolve(nextKey);
-    } else {
-      pendingKeyRequests.unshift(nextResolve);
+    let foundIndex = -1;
+    for (let i = 0; i < pendingKeyRequests.length; i++) {
+      const req = pendingKeyRequests[i];
+      const nextKey = reserveApiKey(req.attemptedKeys);
+      if (nextKey) {
+        foundIndex = i;
+        req.resolve(nextKey);
+        break;
+      }
+    }
+    if (foundIndex !== -1) {
+      pendingKeyRequests.splice(foundIndex, 1);
     }
   }
 }
@@ -854,15 +996,28 @@ async function generateAIResponse(slug, userMessage, history = []) {
 
   let attempts = 0;
   const maxAttempts = Math.max(totalKeysCount * 2, 10);
+  const attemptedKeys = new Set();
 
   while (attempts < maxAttempts) {
     attempts++;
     
+    // Check if we have already attempted all active keys
+    const now = Date.now();
+    const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
+    const untriedKeys = activeKeys.filter(k => !attemptedKeys.has(k.key));
+    if (untriedKeys.length === 0) {
+      logInstanceEvent(slug, 'system', 'All available active LLM keys have been attempted and failed for this request.');
+      break;
+    }
+
     // Acquire key from pool (waits/queues if all are busy or cooldowned)
-    const keyObj = await acquireApiKey();
+    const keyObj = await acquireApiKey(attemptedKeys);
     const activeApiKey = keyObj.key;
     const provider = keyObj.provider;
     const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
+    
+    // Track that we are attempting this key in this request
+    attemptedKeys.add(activeApiKey);
     
     let models = [];
     let url = '';
@@ -912,11 +1067,11 @@ async function generateAIResponse(slug, userMessage, history = []) {
           const errText = await response.text();
           logInstanceEvent(slug, 'error', `AI Query failed on [${provider}] (${response.status}) using ${model}: ${errText.substring(0, 120)}`);
           
-          const isRateLimit = response.status === 429 || response.status === 402 || response.status === 401;
+          const isKeyError = response.status === 400 || response.status === 401 || response.status === 403 || response.status === 429 || response.status === 402;
           const isQuotaMsg = /quota|limit|exhausted|insufficient|credit|balance/i.test(errText);
           
-          if (isRateLimit || isQuotaMsg) {
-            logInstanceEvent(slug, 'system', `Key ${maskedKey} has reached its limit/expired. Cooldown triggered for 24 hours.`);
+          if (isKeyError || isQuotaMsg) {
+            logInstanceEvent(slug, 'system', `Key ${maskedKey} has encountered a fatal key/quota error. Cooldown triggered for 24 hours.`);
             putKeyOnCooldown(activeApiKey);
             break; // Break model loop to switch to next key
           }
@@ -943,8 +1098,8 @@ async function generateAIResponse(slug, userMessage, history = []) {
     }
 
     // Check if we have any active non-cooldown keys remaining at all
-    const now = Date.now();
-    const activeKeysCount = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now).length;
+    const nowCheck = Date.now();
+    const activeKeysCount = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < nowCheck).length;
     if (activeKeysCount === 0) {
       logInstanceEvent(slug, 'error', 'All configured LLM keys are currently on a 24-hour cooldown. No active keys available.');
       return null;
@@ -960,6 +1115,54 @@ async function generateAIResponse(slug, userMessage, history = []) {
 async function transcribeAudio(slug, media) {
   const { exec } = require('child_process');
   
+  // 1. Try Hugging Face Whisper API first if key is available
+  initApiKeysRegistryIfEmpty();
+  const now = Date.now();
+  const hfKeys = Object.values(apiKeysRegistry).filter(k => k.provider === 'huggingface' && k.cooldownUntil < now);
+  
+  if (hfKeys.length > 0) {
+    const selectedKeyObj = hfKeys[0];
+    const selectedKey = selectedKeyObj.key;
+    
+    try {
+      logInstanceEvent(slug, 'system', `Hugging Face token available. Requesting OpenAI Whisper-Large-V3-Turbo API...`);
+      const modelUrl = 'https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo';
+      
+      const response = await fetch(modelUrl, {
+        headers: { 
+          Authorization: `Bearer ${selectedKey}`,
+          'Content-Type': media.mimetype || 'audio/ogg'
+        },
+        method: 'POST',
+        body: Buffer.from(media.data, 'base64')
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result && result.text) {
+          logInstanceEvent(slug, 'system', `Hugging Face Whisper API transcription completed successfully!`);
+          return result.text.trim();
+        }
+      } else {
+        const errorText = await response.text();
+        logInstanceEvent(slug, 'system', `Hugging Face Whisper API returned error status ${response.status}: ${errorText}`);
+        
+        // Put key on cooldown if rate-limited or unauthorized
+        if (response.status === 429 || response.status === 401 || response.status === 403) {
+          putKeyOnCooldown(selectedKey);
+          logInstanceEvent(slug, 'system', `Hugging Face token put on 24h cooldown due to API response.`);
+        }
+      }
+    } catch (hfErr) {
+      logInstanceEvent(slug, 'system', `Failed to transcribe using Hugging Face Whisper API: ${hfErr.message}`);
+    }
+    
+    logInstanceEvent(slug, 'system', `Hugging Face Whisper API failed. Falling back to local offline Google engine...`);
+  } else {
+    logInstanceEvent(slug, 'system', `No active Hugging Face tokens available. Using local offline Google engine...`);
+  }
+
+  // 2. Fallback to Local Offline Python-based Google Speech Engine
   let format = 'ogg';
   if (media.mimetype) {
     const mainMime = media.mimetype.split(';')[0].toLowerCase();
@@ -995,7 +1198,7 @@ async function transcribeAudio(slug, media) {
     });
 
     if (transcription) {
-      logInstanceEvent(slug, 'system', `Local offline transcription completed successfully!`);
+      logInstanceEvent(slug, 'system', `Local offline Google transcription completed successfully!`);
       return transcription;
     } else {
       logInstanceEvent(slug, 'system', `Local transcription returned empty text (audio might be silent or unclear).`);
@@ -1154,6 +1357,28 @@ function initInstanceClient(slug) {
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
 
+    // Auto-Block and Delete User on Specific Trigger Text
+    const listConfig = loadInstances();
+    const instConfig = listConfig.find(i => i.slug === slug);
+    if (instConfig && instConfig.blockTriggerText && msg.body) {
+      const triggerClean = instConfig.blockTriggerText.trim().toLowerCase();
+      const incomingClean = msg.body.trim().toLowerCase();
+      if (triggerClean && incomingClean === triggerClean) {
+        const senderNumber = msg.from.split('@')[0];
+        logInstanceEvent(slug, 'system', `🚨 Trigger matched block word: "${msg.body}". Blocking user +${senderNumber} and deleting chat...`);
+        try {
+          const chat = await msg.getChat();
+          const contact = await chat.getContact();
+          await contact.block();
+          await chat.delete();
+          logInstanceEvent(slug, 'system', `🚨 Successfully blocked and deleted user +${senderNumber}`);
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `Failed to block/delete user +${senderNumber}: ${err.message}`);
+        }
+        return; // Halted completely
+      }
+    }
+
     // Detect and Cache APK Uploads in Any Chat (Group or Direct Messages)
     if (msg.hasMedia) {
       try {
@@ -1212,8 +1437,6 @@ function initInstanceClient(slug) {
     }
 
     // Auto-forward incoming images to Admin if configured
-    const listConfig = loadInstances();
-    const instConfig = listConfig.find(i => i.slug === slug);
     if (msg.hasMedia && msg.type === 'image') {
       if (instConfig && instConfig.adminForwardNumber) {
         try {
@@ -1272,7 +1495,7 @@ function initInstanceClient(slug) {
     
     const listForAi = loadInstances();
     const instForAi = listForAi.find(i => i.slug === slug);
-    const aiHandlesApk = instForAi && instForAi.aiEnabled && (process.env.LLM_API_KEYS || process.env.LLM_API_KEY);
+    const aiHandlesApk = instForAi && instForAi.aiEnabled && (process.env.LLM_API_KEYS || process.env.LLM_API_KEY || process.env.HF_TOKENS || process.env.HF_TOKEN);
 
     // Fast APK keyword path (skipped when AI is on — AI sends APK with persona reply)
     const isApkKeyword = incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk';
@@ -1292,6 +1515,7 @@ function initInstanceClient(slug) {
           
           clientStates[slug].stats.replies++;
           io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+          recordUserResponse(slug, senderNumber);
         } else {
           await msg.reply("❌ *No APK File Available*\n\nNo APK has been uploaded to the WhatsApp group yet. Please upload the latest APK to the group first!");
           logInstanceEvent(slug, 'send', `Replied to +${senderNumber} that no APK is available.`);
@@ -1385,6 +1609,7 @@ function initInstanceClient(slug) {
             
             clientStates[slug].stats.replies++;
             io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+            recordUserResponse(slug, senderNumber);
           }
 
           // If sendApk option is active, automatically send the cached APK file next!
@@ -1407,6 +1632,7 @@ function initInstanceClient(slug) {
               
               clientStates[slug].stats.replies++;
               io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+              recordUserResponse(slug, senderNumber);
             } else {
               logInstanceEvent(slug, 'system', `Rule triggered APK attachment, but no APK is cached for instance "${slug}"`);
             }
@@ -1593,7 +1819,8 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
     aiApkInstructions,
     aiApkPreamble,
     aiSmartApkEnabled,
-    adminForwardNumber
+    adminForwardNumber,
+    blockTriggerText
   } = req.body;
 
   const list = loadInstances();
@@ -1610,6 +1837,7 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   if (aiApkPreamble !== undefined) list[index].aiApkPreamble = aiApkPreamble.trim();
   if (aiSmartApkEnabled !== undefined) list[index].aiSmartApkEnabled = !!aiSmartApkEnabled;
   if (adminForwardNumber !== undefined) list[index].adminForwardNumber = adminForwardNumber.trim();
+  if (blockTriggerText !== undefined) list[index].blockTriggerText = blockTriggerText.trim();
 
   if (saveInstances(list)) {
     res.json(list[index]);
@@ -1692,8 +1920,19 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
     aiApkPreamble: inst ? (inst.aiApkPreamble || '') : '',
     aiSmartApkEnabled: inst ? inst.aiSmartApkEnabled !== false : true,
     adminForwardNumber: inst && inst.adminForwardNumber ? inst.adminForwardNumber : '',
+    blockTriggerText: inst && inst.blockTriggerText ? inst.blockTriggerText : '',
     downloadPort: process.env.APK_PORT || '3005'
   });
+});
+
+app.post('/api/instances/:slug/send-report', authenticateToken, async (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const success = await sendDailyReportToAdmin(slug);
+  if (success) {
+    res.json({ success: true, message: 'Activity report successfully sent to admin.' });
+  } else {
+    res.status(500).json({ error: 'Failed to send report. Please verify that the admin number is set and the instance is connected.' });
+  }
 });
 
 app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {
@@ -2059,12 +2298,53 @@ io.on('connection', (socket) => {
   });
 });
 
+// Schedule checker for daily reports (runs every 10 minutes)
+setInterval(() => {
+  const list = loadInstances();
+  const now = Date.now();
+  
+  list.forEach(inst => {
+    if (inst.adminForwardNumber) {
+      const lastSent = inst.lastReportSentTime || 0;
+      const twentyFourHours = 24 * 60 * 60 * 1000;
+      
+      // If never sent, initialize lastReportSentTime to now (so first report is sent 24h from now)
+      if (!lastSent) {
+        const listConfig = loadInstances();
+        const index = listConfig.findIndex(i => i.slug === inst.slug);
+        if (index !== -1) {
+          listConfig[index].lastReportSentTime = now;
+          saveInstances(listConfig);
+        }
+        return;
+      }
+      
+      // If sent more than 24 hours ago
+      if (now - lastSent >= twentyFourHours) {
+        sendDailyReportToAdmin(inst.slug).catch(err => {
+          console.error(`[SYSTEM] Background daily report failed for ${inst.slug}:`, err.message);
+        });
+      }
+    }
+  });
+}, 10 * 60 * 1000); // 10 minutes check interval
+
 // Run server
 server.listen(PORT, () => {
   console.log(`\n=============================================================`);
   console.log(`🤖 MULTI-INSTANCE WHATSAPP AUTOMATION BOT HUB IS ONLINE!`);
   console.log(`🌐 Dashboard Portal Interface: http://localhost:${PORT}`);
   console.log(`=============================================================\n`);
+
+  // Check if FFmpeg is installed
+  const { exec } = require('child_process');
+  exec('ffmpeg -version', (err) => {
+    if (err) {
+      console.warn('\n⚠️  [WARN] FFmpeg was not found in the system PATH.');
+      console.warn('   Voice-to-text audio transcription will not work unless FFmpeg is installed.');
+      console.warn('   To fix this: install FFmpeg on your system and make sure it is in your system PATH.\n');
+    }
+  });
 });
 
 // =============================================================

@@ -413,6 +413,56 @@
           </div>
         </div>
 
+        <div class="glass-card full-width-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+               <i data-lucide="shield-alert" style="color: #ff3b30; width: 24px; height: 24px;"></i>
+               <div>
+                 <h3 style="margin: 0;">Auto-Block & Clean System</h3>
+                 <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Automatically block contacts and delete their chat if they send a specific trigger phrase.</p>
+               </div>
+            </div>
+          </div>
+          
+          <div style="margin-top: 15px;">
+            <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <label for="block-trigger-text" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">Block Trigger Phrase</label>
+              <input type="text" id="block-trigger-text" placeholder="e.g. stop spam" style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed);">
+              <span class="input-tip" style="font-size: 0.75rem; color: var(--text-muted);">Leave empty to disable. Matching is case-insensitive. When received, the bot will block the sender and delete the conversation.</span>
+            </div>
+            <div style="display: flex; justify-content: flex-end;">
+              <button class="btn btn-secondary btn-sm" id="save-block-trigger-btn" type="button">
+                <i data-lucide="save" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                <span>Save Block Trigger</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="glass-card full-width-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+               <i data-lucide="bar-chart-3" style="color: #34c759; width: 24px; height: 24px;"></i>
+               <div>
+                 <h3 style="margin: 0;">Analytics & Activity Reporting</h3>
+                 <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Track activity in the last 24 hours and send summary reports to the configured Admin number.</p>
+               </div>
+            </div>
+          </div>
+          
+          <div style="margin-top: 15px; display: flex; flex-direction: column; gap: 12px;">
+            <p style="font-size: 0.8rem; color: var(--text-light); line-height: 1.5; margin: 0;">
+              Reports are automatically generated and dispatched to the Admin WhatsApp number every 24 hours. You can also trigger an immediate dispatch manually using the button below.
+            </p>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              <button class="btn btn-secondary btn-sm" id="send-report-now-btn" type="button" style="background: linear-gradient(135deg, #34c759 0%, #28a745 100%); border-color: transparent; color: white;">
+                <i data-lucide="send" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                <span>Send Report to Admin Now</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="actions-bar">
           <div class="search-box">
             <i data-lucide="search"></i>

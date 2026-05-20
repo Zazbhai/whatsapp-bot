@@ -1324,6 +1324,12 @@ async function syncActiveInstanceData() {
       adminForwardNumberInput.value = data.adminForwardNumber || '';
     }
 
+    // Populate Block Trigger Phrase
+    const blockTriggerInput = document.getElementById('block-trigger-text');
+    if (blockTriggerInput) {
+      blockTriggerInput.value = data.blockTriggerText || '';
+    }
+
     // Refresh the APK Cache Manager Card UI
     updateApkCard();
   } catch (err) {
@@ -1427,6 +1433,66 @@ if (saveForwardNumberBtn) {
     } finally {
       saveForwardNumberBtn.disabled = false;
       saveForwardNumberBtn.innerHTML = originalBtnText;
+    }
+  });
+}
+
+const saveBlockTriggerBtn = document.getElementById('save-block-trigger-btn');
+if (saveBlockTriggerBtn) {
+  saveBlockTriggerBtn.addEventListener('click', async () => {
+    const blockTriggerInput = document.getElementById('block-trigger-text');
+    const blockTriggerText = blockTriggerInput ? blockTriggerInput.value.trim() : '';
+    
+    saveBlockTriggerBtn.disabled = true;
+    const originalBtnText = saveBlockTriggerBtn.innerHTML;
+    saveBlockTriggerBtn.innerHTML = '<span>Saving...</span>';
+    
+    try {
+      const res = await apiFetch(`/api/instances/${activeInstanceSlug}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blockTriggerText })
+      });
+      
+      if (res.ok) {
+        showToast('Auto-block trigger phrase saved successfully!', 'success');
+        fetchInstances();
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to update block trigger phrase.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error, failed to update block trigger phrase.', 'error');
+    } finally {
+      saveBlockTriggerBtn.disabled = false;
+      saveBlockTriggerBtn.innerHTML = originalBtnText;
+    }
+  });
+}
+
+const sendReportNowBtn = document.getElementById('send-report-now-btn');
+if (sendReportNowBtn) {
+  sendReportNowBtn.addEventListener('click', async () => {
+    sendReportNowBtn.disabled = true;
+    const originalBtnText = sendReportNowBtn.innerHTML;
+    sendReportNowBtn.innerHTML = '<span>Sending Report...</span>';
+    
+    try {
+      const res = await apiFetch(`/api/instances/${activeInstanceSlug}/send-report`, {
+        method: 'POST'
+      });
+      
+      if (res.ok) {
+        showToast('Activity report sent successfully to Admin!', 'success');
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to send activity report.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error, failed to send activity report.', 'error');
+    } finally {
+      sendReportNowBtn.disabled = false;
+      sendReportNowBtn.innerHTML = originalBtnText;
     }
   });
 }
