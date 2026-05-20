@@ -1582,6 +1582,82 @@ if (unmuteUserBtn) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Blocked (Permanently Ignored) Users Panel ────────────────────────────────
+async function loadBlockedUsers() {
+  const list = document.getElementById('blocked-users-list');
+  if (!list || !activeInstanceSlug) return;
+  list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">Loading...</p>';
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/ignored-users`);
+    const data = await res.json();
+    if (!data.ignored || data.ignored.length === 0) {
+      list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">✅ No users are permanently blocked.</p>';
+      return;
+    }
+    list.innerHTML = data.ignored.map(number => `
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
+        padding:10px 14px;background:rgba(255,59,48,0.08);border:1px solid rgba(255,59,48,0.25);
+        border-radius:8px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <i data-lucide="ban" style="width:15px;height:15px;color:#ff3b30;flex-shrink:0;"></i>
+          <span style="font-size:0.85rem;font-weight:600;color:var(--text-light);">+${number}</span>
+          <span style="font-size:0.72rem;color:#ff3b30;background:rgba(255,59,48,0.15);padding:2px 8px;border-radius:20px;">Permanently Blocked</span>
+        </div>
+        <button class="btn btn-secondary btn-sm unblock-inline-btn"
+          data-number="${number}"
+          style="background:linear-gradient(135deg,#30d158 0%,#25a244 100%);border-color:transparent;color:white;font-size:0.75rem;padding:5px 10px;">
+          <i data-lucide="user-check" style="width:12px;height:12px;margin-right:4px;"></i> Unblock
+        </button>
+      </div>`).join('');
+
+    if (window.lucide) lucide.createIcons();
+
+    list.querySelectorAll('.unblock-inline-btn').forEach(btn => {
+      btn.addEventListener('click', () => unblockUser(btn.dataset.number));
+    });
+  } catch (err) {
+    list.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;text-align:center;padding:12px;">Failed to load blocked users.</p>';
+  }
+}
+
+async function unblockUser(number) {
+  if (!number || !activeInstanceSlug) return;
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/unblock-user`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || `User +${number} unblocked.`, 'success');
+      const input = document.getElementById('unblock-number-input');
+      if (input) input.value = '';
+      await loadBlockedUsers();
+    } else {
+      showToast(data.error || 'Failed to unblock user.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error while unblocking user.', 'error');
+  }
+}
+
+const refreshBlockedBtn = document.getElementById('refresh-blocked-btn');
+if (refreshBlockedBtn) {
+  refreshBlockedBtn.addEventListener('click', loadBlockedUsers);
+}
+
+const unblockUserBtn = document.getElementById('unblock-user-btn');
+if (unblockUserBtn) {
+  unblockUserBtn.addEventListener('click', () => {
+    const input = document.getElementById('unblock-number-input');
+    const number = (input ? input.value : '').trim();
+    if (!number) { showToast('Please enter a phone number to unblock.', 'error'); return; }
+    unblockUser(number);
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 if (clearAiMemoryBtn) {
   clearAiMemoryBtn.addEventListener('click', async () => {
     if (!confirm('Are you absolutely sure you want to clear all conversational memory context history for this active bot? This resets the AI chat history for all of your contacts!')) {

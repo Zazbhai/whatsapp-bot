@@ -358,6 +358,15 @@ function saveIgnoredUser(number) {
   }
 }
 
+function removeIgnoredUser(number) {
+  try {
+    const list = loadIgnoredUsers().filter(n => n !== number);
+    fs.writeFileSync(ignoredUsersFilePath, JSON.stringify(list, null, 2));
+  } catch (err) {
+    console.error('Failed to remove ignored user:', err);
+  }
+}
+
 // =============================================================
 // SPAM DETECTION — Auto-mute repeat spammers for 10 minutes
 // =============================================================
@@ -2066,6 +2075,23 @@ app.post('/api/instances/:slug/unmute-user', authenticateToken, (req, res) => {
   clearSpamCooldown(slug, clean);
   logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${clean}`);
   res.json({ success: true, message: `User +${clean} has been unmuted.` });
+});
+
+// List all permanently blocked/ignored users
+app.get('/api/instances/:slug/ignored-users', authenticateToken, (req, res) => {
+  const list = loadIgnoredUsers();
+  res.json({ ignored: list });
+});
+
+// Admin unblock: remove a number from the permanent ignore list
+app.post('/api/instances/:slug/unblock-user', authenticateToken, (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const { number } = req.body;
+  if (!number) return res.status(400).json({ error: 'number is required' });
+  const clean = number.replace(/[^0-9]/g, '');
+  removeIgnoredUser(clean);
+  logInstanceEvent(slug, 'system', `🔓 Admin unblocked user +${clean} — removed from ignore list.`);
+  res.json({ success: true, message: `User +${clean} has been unblocked.` });
 });
 
 app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {

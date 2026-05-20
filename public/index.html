@@ -439,6 +439,39 @@
           </div>
         </div>
 
+        <!-- Permanently Blocked/Ignored Users Panel -->
+        <div class="glass-card full-width-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+               <i data-lucide="ban" style="color: #ff3b30; width: 24px; height: 24px;"></i>
+               <div>
+                 <h3 style="margin: 0;">Blocked Users</h3>
+                 <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Permanently blocked — bot ignores all messages from them forever. Admin can unblock here.</p>
+               </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="refresh-blocked-btn" type="button">
+              <i data-lucide="refresh-cw" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+              <span>Refresh</span>
+            </button>
+          </div>
+          <div style="margin-top: 15px;">
+            <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap;">
+              <input type="text" id="unblock-number-input" placeholder="Enter number to unblock (e.g. 2601048970222)"
+                style="flex: 1; min-width: 200px; padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed);">
+              <button class="btn btn-secondary btn-sm" id="unblock-user-btn" type="button"
+                style="background: linear-gradient(135deg, #30d158 0%, #25a244 100%); border-color: transparent; color: white; white-space: nowrap;">
+                <i data-lucide="user-check" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                <span>Unblock User</span>
+              </button>
+            </div>
+            <div id="blocked-users-list" style="display: flex; flex-direction: column; gap: 8px;">
+              <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0; text-align: center; padding: 12px;">
+                Click <strong>Refresh</strong> to load blocked users.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <div class="glass-card full-width-card" style="margin-bottom: 25px;">
           <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="display: flex; align-items: center; gap: 10px;">
