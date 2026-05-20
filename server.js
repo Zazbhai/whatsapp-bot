@@ -1460,26 +1460,18 @@ function initInstanceClient(slug) {
       return; // Ignore and halt completely!
     }
 
-    // ── SPAM DETECTION ──────────────────────────────────────────────────────
-    // If user is currently in a spam cooldown → silently ignore the message
-    if (isSpamCoolingDown(slug, senderNumber)) {
-      logInstanceEvent(slug, 'system', `⏳ Spam cooldown active for +${senderNumber}. Message silently ignored.`);
-      return;
-    }
-
-    // Record this message and check if threshold crossed
+    // Track message rate for spam detection (but do NOT block yet — auto-responders must still fire)
     const justTriggeredSpam = recordSpamMessage(slug, senderNumber);
     if (justTriggeredSpam) {
-      logInstanceEvent(slug, 'system', `🚫 Spam detected from +${senderNumber}. Sending warning and muting for 10 minutes.`);
+      logInstanceEvent(slug, 'system', `🚫 Spam threshold crossed for +${senderNumber}. Sending one-time warning. AI/auto-replies will pause for 10 minutes.`);
       try {
-        const spamWarning = `⚠️ You've been sending too many messages too quickly.\n\nPlease wait *10 minutes* before sending more messages. Our system has temporarily paused replies to your number.`;
+        const spamWarning = `⚠️ You've been sending too many messages too quickly.\n\nPlease wait *10 minutes* before sending more messages. Our system has temporarily paused auto-replies to your number.`;
         await msg.reply(spamWarning);
       } catch (err) {
         logInstanceEvent(slug, 'error', `Failed to send spam warning to +${senderNumber}: ${err.message}`);
       }
-      return; // Stop processing this message
+      // Do NOT return — auto-responders still run, only AI will be blocked below
     }
-    // ────────────────────────────────────────────────────────────────────────
 
     // Auto-Ignore and Delete User on Specific Trigger Text
     const listConfig = loadInstances();
@@ -1781,9 +1773,14 @@ function initInstanceClient(slug) {
     }
 
     // AI Smart Auto-Responder Fallback (includes smart APK delivery)
+    // Skipped if user is currently in a spam mute cooldown
     if (!ruleMatched) {
       if (aiHandlesApk) {
-        enqueueAIReply(slug, senderNumber, msg);
+        if (isSpamCoolingDown(slug, senderNumber)) {
+          logInstanceEvent(slug, 'system', `⏳ AI reply skipped for +${senderNumber} — spam cooldown active.`);
+        } else {
+          enqueueAIReply(slug, senderNumber, msg);
+        }
       }
     }
   });
@@ -2055,6 +2052,32 @@ app.post('/api/instances/:slug/send-report', authenticateToken, async (req, res)
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// List currently spam-muted users for this instance
+app.get('/api/instances/:slug/muted-users', authenticateToken, (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const cooldowns = spamCooldowns[slug] || {};
+  const now = Date.now();
+  const muted = Object.entries(cooldowns)
+    .filter(([, until]) => until > now)
+    .map(([number, until]) => ({
+      number,
+      mutedUntil: new Date(until).toISOString(),
+      remainingMs: until - now
+    }));
+  res.json({ muted });
+});
+
+// Admin unmute: clear spam cooldown for a specific number
+app.post('/api/instances/:slug/unmute-user', authenticateToken, (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const { number } = req.body;
+  if (!number) return res.status(400).json({ error: 'number is required' });
+  const clean = number.replace(/[^0-9]/g, '');
+  clearSpamCooldown(slug, clean);
+  logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${clean}`);
+  res.json({ success: true, message: `User +${clean} has been unmuted.` });
 });
 
 app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {

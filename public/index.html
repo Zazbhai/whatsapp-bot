@@ -463,6 +463,43 @@
           </div>
         </div>
 
+        <!-- Spam Muted Users Panel -->
+        <div class="glass-card full-width-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+               <i data-lucide="volume-x" style="color: #ff9f0a; width: 24px; height: 24px;"></i>
+               <div>
+                 <h3 style="margin: 0;">Spam Muted Users</h3>
+                 <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Users temporarily muted for 10 minutes due to spam. Auto-responders still work for them; AI replies are paused.</p>
+               </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="refresh-muted-btn" type="button">
+              <i data-lucide="refresh-cw" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+              <span>Refresh</span>
+            </button>
+          </div>
+
+          <div style="margin-top: 15px;">
+            <!-- Unmute by number input -->
+            <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap;">
+              <input type="text" id="unmute-number-input" placeholder="Enter number to unmute (e.g. 2601048970222)"
+                style="flex: 1; min-width: 200px; padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed);">
+              <button class="btn btn-secondary btn-sm" id="unmute-user-btn" type="button"
+                style="background: linear-gradient(135deg, #ff9f0a 0%, #ff6b00 100%); border-color: transparent; color: white; white-space: nowrap;">
+                <i data-lucide="volume-2" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                <span>Unmute User</span>
+              </button>
+            </div>
+
+            <!-- Muted users list -->
+            <div id="muted-users-list" style="display: flex; flex-direction: column; gap: 8px;">
+              <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0; text-align: center; padding: 12px;">
+                Click <strong>Refresh</strong> to load currently muted users.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <div class="actions-bar">
           <div class="search-box">
             <i data-lucide="search"></i>

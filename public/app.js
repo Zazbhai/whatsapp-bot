@@ -1497,6 +1497,91 @@ if (sendReportNowBtn) {
   });
 }
 
+// ── Spam Muted Users Panel ────────────────────────────────────────────────────
+function formatRemainingTime(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `${mins}m ${secs}s`;
+}
+
+async function loadMutedUsers() {
+  const list = document.getElementById('muted-users-list');
+  if (!list || !activeInstanceSlug) return;
+  list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">Loading...</p>';
+
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/muted-users`);
+    const data = await res.json();
+    if (!data.muted || data.muted.length === 0) {
+      list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">✅ No users are currently spam-muted.</p>';
+      return;
+    }
+    list.innerHTML = data.muted.map(u => `
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
+        padding:10px 14px;background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.25);
+        border-radius:8px;">
+        <div>
+          <span style="font-size:0.85rem;font-weight:600;color:var(--text-light);">+${u.number}</span>
+          <span style="font-size:0.75rem;color:#ff9f0a;margin-left:10px;">⏳ ${formatRemainingTime(u.remainingMs)} remaining</span>
+        </div>
+        <button class="btn btn-secondary btn-sm unmute-inline-btn"
+          data-number="${u.number}"
+          style="background:linear-gradient(135deg,#ff9f0a 0%,#ff6b00 100%);border-color:transparent;color:white;font-size:0.75rem;padding:5px 10px;">
+          <i data-lucide="volume-2" style="width:12px;height:12px;margin-right:4px;"></i> Unmute
+        </button>
+      </div>`).join('');
+
+    // Re-init lucide for new icons
+    if (window.lucide) lucide.createIcons();
+
+    // Inline unmute buttons
+    list.querySelectorAll('.unmute-inline-btn').forEach(btn => {
+      btn.addEventListener('click', () => unmuteUser(btn.dataset.number));
+    });
+  } catch (err) {
+    list.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;text-align:center;padding:12px;">Failed to load muted users.</p>';
+  }
+}
+
+async function unmuteUser(number) {
+  if (!number || !activeInstanceSlug) return;
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/unmute-user`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || `User +${number} unmuted.`, 'success');
+      const input = document.getElementById('unmute-number-input');
+      if (input) input.value = '';
+      await loadMutedUsers();
+    } else {
+      showToast(data.error || 'Failed to unmute user.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error while unmuting user.', 'error');
+  }
+}
+
+const refreshMutedBtn = document.getElementById('refresh-muted-btn');
+if (refreshMutedBtn) {
+  refreshMutedBtn.addEventListener('click', loadMutedUsers);
+}
+
+const unmuteUserBtn = document.getElementById('unmute-user-btn');
+if (unmuteUserBtn) {
+  unmuteUserBtn.addEventListener('click', () => {
+    const input = document.getElementById('unmute-number-input');
+    const number = (input ? input.value : '').trim();
+    if (!number) { showToast('Please enter a phone number to unmute.', 'error'); return; }
+    unmuteUser(number);
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 if (clearAiMemoryBtn) {
   clearAiMemoryBtn.addEventListener('click', async () => {
     if (!confirm('Are you absolutely sure you want to clear all conversational memory context history for this active bot? This resets the AI chat history for all of your contacts!')) {
