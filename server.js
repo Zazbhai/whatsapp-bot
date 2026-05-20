@@ -464,14 +464,16 @@ async function sendDailyReportToAdmin(slug) {
   const listConfig = loadInstances();
   const instConfig = listConfig.find(i => i.slug === slug);
   if (!instConfig || !instConfig.adminForwardNumber) {
-    logInstanceEvent(slug, 'system', 'Daily report skipped: Admin number not configured.');
-    return false;
+    const errMsg = 'Admin WhatsApp number is not configured.';
+    logInstanceEvent(slug, 'system', `Daily report failed: ${errMsg}`);
+    throw new Error(errMsg);
   }
   
   const client = activeClients[slug];
   if (!client || !clientStates[slug] || clientStates[slug].status !== 'connected') {
-    logInstanceEvent(slug, 'system', 'Daily report failed: WhatsApp client not connected.');
-    return false;
+    const errMsg = 'WhatsApp client is not connected.';
+    logInstanceEvent(slug, 'system', `Daily report failed: ${errMsg}`);
+    throw new Error(errMsg);
   }
   
   const report = generateDailyReport(slug);
@@ -496,7 +498,7 @@ async function sendDailyReportToAdmin(slug) {
     return true;
   } catch (err) {
     logInstanceEvent(slug, 'error', `Failed to send daily report: ${err.message}`);
-    return false;
+    throw new Error(`Failed to send message via WhatsApp: ${err.message}`);
   }
 }
 
@@ -1927,11 +1929,11 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
 
 app.post('/api/instances/:slug/send-report', authenticateToken, async (req, res) => {
   const slug = req.params.slug.trim().toLowerCase();
-  const success = await sendDailyReportToAdmin(slug);
-  if (success) {
+  try {
+    await sendDailyReportToAdmin(slug);
     res.json({ success: true, message: 'Activity report successfully sent to admin.' });
-  } else {
-    res.status(500).json({ error: 'Failed to send report. Please verify that the admin number is set and the instance is connected.' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
