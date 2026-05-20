@@ -1112,6 +1112,90 @@ async function generateAIResponse(slug, userMessage, history = []) {
   return null;
 }
 
+// Safely blocks a WhatsApp contact using standard API or custom internal fallbacks when the standard API is broken.
+async function safelyBlockContact(client, contact, slug) {
+  const senderNumber = contact.number || (contact.id && contact.id.user);
+  logInstanceEvent(slug, 'system', `Attempting to block +${senderNumber} using standard contact.block()...`);
+  try {
+    await contact.block();
+    logInstanceEvent(slug, 'system', `Successfully blocked +${senderNumber} via standard block() method.`);
+    return true;
+  } catch (err) {
+    logInstanceEvent(slug, 'system', `Standard block() failed: ${err.message}. Trying custom internal Puppeteer evaluation...`);
+    try {
+      await client.pupPage.evaluate(async (contactId) => {
+        const collections = window.require('WAWebCollections');
+        const contactModel = collections && collections.Contact ? await collections.Contact.find(contactId) : null;
+        if (!contactModel) throw new Error('Contact model not found in WAWebCollections');
+        
+        let blockAction;
+        try {
+          blockAction = window.require('WAWebBlockContactAction');
+        } catch (e) {}
+
+        // Fallback 1: Try using blockUtils dynamically if any valid resolution function exists
+        let blockUtils;
+        try {
+          blockUtils = window.require('WAWebBlockContactUtils');
+        } catch (e) {}
+
+        if (blockUtils && blockAction && typeof blockAction.blockContact === 'function') {
+          const utilsBlockFns = [
+            'getContactToBlock',
+            'getContactToBlockOnlyUseIfNoAssociatedChat',
+            'resolveContactForBlocking'
+          ];
+          for (const fnName of utilsBlockFns) {
+            if (typeof blockUtils[fnName] === 'function') {
+              try {
+                const resolved = blockUtils[fnName](contactModel, 'ChatListBlock');
+                await blockAction.blockContact({ contact: resolved });
+                return;
+              } catch (e) {}
+            }
+          }
+        }
+
+        // Fallback 2: Pass the contactModel directly inside the options object
+        if (blockAction && typeof blockAction.blockContact === 'function') {
+          try {
+            await blockAction.blockContact({ contact: contactModel, entryPoint: 'ChatListBlock' });
+            return;
+          } catch (e) {}
+          try {
+            await blockAction.blockContact({ contact: contactModel });
+            return;
+          } catch (e) {}
+          try {
+            await blockAction.blockContact(contactModel);
+            return;
+          } catch (e) {}
+        }
+
+        // Fallback 3: Try window.Store.BlockContact if it exists
+        if (window.Store && window.Store.BlockContact) {
+          if (typeof window.Store.BlockContact.blockContact === 'function') {
+            await window.Store.BlockContact.blockContact(contactModel);
+            return;
+          }
+          if (typeof window.Store.BlockContact.block === 'function') {
+            await window.Store.BlockContact.block(contactModel);
+            return;
+          }
+        }
+
+        throw new Error('All internal block APIs failed or were not found.');
+      }, contact.id._serialized);
+
+      logInstanceEvent(slug, 'system', `Successfully blocked +${senderNumber} using custom Puppeteer fallback.`);
+      return true;
+    } catch (fallbackErr) {
+      logInstanceEvent(slug, 'error', `All block fallbacks failed for +${senderNumber}: ${fallbackErr.message}`);
+      throw fallbackErr;
+    }
+  }
+}
+
 // Voice Note Transcription engine — uses a local, free, offline Python-based SpeechRecognition script
 // No API keys or external subscription/billing tokens are required!
 async function transcribeAudio(slug, media) {
@@ -1371,7 +1455,7 @@ function initInstanceClient(slug) {
         try {
           const chat = await msg.getChat();
           const contact = await chat.getContact();
-          await contact.block();
+          await safelyBlockContact(client, contact, slug);
           await chat.delete();
           logInstanceEvent(slug, 'system', `🚨 Successfully blocked and deleted user +${senderNumber}`);
         } catch (err) {
