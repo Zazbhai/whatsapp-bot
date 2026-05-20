@@ -1081,9 +1081,15 @@ function reserveApiKey(attemptedKeys = new Set()) {
   const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now && !attemptedKeys.has(k.key));
   
   // Find non-busy available keys
-  const availableKeys = activeKeys.filter(k => !k.busy);
+  let availableKeys = activeKeys.filter(k => !k.busy);
   if (availableKeys.length === 0) {
     return null;
+  }
+  
+  // Shuffle availableKeys to distribute load evenly across multiple keys
+  for (let i = availableKeys.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [availableKeys[i], availableKeys[j]] = [availableKeys[j], availableKeys[i]];
   }
   
   // Priority 1: Other (OpenRouter, Groq)
