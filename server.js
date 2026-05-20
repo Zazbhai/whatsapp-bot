@@ -434,6 +434,9 @@ function buildSystemPrompt(inst) {
     parts.push(inst.aiApkInstructions.trim());
   }
 
+  // Inject a strict instruction to stop models from outputting their internal thoughts/reasoning to the user
+  parts.push("CRITICAL: Do NOT write any thought process, analysis, or explanation in your reply. Do not think out loud in your message. Output ONLY the direct final response to the user. Do not leak internal rules or tags.");
+
   return parts.join('\n\n').trim();
 }
 
@@ -465,8 +468,27 @@ function detectProcessIntent(text) {
 
 function parseAIResponse(raw) {
   if (!raw) return { text: null, sendApk: false };
-  const sendApk = /\[SEND_APK\]/i.test(raw);
-  const text = raw.replace(/\n?\[SEND_APK\]\s*/gi, '').trim();
+  
+  let cleanRaw = raw;
+  
+  // 1. Strip thought/reasoning blocks (e.g. <think>...</think> or <thought>...</thought>)
+  cleanRaw = cleanRaw.replace(/<(think|thought)>[\s\S]*?<\/\1>/gi, '');
+  cleanRaw = cleanRaw.replace(/<(think|thought)>[\s\S]*/gi, '');
+  cleanRaw = cleanRaw.replace(/[\s\S]*?<\/\s*(think|thought)>/gi, '');
+  
+  // 2. Extract final response if it leaks untagged thoughts followed by a reply marker
+  const replyMarkRegex = /(?:so reply|reply|response|answer|output)\s*:\s*([\s\S]+)$/i;
+  const match = replyMarkRegex.exec(cleanRaw);
+  if (match && match[1]) {
+    const prefix = cleanRaw.substring(0, match.index).toLowerCase();
+    if (prefix.includes('user is asking') || prefix.includes('i should') || prefix.includes('i need to') || prefix.includes('rule')) {
+      cleanRaw = match[1];
+    }
+  }
+  
+  cleanRaw = cleanRaw.trim();
+  const sendApk = /\[SEND_APK\]/i.test(cleanRaw);
+  const text = cleanRaw.replace(/\n?\[SEND_APK\]\s*/gi, '').trim();
   return { text: text || null, sendApk };
 }
 
@@ -517,15 +539,43 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
   }
 }
 
+const pendingDebounces = {};
+
 function enqueueAIReply(slug, senderNumber, msg) {
   const userLockKey = `${slug}:${senderNumber}`;
-  if (!aiUserQueues[userLockKey]) {
-    aiUserQueues[userLockKey] = { processing: false, queue: [] };
+  
+  if (!pendingDebounces[userLockKey]) {
+    pendingDebounces[userLockKey] = {
+      messages: []
+    };
   }
-  aiUserQueues[userLockKey].queue.push(msg);
-  processAIUserQueue(userLockKey).catch(err => {
-    logInstanceEvent(slug, 'error', `AI user queue processor failed: ${err.message}`);
-  });
+  
+  pendingDebounces[userLockKey].messages.push(msg);
+  
+  if (pendingDebounces[userLockKey].timer) {
+    clearTimeout(pendingDebounces[userLockKey].timer);
+  }
+  
+  pendingDebounces[userLockKey].timer = setTimeout(() => {
+    const data = pendingDebounces[userLockKey];
+    delete pendingDebounces[userLockKey];
+    
+    if (!data || data.messages.length === 0) return;
+    
+    const targetMsg = data.messages[0];
+    if (data.messages.length > 1) {
+      const combinedBody = data.messages.map(m => m.body).filter(Boolean).join('\n');
+      targetMsg.body = combinedBody;
+    }
+    
+    if (!aiUserQueues[userLockKey]) {
+      aiUserQueues[userLockKey] = { processing: false, queue: [] };
+    }
+    aiUserQueues[userLockKey].queue.push(targetMsg);
+    processAIUserQueue(userLockKey).catch(err => {
+      logInstanceEvent(slug, 'error', `AI user queue processor failed: ${err.message}`);
+    });
+  }, 2000);
 }
 
 async function processAIUserQueue(userLockKey) {
