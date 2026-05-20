@@ -638,7 +638,7 @@ function getInstanceBySlug(slug) {
   return loadInstances().find(i => i.slug === slug) || null;
 }
 
-function buildSystemPrompt(inst) {
+function buildSystemPrompt(inst, isRetry = false) {
   const parts = [];
   const persona = (inst && inst.aiSystemPrompt) ? inst.aiSystemPrompt.trim() : '';
   if (persona) parts.push(persona);
@@ -650,6 +650,10 @@ function buildSystemPrompt(inst) {
 
   // Inject a strict instruction to stop models from outputting their internal thoughts/reasoning to the user
   parts.push("CRITICAL: Do NOT write any thought process, analysis, or explanation in your reply. Do not think out loud in your message. Output ONLY the direct final response to the user. Do not leak internal rules or tags.");
+
+  if (isRetry) {
+    parts.push("CRITICAL RETRY WARNING: Your previous response was rejected because it was too long (more than 3 sentences) or contained reasoning/thought process text. You MUST reply in less than 2 sentences. Do NOT think, do NOT explain, and do NOT output any thought process. Output only the direct message to the user.");
+  }
 
   // Order completion detection instructions
   parts.push(`ORDER DETECTION RULES (follow exactly):
@@ -692,6 +696,23 @@ function detectProcessIntent(text) {
   return patterns.some(p => p.test(t));
 }
 
+function countSentences(text) {
+  if (!text) return 0;
+  const clean = text.trim();
+  const sentences = clean.split(/[.!?।]+(?:\s+|$)/).filter(s => s.trim().length > 0);
+  return sentences.length;
+}
+
+function truncateToSentences(text, limit) {
+  if (!text) return text;
+  const sentenceRegex = /[^.!?।]+(?:[.!?।]+|$)(?:\s+|$)/g;
+  const matches = text.match(sentenceRegex);
+  if (matches && matches.length > limit) {
+    return matches.slice(0, limit).join('').trim();
+  }
+  return text;
+}
+
 function parseAIResponse(raw) {
   if (!raw) return { text: null, sendApk: false };
   
@@ -703,11 +724,11 @@ function parseAIResponse(raw) {
   cleanRaw = cleanRaw.replace(/[\s\S]*?<\/\s*(think|thought)>/gi, '');
   
   // 2. Extract final response if it leaks untagged thoughts followed by a reply marker
-  const replyMarkRegex = /(?:so reply|reply|response|answer|output)\s*:\s*([\s\S]+)$/i;
+  const replyMarkRegex = /(?:so reply|reply|response|answer|output)\s*:?\s*([\s\S]+)$/i;
   const match = replyMarkRegex.exec(cleanRaw);
   if (match && match[1]) {
     const prefix = cleanRaw.substring(0, match.index).toLowerCase();
-    if (prefix.includes('user is asking') || prefix.includes('i should') || prefix.includes('i need to') || prefix.includes('rule')) {
+    if (prefix.includes('user is asking') || prefix.includes('i should') || prefix.includes('i need to') || prefix.includes('rule') || prefix.includes('think') || prefix.includes('thought')) {
       cleanRaw = match[1];
     }
   }
@@ -912,9 +933,35 @@ async function processAIUserQueue(userLockKey) {
 
     await acquireAISlot(slug);
     try {
-      const aiResult = await generateAIResponse(slug, msg.body, history);
-      const shouldSendApk = smartApkOn && aiResult && (aiResult.sendApk || detectApkIntent(msg.body));
+      let aiResult = await generateAIResponse(slug, msg.body, history);
       let replyText = aiResult?.text || null;
+
+      let finalSendApk = aiResult?.sendApk || false;
+      let finalOrderComplete = aiResult?.orderComplete || false;
+      let finalAskOrder = aiResult?.askOrder || false;
+
+      // Check if response exceeds 3 sentences and retry if necessary
+      const maxRetries = 2;
+      let retryCount = 0;
+      while (replyText && countSentences(replyText) > 3 && retryCount < maxRetries) {
+        retryCount++;
+        logInstanceEvent(slug, 'system', `⚠️ Response exceeds 3 sentences (${countSentences(replyText)} sentences). Retrying AI query with strict length limits (Attempt ${retryCount}/${maxRetries})...`);
+        aiResult = await generateAIResponse(slug, msg.body, history, true);
+        replyText = aiResult?.text || null;
+        if (aiResult) {
+          if (aiResult.sendApk) finalSendApk = true;
+          if (aiResult.orderComplete) finalOrderComplete = true;
+          if (aiResult.askOrder) finalAskOrder = true;
+        }
+      }
+
+      // If still too long after max retries, truncate it to 2 sentences
+      if (replyText && countSentences(replyText) > 3) {
+        logInstanceEvent(slug, 'system', `⚠️ Response still exceeds 3 sentences after ${retryCount} retries. Truncating to first 2 sentences.`);
+        replyText = truncateToSentences(replyText, 2);
+      }
+
+      const shouldSendApk = smartApkOn && (finalSendApk || detectApkIntent(msg.body));
 
       if (shouldSendApk && !replyText) {
         const preamble = inst && inst.aiApkPreamble ? inst.aiApkPreamble.trim() : '';
@@ -940,7 +987,7 @@ async function processAIUserQueue(userLockKey) {
       }
 
       if (shouldSendApk) {
-        if (aiResult?.sendApk) {
+        if (finalSendApk) {
           logInstanceEvent(slug, 'system', `AI tagged [SEND_APK] — attaching app file for +${senderNumber}`);
         } else {
           logInstanceEvent(slug, 'system', `App intent detected — attaching APK for +${senderNumber}`);
@@ -949,11 +996,11 @@ async function processAIUserQueue(userLockKey) {
       }
 
       // ── Order completion detection ─────────────────────────────────────────
-      if (aiResult?.orderComplete) {
+      if (finalOrderComplete) {
         logInstanceEvent(slug, 'system', `✅ [ORDER_COMPLETE] detected for +${senderNumber}. Auto-adding to ignore list.`);
         saveIgnoredUser(senderNumber);
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} successfully ordered — added to permanent ignore list.`);
-      } else if (aiResult?.askOrder) {
+      } else if (finalAskOrder) {
         // AI is unsure — send a direct clarification question to the user
         logInstanceEvent(slug, 'system', `❓ [ASK_ORDER] detected for +${senderNumber}. Sending order confirmation question.`);
         try {
@@ -1142,9 +1189,9 @@ function releaseApiKey(keyObj) {
 }
 
 // Native LLM Requester with global concurrency key load balancing, Hugging Face priority, and 24-hr cooldown
-async function generateAIResponse(slug, userMessage, history = []) {
+async function generateAIResponse(slug, userMessage, history = [], isRetry = false) {
   const inst = getInstanceBySlug(slug);
-  const systemPrompt = buildSystemPrompt(inst);
+  const systemPrompt = buildSystemPrompt(inst, isRetry);
   if (!systemPrompt) {
     logInstanceEvent(slug, 'error', 'AI enabled but persona is empty — set AI Persona in the dashboard.');
     return null;
