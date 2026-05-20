@@ -331,6 +331,34 @@ function loadApkCache(slug) {
 }
 
 // =============================================================
+// BLOCKED USERS — local block list safety net
+// =============================================================
+const blockedUsersFilePath = path.join(dataDir, 'blocked_users.json');
+
+function loadBlockedUsers() {
+  try {
+    if (fs.existsSync(blockedUsersFilePath)) {
+      return JSON.parse(fs.readFileSync(blockedUsersFilePath, 'utf8'));
+    }
+  } catch (err) {
+    console.error('Failed to load blocked users:', err);
+  }
+  return [];
+}
+
+function saveBlockedUser(number) {
+  try {
+    const list = loadBlockedUsers();
+    if (!list.includes(number)) {
+      list.push(number);
+      fs.writeFileSync(blockedUsersFilePath, JSON.stringify(list, null, 2));
+    }
+  } catch (err) {
+    console.error('Failed to save blocked user:', err);
+  }
+}
+
+// =============================================================================
 // USER MEMORY — per-user conversation history per instance
 // =============================================================
 const memoryFilePath = path.join(dataDir, 'memory.json');
@@ -1129,7 +1157,11 @@ async function generateAIResponse(slug, userMessage, history = []) {
 // Safely blocks a WhatsApp contact using standard API or custom internal fallbacks when the standard API is broken.
 async function safelyBlockContact(client, contact, slug) {
   const senderNumber = contact.number || (contact.id && contact.id.user);
-  logInstanceEvent(slug, 'system', `Attempting to block +${senderNumber} using standard contact.block()...`);
+  
+  // Register in local soft-block blacklist first as a bulletproof safety net
+  saveBlockedUser(senderNumber);
+  logInstanceEvent(slug, 'system', `Registered +${senderNumber} in local blacklist. Attempting WhatsApp network block...`);
+  
   try {
     await contact.block();
     logInstanceEvent(slug, 'system', `Successfully blocked +${senderNumber} via standard block() method.`);
@@ -1457,6 +1489,20 @@ function initInstanceClient(slug) {
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
 
+    // Check if user is locally blocked (Soft-Block fallback)
+    const senderNumber = msg.from.split('@')[0];
+    const blockedList = loadBlockedUsers();
+    if (blockedList.includes(senderNumber)) {
+      logInstanceEvent(slug, 'system', `Ignored message from locally blocked user: +${senderNumber}`);
+      try {
+        const chat = await msg.getChat();
+        await chat.delete();
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Failed to auto-delete chat for locally blocked user +${senderNumber}: ${err.message}`);
+      }
+      return; // Ignore and halt completely!
+    }
+
     // Auto-Block and Delete User on Specific Trigger Text
     const listConfig = loadInstances();
     const instConfig = listConfig.find(i => i.slug === slug);
@@ -1582,7 +1628,6 @@ function initInstanceClient(slug) {
     if (!msg.body) return;
 
     const senderName = msg._data.notifyName || 'Unknown Contact';
-    const senderNumber = msg.from.split('@')[0];
     
     clientStates[slug].stats.received++;
     io.to(`instance_${slug}`).emit('stat_increment', 'received');
