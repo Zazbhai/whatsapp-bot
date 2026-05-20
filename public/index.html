@@ -340,7 +340,7 @@
               <i data-lucide="sparkles" style="color: var(--secondary); width: 24px; height: 24px;"></i>
               <div>
                 <h3 style="margin: 0;">AI Smart Responder (LLM)</h3>
-                <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Replies as Aditya (One Shop) and can <strong>auto-send the APK</strong> when users ask for the app — no need to type "apk".</p>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Persona, process steps, and APK behavior are fully editable below — nothing is hardcoded on the server.</p>
               </div>
             </div>
             <label class="toggle-container">
@@ -353,20 +353,34 @@
           <div id="ai-prompt-container" style="margin-top: 15px; display: none;">
             <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
               <label for="ai-system-prompt" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">AI Persona & Instructions</label>
-              <textarea id="ai-system-prompt" rows="14" placeholder="Aditya / One Shop persona and rules..." style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed); resize: vertical;"></textarea>
-              <p style="margin: 0; font-size: 0.75rem; color: var(--text-muted);">Smart APK: when someone asks for the app, download, or install link, the bot replies in character and attaches <code>istore.apk</code> automatically.</p>
+              <textarea id="ai-system-prompt" rows="10" placeholder="Your full persona and rules (editable anytime)…" style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed); resize: vertical;"></textarea>
+            </div>
+            <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <label for="ai-process-reply" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">Process / Steps Reply (bullet points)</label>
+              <textarea id="ai-process-reply" rows="8" placeholder="Sent when user asks process, steps, kaise kare, how to claim… Use bullets and emojis." style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; resize: vertical;"></textarea>
+              <p style="margin: 0; font-size: 0.75rem; color: var(--text-muted);">Triggers on: process, steps, kaise kare, how to claim, etc.</p>
+            </div>
+            <label class="toggle-container" style="margin-bottom: 10px;">
+              <input type="checkbox" id="ai-smart-apk-toggle" checked>
+              <span class="toggle-slider"></span>
+              <span class="toggle-label">Smart APK auto-send</span>
+            </label>
+            <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <label for="ai-apk-instructions" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">Smart APK rules (for AI)</label>
+              <textarea id="ai-apk-instructions" rows="3" placeholder="When user wants the app, end reply with [SEND_APK] on its own line." style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.8rem; outline: none; resize: vertical;"></textarea>
+            </div>
+            <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <label for="ai-apk-preamble" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">Short text before APK file (optional)</label>
+              <input type="text" id="ai-apk-preamble" placeholder="Here is the app! Install and enter details inside the app." style="width: 100%; padding: 10px 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-size: 0.85rem;">
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-              <button class="btn btn-secondary btn-sm" id="load-aditya-persona-btn" type="button" style="padding: 6px 12px; font-size: 0.8rem;">
-                <span>Load Aditya Persona</span>
-              </button>
               <button class="btn btn-danger btn-sm" id="clear-ai-memory-btn" style="padding: 6px 12px; font-size: 0.8rem; display: flex; align-items: center;" type="button">
                 <i data-lucide="trash-2" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                 <span>Clear Chat Memory</span>
               </button>
               <button class="btn btn-secondary btn-sm" id="save-ai-settings-btn" type="button">
                 <i data-lucide="save" style="width: 14px; height: 14px; margin-right: 4px;"></i>
-                <span>Save AI Persona</span>
+                <span>Save AI Settings</span>
               </button>
             </div>
           </div>

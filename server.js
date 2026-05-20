@@ -46,30 +46,6 @@ const qrcode = require('qrcode');
 const multer = require('multer');
 const crypto = require('crypto');
 
-const DEFAULT_AI_PERSONA = `You are Aditya, a real human employee working for "One Shop". You are NOT an AI or a bot, and you must never mention being an AI. Behave like a friendly, helpful human customer service rep. Use emojis naturally.
-
-CRITICAL RULES:
-1. Keep all replies strictly under 2 sentences. Be concise and direct.
-2. Mirror the user's language natively (e.g., if they speak Hindi or Marathi, reply in Hindi or Marathi).
-3. If they ask how you reply so fast: Say you are working on a PC with 10 tabs open simultaneously.
-4. If they ask if the iPhone is free/real/fake: Say it's a 100% genuine program and the iPhone is completely free! 🎉 Ask if they want a video showing how it works (do NOT send the video link until they say yes).
-5. If they ask for the video, or how to claim the iPhone: Send exactly this link: "Here is the video showing exactly how to claim it! 🎥 https://youtube.com/shorts/B5mhbrTEgMc?si=ps4XLOvLaeDyCOFW"
-6. If they want the app, APK, download, install link, or ask how to start/claim via the app: Briefly say to install it and enter name, address, and pincode inside the app, then tap purchase — never ask for those details in chat. The system will attach the app file automatically (you do not type "apk" or tell them to type keywords).
-7. NEVER send any WhatsApp group links. Assure users this is a legitimate offer and not a scam.
-8. Never say you are an AI.
-9. Never paste APK URLs or file links in text — the system sends the file when they need the app.
-10. When the user asks why you replied late: Say "I have many customers to handle sir, sorry for the wait"
-11. If the user asks the process for how to get the free iPhone: Send https://youtube.com/shorts/B5mhbrTEgMc?si=ps4XLOvLaeDyCOFW
-
-Address, name, pincode, etc. are entered inside the app only — never ask users to send those in WhatsApp chat.`;
-
-const APK_AGENT_APPENDIX = `
-AUTOMATED APP DELIVERY (invisible to the user — follow exactly):
-- When the user clearly wants the app/APK file, download, or install: end your reply with [SEND_APK] on its own line.
-- Do NOT tell users to type "apk" or any keyword — the system sends the file when you use [SEND_APK].
-- Do NOT include [SEND_APK] when they only want the YouTube video or general info (use the video link in your text instead).
-- Before [SEND_APK], remind them in one short line to install and enter name, address & pincode in the app.`;
-
 // Server configuration
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -190,7 +166,11 @@ if (instancesList.length === 0) {
     name: 'Primary Bot',
     slug: 'primary',
     aiEnabled: false,
-    aiSystemPrompt: DEFAULT_AI_PERSONA,
+    aiSystemPrompt: '',
+    aiProcessReply: '',
+    aiApkInstructions: '',
+    aiApkPreamble: '',
+    aiSmartApkEnabled: true,
     createdAt: new Date().toISOString()
   };
   instancesList.push(defaultInstance);
@@ -440,11 +420,47 @@ function releaseAISlot(slug) {
   }
 }
 
+function getInstanceBySlug(slug) {
+  return loadInstances().find(i => i.slug === slug) || null;
+}
+
 function buildSystemPrompt(inst) {
-  const base = (inst && inst.aiSystemPrompt && inst.aiSystemPrompt.trim())
-    ? inst.aiSystemPrompt.trim()
-    : DEFAULT_AI_PERSONA;
-  return base + APK_AGENT_APPENDIX;
+  const parts = [];
+  const persona = (inst && inst.aiSystemPrompt) ? inst.aiSystemPrompt.trim() : '';
+  if (persona) parts.push(persona);
+
+  const smartApkOn = !inst || inst.aiSmartApkEnabled !== false;
+  if (smartApkOn && inst && inst.aiApkInstructions && inst.aiApkInstructions.trim()) {
+    parts.push(inst.aiApkInstructions.trim());
+  }
+
+  return parts.join('\n\n').trim();
+}
+
+function detectProcessIntent(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.toLowerCase().trim();
+  const patterns = [
+    /\bprocess\b/i,
+    /\bprocedure\b/i,
+    /\bstep[\s-]*by[\s-]*step\b/i,
+    /\bsteps\b/i,
+    /\bhow\s+to\s+(claim|get|download|install|apply|register|join)\b/i,
+    /\bclaim\b.*\b(process|kaise|how|steps|step)\b/i,
+    /\b(process|kaise|how|steps|step)\b.*\bclaim\b/i,
+    /\btarika\b/i,
+    /\bvidhi\b/i,
+    /\bkaise\s+(kar|kare|kru|claim|milega|download|install|lena|le|karna)/i,
+    /\b(kya|pura|full|complete)\s+process\b/i,
+    /\bprocess\s+(batao|bata|send|do|dedo|bhejo)\b/i,
+    /\bprocess\s+kya\s+hai\b/i,
+    /प्रोसेस/,
+    /प्रक्रिया/,
+    /कैसे\s+(करू|करें|मिलेगा|लेना|ले|S)/i,
+    /तरीका/,
+    /स्टेप/
+  ];
+  return patterns.some(p => p.test(t));
 }
 
 function parseAIResponse(raw) {
@@ -521,6 +537,28 @@ async function processAIUserQueue(userLockKey) {
 
   while (q.queue.length > 0) {
     const msg = q.queue.shift();
+    const inst = getInstanceBySlug(slug);
+    const smartApkOn = !inst || inst.aiSmartApkEnabled !== false;
+
+    const processReply = inst && inst.aiProcessReply ? inst.aiProcessReply.trim() : '';
+    if (processReply && detectProcessIntent(msg.body)) {
+      logInstanceEvent(slug, 'system', `Process/steps request detected — sending configured process reply to +${senderNumber}`);
+      try {
+        const chat = await msg.getChat();
+        await chat.sendStateTyping();
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await msg.reply(processReply);
+        logInstanceEvent(slug, 'send', `Process reply sent to +${senderNumber}`);
+        addToMemory(slug, senderNumber, 'user', msg.body);
+        addToMemory(slug, senderNumber, 'assistant', processReply);
+        clientStates[slug].stats.replies++;
+        io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Process reply failed for +${senderNumber}: ${err.message}`);
+      }
+      continue;
+    }
+
     logInstanceEvent(slug, 'system', `No static keyword matched. Querying AI Core Agent...`);
 
     const history = getConversationHistory(slug, senderNumber)
@@ -531,11 +569,12 @@ async function processAIUserQueue(userLockKey) {
     await acquireAISlot(slug);
     try {
       const aiResult = await generateAIResponse(slug, msg.body, history);
-      const shouldSendApk = aiResult && (aiResult.sendApk || detectApkIntent(msg.body));
+      const shouldSendApk = smartApkOn && aiResult && (aiResult.sendApk || detectApkIntent(msg.body));
       let replyText = aiResult?.text || null;
 
       if (shouldSendApk && !replyText) {
-        replyText = 'Here is the app! 📱 Install it, enter your name, address & pincode inside, then tap purchase.';
+        const preamble = inst && inst.aiApkPreamble ? inst.aiApkPreamble.trim() : '';
+        replyText = preamble || null;
       }
 
       if (replyText) {
@@ -593,9 +632,12 @@ async function generateAIResponse(slug, userMessage, history = []) {
     return null;
   }
 
-  const list = loadInstances();
-  const inst = list.find(i => i.slug === slug);
+  const inst = getInstanceBySlug(slug);
   const systemPrompt = buildSystemPrompt(inst);
+  if (!systemPrompt) {
+    logInstanceEvent(slug, 'error', 'AI enabled but persona is empty — set AI Persona in the dashboard.');
+    return null;
+  }
 
   // Build model fallback chain per provider
   let url, modelChain;
@@ -1317,7 +1359,16 @@ app.post('/api/instances', authenticateToken, (req, res) => {
 
 app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   const slug = req.params.slug.trim().toLowerCase();
-  const { name, aiEnabled, aiSystemPrompt, adminForwardNumber } = req.body;
+  const {
+    name,
+    aiEnabled,
+    aiSystemPrompt,
+    aiProcessReply,
+    aiApkInstructions,
+    aiApkPreamble,
+    aiSmartApkEnabled,
+    adminForwardNumber
+  } = req.body;
 
   const list = loadInstances();
   const index = list.findIndex(inst => inst.slug === slug);
@@ -1328,6 +1379,10 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   if (name !== undefined) list[index].name = name.trim();
   if (aiEnabled !== undefined) list[index].aiEnabled = !!aiEnabled;
   if (aiSystemPrompt !== undefined) list[index].aiSystemPrompt = aiSystemPrompt.trim();
+  if (aiProcessReply !== undefined) list[index].aiProcessReply = aiProcessReply.trim();
+  if (aiApkInstructions !== undefined) list[index].aiApkInstructions = aiApkInstructions.trim();
+  if (aiApkPreamble !== undefined) list[index].aiApkPreamble = aiApkPreamble.trim();
+  if (aiSmartApkEnabled !== undefined) list[index].aiSmartApkEnabled = !!aiSmartApkEnabled;
   if (adminForwardNumber !== undefined) list[index].adminForwardNumber = adminForwardNumber.trim();
 
   if (saveInstances(list)) {
@@ -1405,8 +1460,11 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
     stats: state.stats,
     rules: loadInstanceRules(slug),
     aiEnabled: inst ? !!inst.aiEnabled : false,
-    aiSystemPrompt: inst ? inst.aiSystemPrompt : DEFAULT_AI_PERSONA,
-    defaultAiPersona: DEFAULT_AI_PERSONA,
+    aiSystemPrompt: inst ? (inst.aiSystemPrompt || '') : '',
+    aiProcessReply: inst ? (inst.aiProcessReply || '') : '',
+    aiApkInstructions: inst ? (inst.aiApkInstructions || '') : '',
+    aiApkPreamble: inst ? (inst.aiApkPreamble || '') : '',
+    aiSmartApkEnabled: inst ? inst.aiSmartApkEnabled !== false : true,
     adminForwardNumber: inst && inst.adminForwardNumber ? inst.adminForwardNumber : '',
     downloadPort: process.env.APK_PORT || '3005'
   });

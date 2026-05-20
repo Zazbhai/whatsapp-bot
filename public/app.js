@@ -78,10 +78,32 @@ const aiEnabledToggle = document.getElementById('ai-enabled-toggle');
 const aiToggleLabel = document.getElementById('ai-toggle-label');
 const aiPromptContainer = document.getElementById('ai-prompt-container');
 const aiSystemPromptTextarea = document.getElementById('ai-system-prompt');
+const aiProcessReplyTextarea = document.getElementById('ai-process-reply');
+const aiApkInstructionsTextarea = document.getElementById('ai-apk-instructions');
+const aiApkPreambleInput = document.getElementById('ai-apk-preamble');
+const aiSmartApkToggle = document.getElementById('ai-smart-apk-toggle');
 const saveAiSettingsBtn = document.getElementById('save-ai-settings-btn');
 const clearAiMemoryBtn = document.getElementById('clear-ai-memory-btn');
-const loadAdityaPersonaBtn = document.getElementById('load-aditya-persona-btn');
-let cachedDefaultAiPersona = null;
+
+function collectAiSettingsPayload() {
+  return {
+    aiEnabled: aiEnabledToggle ? aiEnabledToggle.checked : false,
+    aiSystemPrompt: aiSystemPromptTextarea ? aiSystemPromptTextarea.value.trim() : '',
+    aiProcessReply: aiProcessReplyTextarea ? aiProcessReplyTextarea.value.trim() : '',
+    aiApkInstructions: aiApkInstructionsTextarea ? aiApkInstructionsTextarea.value.trim() : '',
+    aiApkPreamble: aiApkPreambleInput ? aiApkPreambleInput.value.trim() : '',
+    aiSmartApkEnabled: aiSmartApkToggle ? aiSmartApkToggle.checked : true
+  };
+}
+
+function applyAiSettingsToForm(data) {
+  if (!data) return;
+  if (aiSystemPromptTextarea) aiSystemPromptTextarea.value = data.aiSystemPrompt || '';
+  if (aiProcessReplyTextarea) aiProcessReplyTextarea.value = data.aiProcessReply || '';
+  if (aiApkInstructionsTextarea) aiApkInstructionsTextarea.value = data.aiApkInstructions || '';
+  if (aiApkPreambleInput) aiApkPreambleInput.value = data.aiApkPreamble || '';
+  if (aiSmartApkToggle) aiSmartApkToggle.checked = data.aiSmartApkEnabled !== false;
+}
 
 // UI Elements: Manual Messenger
 const messengerForm = document.getElementById('messenger-form');
@@ -1293,8 +1315,7 @@ async function syncActiveInstanceData() {
       aiEnabledToggle.checked = !!data.aiEnabled;
       aiToggleLabel.textContent = data.aiEnabled ? 'Enabled' : 'Disabled';
       aiPromptContainer.style.display = data.aiEnabled ? 'block' : 'none';
-      aiSystemPromptTextarea.value = data.aiSystemPrompt || '';
-      if (data.defaultAiPersona) cachedDefaultAiPersona = data.defaultAiPersona;
+      applyAiSettingsToForm(data);
     }
     
     // Populate Admin Media Forwarding Number
@@ -1326,10 +1347,7 @@ if (aiEnabledToggle) {
       const res = await apiFetch(`/api/instances/${activeInstanceSlug}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          aiEnabled: isEnabled,
-          aiSystemPrompt: aiSystemPromptTextarea.value.trim()
-        })
+        body: JSON.stringify(collectAiSettingsPayload())
       });
       
       if (res.ok) {
@@ -1345,35 +1363,27 @@ if (aiEnabledToggle) {
   });
 }
 
-if (loadAdityaPersonaBtn && aiSystemPromptTextarea) {
-  loadAdityaPersonaBtn.addEventListener('click', () => {
-    if (cachedDefaultAiPersona) {
-      aiSystemPromptTextarea.value = cachedDefaultAiPersona;
-      showToast('Aditya persona loaded — click Save AI Persona to apply.', 'success');
-    } else {
-      showToast('Refresh the dashboard first, then try again.', 'error');
-    }
-  });
-}
-
 if (saveAiSettingsBtn) {
   saveAiSettingsBtn.addEventListener('click', async () => {
-    const aiEnabled = aiEnabledToggle.checked;
-    const aiSystemPrompt = aiSystemPromptTextarea.value.trim();
-    
+    const payload = collectAiSettingsPayload();
+    if (payload.aiEnabled && !payload.aiSystemPrompt) {
+      showToast('Add an AI Persona before enabling the responder.', 'error');
+      return;
+    }
+
     saveAiSettingsBtn.disabled = true;
     const originalBtnText = saveAiSettingsBtn.innerHTML;
-    saveAiSettingsBtn.innerHTML = '<span>Saving Persona...</span>';
+    saveAiSettingsBtn.innerHTML = '<span>Saving...</span>';
     
     try {
       const res = await apiFetch(`/api/instances/${activeInstanceSlug}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aiEnabled, aiSystemPrompt })
+        body: JSON.stringify(payload)
       });
       
       if (res.ok) {
-        showToast('AI Smart Responder persona updated successfully!', 'success');
+        showToast('AI settings saved successfully!', 'success');
         fetchInstances(); // sync local list
       } else {
         const errData = await res.json();
