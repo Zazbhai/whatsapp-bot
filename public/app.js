@@ -80,6 +80,8 @@ const aiPromptContainer = document.getElementById('ai-prompt-container');
 const aiSystemPromptTextarea = document.getElementById('ai-system-prompt');
 const saveAiSettingsBtn = document.getElementById('save-ai-settings-btn');
 const clearAiMemoryBtn = document.getElementById('clear-ai-memory-btn');
+const loadAdityaPersonaBtn = document.getElementById('load-aditya-persona-btn');
+let cachedDefaultAiPersona = null;
 
 // UI Elements: Manual Messenger
 const messengerForm = document.getElementById('messenger-form');
@@ -1292,6 +1294,7 @@ async function syncActiveInstanceData() {
       aiToggleLabel.textContent = data.aiEnabled ? 'Enabled' : 'Disabled';
       aiPromptContainer.style.display = data.aiEnabled ? 'block' : 'none';
       aiSystemPromptTextarea.value = data.aiSystemPrompt || '';
+      if (data.defaultAiPersona) cachedDefaultAiPersona = data.defaultAiPersona;
     }
     
     // Populate Admin Media Forwarding Number
@@ -1338,6 +1341,17 @@ if (aiEnabledToggle) {
       }
     } catch (err) {
       showToast('Network error, failed to save toggle state.', 'error');
+    }
+  });
+}
+
+if (loadAdityaPersonaBtn && aiSystemPromptTextarea) {
+  loadAdityaPersonaBtn.addEventListener('click', () => {
+    if (cachedDefaultAiPersona) {
+      aiSystemPromptTextarea.value = cachedDefaultAiPersona;
+      showToast('Aditya persona loaded — click Save AI Persona to apply.', 'success');
+    } else {
+      showToast('Refresh the dashboard first, then try again.', 'error');
     }
   });
 }
