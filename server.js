@@ -331,30 +331,30 @@ function loadApkCache(slug) {
 }
 
 // =============================================================
-// BLOCKED USERS — local block list safety net
+// IGNORED USERS — Bot ignore list (replaces unstable WhatsApp blocking)
 // =============================================================
-const blockedUsersFilePath = path.join(dataDir, 'blocked_users.json');
+const ignoredUsersFilePath = path.join(dataDir, 'ignored_users.json');
 
-function loadBlockedUsers() {
+function loadIgnoredUsers() {
   try {
-    if (fs.existsSync(blockedUsersFilePath)) {
-      return JSON.parse(fs.readFileSync(blockedUsersFilePath, 'utf8'));
+    if (fs.existsSync(ignoredUsersFilePath)) {
+      return JSON.parse(fs.readFileSync(ignoredUsersFilePath, 'utf8'));
     }
   } catch (err) {
-    console.error('Failed to load blocked users:', err);
+    console.error('Failed to load ignored users:', err);
   }
   return [];
 }
 
-function saveBlockedUser(number) {
+function saveIgnoredUser(number) {
   try {
-    const list = loadBlockedUsers();
+    const list = loadIgnoredUsers();
     if (!list.includes(number)) {
       list.push(number);
-      fs.writeFileSync(blockedUsersFilePath, JSON.stringify(list, null, 2));
+      fs.writeFileSync(ignoredUsersFilePath, JSON.stringify(list, null, 2));
     }
   } catch (err) {
-    console.error('Failed to save blocked user:', err);
+    console.error('Failed to save ignored user:', err);
   }
 }
 
@@ -1154,94 +1154,6 @@ async function generateAIResponse(slug, userMessage, history = []) {
   return null;
 }
 
-// Safely blocks a WhatsApp contact using standard API or custom internal fallbacks when the standard API is broken.
-async function safelyBlockContact(client, contact, slug) {
-  const senderNumber = contact.number || (contact.id && contact.id.user);
-  
-  // Register in local soft-block blacklist first as a bulletproof safety net
-  saveBlockedUser(senderNumber);
-  logInstanceEvent(slug, 'system', `Registered +${senderNumber} in local blacklist. Attempting WhatsApp network block...`);
-  
-  try {
-    await contact.block();
-    logInstanceEvent(slug, 'system', `Successfully blocked +${senderNumber} via standard block() method.`);
-    return true;
-  } catch (err) {
-    logInstanceEvent(slug, 'system', `Standard block() failed: ${err.message}. Trying custom internal Puppeteer evaluation...`);
-    try {
-      await client.pupPage.evaluate(async (contactId) => {
-        const collections = window.require('WAWebCollections');
-        const contactModel = collections && collections.Contact ? await collections.Contact.find(contactId) : null;
-        if (!contactModel) throw new Error('Contact model not found in WAWebCollections');
-        
-        let blockAction;
-        try {
-          blockAction = window.require('WAWebBlockContactAction');
-        } catch (e) {}
-
-        // Fallback 1: Try using blockUtils dynamically if any valid resolution function exists
-        let blockUtils;
-        try {
-          blockUtils = window.require('WAWebBlockContactUtils');
-        } catch (e) {}
-
-        if (blockUtils && blockAction && typeof blockAction.blockContact === 'function') {
-          const utilsBlockFns = [
-            'getContactToBlock',
-            'getContactToBlockOnlyUseIfNoAssociatedChat',
-            'resolveContactForBlocking'
-          ];
-          for (const fnName of utilsBlockFns) {
-            if (typeof blockUtils[fnName] === 'function') {
-              try {
-                const resolved = blockUtils[fnName](contactModel, 'ChatListBlock');
-                await blockAction.blockContact({ contact: resolved });
-                return;
-              } catch (e) {}
-            }
-          }
-        }
-
-        // Fallback 2: Pass the contactModel directly inside the options object
-        if (blockAction && typeof blockAction.blockContact === 'function') {
-          try {
-            await blockAction.blockContact({ contact: contactModel, entryPoint: 'ChatListBlock' });
-            return;
-          } catch (e) {}
-          try {
-            await blockAction.blockContact({ contact: contactModel });
-            return;
-          } catch (e) {}
-          try {
-            await blockAction.blockContact(contactModel);
-            return;
-          } catch (e) {}
-        }
-
-        // Fallback 3: Try window.Store.BlockContact if it exists
-        if (window.Store && window.Store.BlockContact) {
-          if (typeof window.Store.BlockContact.blockContact === 'function') {
-            await window.Store.BlockContact.blockContact(contactModel);
-            return;
-          }
-          if (typeof window.Store.BlockContact.block === 'function') {
-            await window.Store.BlockContact.block(contactModel);
-            return;
-          }
-        }
-
-        throw new Error('All internal block APIs failed or were not found.');
-      }, contact.id._serialized);
-
-      logInstanceEvent(slug, 'system', `Successfully blocked +${senderNumber} using custom Puppeteer fallback.`);
-      return true;
-    } catch (fallbackErr) {
-      logInstanceEvent(slug, 'error', `All block fallbacks failed for +${senderNumber}: ${fallbackErr.message}`);
-      throw fallbackErr;
-    }
-  }
-}
-
 // Voice Note Transcription engine — uses a local, free, offline Python-based SpeechRecognition script
 // No API keys or external subscription/billing tokens are required!
 async function transcribeAudio(slug, media) {
@@ -1489,21 +1401,21 @@ function initInstanceClient(slug) {
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
 
-    // Check if user is locally blocked (Soft-Block fallback)
+    // Check if user is in the bot's ignore list
     const senderNumber = msg.from.split('@')[0];
-    const blockedList = loadBlockedUsers();
-    if (blockedList.includes(senderNumber)) {
-      logInstanceEvent(slug, 'system', `Ignored message from locally blocked user: +${senderNumber}`);
+    const ignoredList = loadIgnoredUsers();
+    if (ignoredList.includes(senderNumber)) {
+      logInstanceEvent(slug, 'system', `Ignored message from blacklisted/ignored user: +${senderNumber}`);
       try {
         const chat = await msg.getChat();
         await chat.delete();
       } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to auto-delete chat for locally blocked user +${senderNumber}: ${err.message}`);
+        logInstanceEvent(slug, 'error', `Failed to auto-delete chat for ignored user +${senderNumber}: ${err.message}`);
       }
       return; // Ignore and halt completely!
     }
 
-    // Auto-Block and Delete User on Specific Trigger Text
+    // Auto-Ignore and Delete User on Specific Trigger Text
     const listConfig = loadInstances();
     const instConfig = listConfig.find(i => i.slug === slug);
     if (instConfig && instConfig.blockTriggerText && msg.body) {
@@ -1511,15 +1423,14 @@ function initInstanceClient(slug) {
       const incomingClean = msg.body.trim().toLowerCase();
       if (triggerClean && incomingClean === triggerClean) {
         const senderNumber = msg.from.split('@')[0];
-        logInstanceEvent(slug, 'system', `🚨 Trigger matched block word: "${msg.body}". Blocking user +${senderNumber} and deleting chat...`);
+        logInstanceEvent(slug, 'system', `🚨 Trigger matched block phrase: "${msg.body}". Adding user +${senderNumber} to ignore list and deleting chat...`);
         try {
+          saveIgnoredUser(senderNumber);
           const chat = await msg.getChat();
-          const contact = await chat.getContact();
-          await safelyBlockContact(client, contact, slug);
           await chat.delete();
-          logInstanceEvent(slug, 'system', `🚨 Successfully blocked and deleted user +${senderNumber}`);
+          logInstanceEvent(slug, 'system', `🚨 Successfully added user +${senderNumber} to ignore list and deleted chat.`);
         } catch (err) {
-          logInstanceEvent(slug, 'error', `Failed to block/delete user +${senderNumber}: ${err.message}`);
+          logInstanceEvent(slug, 'error', `Failed to ignore/delete chat for user +${senderNumber}: ${err.message}`);
         }
         return; // Halted completely
       }
