@@ -746,10 +746,24 @@ async function processAIUserQueue(userLockKey) {
 
     logInstanceEvent(slug, 'system', `No static keyword matched. Querying AI Core Agent...`);
 
-    const history = getConversationHistory(slug, senderNumber)
-      .filter(m => m.role !== 'system')
-      .slice(-10)
-      .map(m => ({ role: m.role, content: m.content }));
+    let history = [];
+    try {
+      const chat = await msg.getChat();
+      const rawMessages = await chat.fetchMessages({ limit: 12 });
+      history = rawMessages
+        .filter(m => m.id._serialized !== msg.id._serialized && m.body)
+        .map(m => ({
+          role: m.fromMe ? 'assistant' : 'user',
+          content: m.body
+        }));
+      logInstanceEvent(slug, 'system', `Retrieved ${history.length} messages from actual WhatsApp chat history.`);
+    } catch (err) {
+      logInstanceEvent(slug, 'error', `Failed to fetch actual chat history: ${err.message}. Falling back to in-memory history.`);
+      history = getConversationHistory(slug, senderNumber)
+        .filter(m => m.role !== 'system')
+        .slice(-10)
+        .map(m => ({ role: m.role, content: m.content }));
+    }
 
     await acquireAISlot(slug);
     try {
