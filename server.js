@@ -1446,18 +1446,12 @@ function initInstanceClient(slug) {
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
 
-    // Check if user is in the bot's ignore list
+    // Check if user is in the bot's ignore list — silently drop, no reply, no delete (delete triggers new events = infinite loop)
     const senderNumber = msg.from.split('@')[0];
     const ignoredList = loadIgnoredUsers();
     if (ignoredList.includes(senderNumber)) {
-      logInstanceEvent(slug, 'system', `Ignored message from blacklisted/ignored user: +${senderNumber}`);
-      try {
-        const chat = await msg.getChat();
-        await chat.delete();
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to auto-delete chat for ignored user +${senderNumber}: ${err.message}`);
-      }
-      return; // Ignore and halt completely!
+      logInstanceEvent(slug, 'system', `Ignored message from blacklisted user: +${senderNumber}`);
+      return; // Silent drop — no reply, no further processing
     }
 
     // Track message rate for spam detection (but do NOT block yet — auto-responders must still fire)
@@ -1481,16 +1475,10 @@ function initInstanceClient(slug) {
       const incomingClean = msg.body.trim().toLowerCase();
       if (triggerClean && incomingClean === triggerClean) {
         const senderNumber = msg.from.split('@')[0];
-        logInstanceEvent(slug, 'system', `🚨 Trigger matched block phrase: "${msg.body}". Adding user +${senderNumber} to ignore list and deleting chat...`);
-        try {
-          saveIgnoredUser(senderNumber);
-          const chat = await msg.getChat();
-          await chat.delete();
-          logInstanceEvent(slug, 'system', `🚨 Successfully added user +${senderNumber} to ignore list and deleted chat.`);
-        } catch (err) {
-          logInstanceEvent(slug, 'error', `Failed to ignore/delete chat for user +${senderNumber}: ${err.message}`);
-        }
-        return; // Halted completely
+        logInstanceEvent(slug, 'system', `🚨 Trigger matched block phrase: "${msg.body}". Adding user +${senderNumber} to ignore list.`);
+        saveIgnoredUser(senderNumber);
+        logInstanceEvent(slug, 'system', `🚨 User +${senderNumber} added to ignore list. All future messages from this user will be silently ignored.`);
+        return; // Halted completely — no delete (causes infinite loop via message re-fire)
       }
     }
 
