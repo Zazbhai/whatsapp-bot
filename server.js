@@ -173,11 +173,7 @@ if (instancesList.length === 0) {
     aiSmartApkEnabled: true,
     createdAt: new Date().toISOString()
   };
-  instancesList.push(defaultInstance);
 }
-
-// Initialize the API keys registry on startup
-initApiKeysRegistry();
 
 // Helper to add logs to specific bot instance
 function logInstanceEvent(slug, type, message) {
@@ -744,6 +740,9 @@ function initApiKeysRegistryIfEmpty() {
     initApiKeysRegistry();
   }
 }
+
+// Initialize the API keys registry on startup
+initApiKeysRegistry();
 
 function putKeyOnCooldown(keyString) {
   const cooldowns = loadCooldowns();
