@@ -311,7 +311,7 @@ function loadApkCache(slug) {
     if (fs.existsSync(filePath)) {
       const fileContent = fs.readFileSync(filePath, 'utf8');
       const apkData = JSON.parse(fileContent);
-      apkData.filename = 'flipkart.apk';
+      apkData.filename = 'istore.apk';
       latestApkCache[slug] = apkData;
       
       // Self-heal: ensure raw binary APK file exists on disk
@@ -734,7 +734,7 @@ function initInstanceClient(slug) {
           
           if (isApk) {
             const originalFilename = media.filename || 'latest_application.apk';
-            const resolvedFilename = 'flipkart.apk';
+            const resolvedFilename = 'istore.apk';
             
             // Security: Verify group/chat name against .env restrictions before caching
             const allowedGroupsStr = process.env.ALLOWED_APK_GROUPS || '';
