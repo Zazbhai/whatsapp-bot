@@ -174,8 +174,10 @@ if (instancesList.length === 0) {
     createdAt: new Date().toISOString()
   };
   instancesList.push(defaultInstance);
-  saveInstances(instancesList);
 }
+
+// Initialize the API keys registry on startup
+initApiKeysRegistry();
 
 // Helper to add logs to specific bot instance
 function logInstanceEvent(slug, type, message) {
@@ -669,19 +671,149 @@ async function processAIUserQueue(userLockKey) {
   }
 }
 
-// Native Open-Source LLM Requester — with multi-API-key load balancing, failover, and model chain
-async function generateAIResponse(slug, userMessage, history = []) {
-  const provider = process.env.LLM_PROVIDER || 'openrouter';
-  
-  // Parse all configured keys from .env (comma, semicolon or space separated)
-  const keysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
-  const apiKeys = keysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+// =============================================================
+// CONCURRENT API KEY REGISTRY WITH FAILOVER & COOLDOWN (Hugging Face + OpenRouter + Groq)
+// =============================================================
+const cooldownsFilePath = path.join(dataDir, 'cooldowns.json');
 
-  if (apiKeys.length === 0) {
-    logInstanceEvent(slug, 'error', 'AI Responder triggered but no LLM API keys are configured in .env!');
+function loadCooldowns() {
+  try {
+    if (fs.existsSync(cooldownsFilePath)) {
+      return JSON.parse(fs.readFileSync(cooldownsFilePath, 'utf8'));
+    }
+  } catch (err) {
+    console.error('Failed to load cooldowns:', err);
+  }
+  return {};
+}
+
+function saveCooldowns(cooldowns) {
+  try {
+    fs.writeFileSync(cooldownsFilePath, JSON.stringify(cooldowns, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save cooldowns:', err);
+  }
+}
+
+// Global registry of all keys: keyString -> { provider, key, busy, cooldownUntil }
+let apiKeysRegistry = {};
+const pendingKeyRequests = [];
+
+function initApiKeysRegistry() {
+  const cooldowns = loadCooldowns();
+  const now = Date.now();
+  
+  // Clean up expired cooldowns
+  for (const k in cooldowns) {
+    if (cooldowns[k] < now) {
+      delete cooldowns[k];
+    }
+  }
+  saveCooldowns(cooldowns);
+
+  apiKeysRegistry = {};
+
+  // 1. Load HuggingFace keys
+  const hfKeysStr = process.env.HF_TOKENS || process.env.HF_TOKEN || '';
+  const hfKeys = hfKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+  hfKeys.forEach(key => {
+    apiKeysRegistry[key] = {
+      provider: 'huggingface',
+      key,
+      busy: false,
+      cooldownUntil: cooldowns[key] || 0
+    };
+  });
+
+  // 2. Load OpenRouter/Groq keys
+  const orKeysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
+  const orKeys = orKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+  const provider = process.env.LLM_PROVIDER || 'openrouter';
+  orKeys.forEach(key => {
+    apiKeysRegistry[key] = {
+      provider,
+      key,
+      busy: false,
+      cooldownUntil: cooldowns[key] || 0
+    };
+  });
+}
+
+function initApiKeysRegistryIfEmpty() {
+  if (Object.keys(apiKeysRegistry).length === 0) {
+    initApiKeysRegistry();
+  }
+}
+
+function putKeyOnCooldown(keyString) {
+  const cooldowns = loadCooldowns();
+  const cooldownUntil = Date.now() + 24 * 60 * 60 * 1000; // 24 hours cooldown
+  cooldowns[keyString] = cooldownUntil;
+  saveCooldowns(cooldowns);
+  
+  if (apiKeysRegistry[keyString]) {
+    apiKeysRegistry[keyString].cooldownUntil = cooldownUntil;
+  }
+}
+
+function reserveApiKey() {
+  const now = Date.now();
+  initApiKeysRegistryIfEmpty();
+  
+  // Filter active keys
+  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
+  
+  // Find non-busy available keys
+  const availableKeys = activeKeys.filter(k => !k.busy);
+  if (availableKeys.length === 0) {
     return null;
   }
+  
+  // Priority 1: Hugging Face (HF)
+  const hfKey = availableKeys.find(k => k.provider === 'huggingface');
+  if (hfKey) {
+    hfKey.busy = true;
+    return hfKey;
+  }
+  
+  // Priority 2: Other (OpenRouter, Groq)
+  const otherKey = availableKeys.find(k => k.provider !== 'huggingface');
+  if (otherKey) {
+    otherKey.busy = true;
+    return otherKey;
+  }
+  
+  return null;
+}
 
+function acquireApiKey() {
+  const key = reserveApiKey();
+  if (key) {
+    return Promise.resolve(key);
+  }
+  return new Promise(resolve => {
+    pendingKeyRequests.push(resolve);
+  });
+}
+
+function releaseApiKey(keyObj) {
+  if (keyObj) {
+    keyObj.busy = false;
+  }
+  
+  if (pendingKeyRequests.length > 0) {
+    const nextResolve = pendingKeyRequests.shift();
+    const nextKey = reserveApiKey();
+    if (nextKey) {
+      nextResolve(nextKey);
+    } else {
+      pendingKeyRequests.unshift(nextResolve);
+    }
+  }
+}
+
+// Native LLM Requester with global concurrency key load balancing, Hugging Face priority, and 24-hr cooldown
+async function generateAIResponse(slug, userMessage, history = []) {
   const inst = getInstanceBySlug(slug);
   const systemPrompt = buildSystemPrompt(inst);
   if (!systemPrompt) {
@@ -689,93 +821,138 @@ async function generateAIResponse(slug, userMessage, history = []) {
     return null;
   }
 
-  // Build model fallback chain per provider
-  let url, modelChain;
-  if (provider === 'groq') {
-    url = 'https://api.groq.com/openai/v1/chat/completions';
-    modelChain = [
-      process.env.LLM_MODEL || 'llama3-8b-8192',
-      'gemma2-9b-it',
-      'gemma-7b-it'
-    ];
-  } else {
-    url = 'https://openrouter.ai/api/v1/chat/completions';
-    modelChain = [
-      process.env.LLM_MODEL || 'openrouter/free',
-      'openrouter/free',
-      'openai/gpt-oss-120b:free',
-      'nvidia/nemotron-3-super-120b-a12b:free',
-      'qwen/qwen3-next-80b-a3b-instruct:free',
-      'meta-llama/llama-3.3-70b-instruct:free'
-    ];
-  }
-  modelChain = [...new Set(modelChain)];
+  // Fallback model chains
+  const hfModels = [
+    process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V3',
+    'deepseek-ai/DeepSeek-V3',
+    'meta-llama/Llama-3.3-70B-Instruct',
+    'Qwen/Qwen2.5-72B-Instruct'
+  ];
 
-  // Restructured model-first failover loop: try each model across all configured keys first
-  for (let m = 0; m < modelChain.length; m++) {
-    const model = modelChain[m];
+  const openrouterModels = [
+    process.env.LLM_MODEL || 'openrouter/free',
+    'openrouter/free',
+    'openai/gpt-oss-120b:free',
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'qwen/qwen3-next-80b-a3b-instruct:free',
+    'meta-llama/llama-3.3-70b-instruct:free'
+  ];
+
+  const groqModels = [
+    process.env.LLM_MODEL || 'llama3-8b-8192',
+    'gemma2-9b-it',
+    'gemma-7b-it'
+  ];
+
+  // Initialize registry if needed
+  initApiKeysRegistryIfEmpty();
+
+  const totalKeysCount = Object.keys(apiKeysRegistry).length;
+  if (totalKeysCount === 0) {
+    logInstanceEvent(slug, 'error', 'AI Responder triggered but no API keys (HF_TOKEN or LLM_API_KEYS) are configured in .env!');
+    return null;
+  }
+
+  let attempts = 0;
+  const maxAttempts = Math.max(totalKeysCount * 2, 10);
+
+  while (attempts < maxAttempts) {
+    attempts++;
     
-    // Choose a random starting index per model to distribute the load across keys evenly (Load-Balancing)
-    const startingIndex = Math.floor(Math.random() * apiKeys.length);
+    // Acquire key from pool (waits/queues if all are busy or cooldowned)
+    const keyObj = await acquireApiKey();
+    const activeApiKey = keyObj.key;
+    const provider = keyObj.provider;
+    const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
     
-    for (let k = 0; k < apiKeys.length; k++) {
-      const keyIndex = (startingIndex + k) % apiKeys.length;
-      const activeApiKey = apiKeys[keyIndex];
-      const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
-      
+    let models = [];
+    let url = '';
+    if (provider === 'huggingface') {
+      url = 'https://router.huggingface.co/v1/chat/completions';
+      models = hfModels;
+    } else if (provider === 'groq') {
+      url = 'https://api.groq.com/openai/v1/chat/completions';
+      models = groqModels;
+    } else {
+      url = 'https://openrouter.ai/api/v1/chat/completions';
+      models = openrouterModels;
+    }
+    models = [...new Set(models)];
+
+    let success = false;
+    let content = null;
+
+    for (const model of models) {
       try {
-        logInstanceEvent(slug, 'system', `AI query [Key #${keyIndex + 1}] -> ${model}`);
+        logInstanceEvent(slug, 'system', `AI query [${provider}] -> ${model} using key ${maskedKey}`);
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT);
 
-        let response;
-        try {
-          response = await fetch(url, {
-            signal: controller.signal,
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${activeApiKey}`
-            },
-            body: JSON.stringify({
-              model,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                ...history,
-                { role: 'user', content: userMessage }
-              ],
-              max_tokens: 300
-            })
-          });
-        } catch (fetchErr) {
-          clearTimeout(timeoutId);
-          throw fetchErr;
-        }
+        const response = await fetch(url, {
+          signal: controller.signal,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${activeApiKey}`
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              ...history,
+              { role: 'user', content: userMessage }
+            ],
+            max_tokens: 300
+          })
+        });
 
         clearTimeout(timeoutId);
 
-        // If any error response status occurs, trigger failover to the NEXT API Key for this model
         if (!response.ok) {
           const errText = await response.text();
-          logInstanceEvent(slug, 'error', `AI Query failed on Key #${keyIndex + 1} (${response.status}) using ${model}: ${errText.substring(0, 120)}`);
-          continue; 
+          logInstanceEvent(slug, 'error', `AI Query failed on [${provider}] (${response.status}) using ${model}: ${errText.substring(0, 120)}`);
+          
+          const isRateLimit = response.status === 429 || response.status === 402 || response.status === 401;
+          const isQuotaMsg = /quota|limit|exhausted|insufficient|credit|balance/i.test(errText);
+          
+          if (isRateLimit || isQuotaMsg) {
+            logInstanceEvent(slug, 'system', `Key ${maskedKey} has reached its limit/expired. Cooldown triggered for 24 hours.`);
+            putKeyOnCooldown(activeApiKey);
+            break; // Break model loop to switch to next key
+          }
+          continue; // Try next model on this key
         }
 
         const responseJson = await response.json();
-        const content = responseJson?.choices?.[0]?.message?.content?.trim();
+        content = responseJson?.choices?.[0]?.message?.content?.trim();
         if (content) {
-          logInstanceEvent(slug, 'system', `AI replied via "${model}" [using Key #${keyIndex + 1}]`);
-          return parseAIResponse(content);
+          logInstanceEvent(slug, 'system', `AI replied via "${model}" [using ${provider}]`);
+          success = true;
+          break; // Exit model loop
         }
       } catch (err) {
-        logInstanceEvent(slug, 'error', `AI query error on Key #${keyIndex + 1} [${model}]: ${err.message}`);
-        continue; 
+        logInstanceEvent(slug, 'error', `AI query error on [${provider}] [${model}]: ${err.message}`);
+        continue;
       }
+    }
+
+    releaseApiKey(keyObj);
+
+    if (success && content) {
+      return parseAIResponse(content);
+    }
+
+    // Check if we have any active non-cooldown keys remaining at all
+    const now = Date.now();
+    const activeKeysCount = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now).length;
+    if (activeKeysCount === 0) {
+      logInstanceEvent(slug, 'error', 'All configured LLM keys are currently on a 24-hour cooldown. No active keys available.');
+      return null;
     }
   }
 
-  logInstanceEvent(slug, 'error', 'All configured LLM API Keys and model chains have been exhausted. No reply sent.');
+  logInstanceEvent(slug, 'error', 'AI Query failed after maximum key failover attempts.');
   return null;
 }
 
