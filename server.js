@@ -498,7 +498,7 @@ async function sendDailyReportToAdmin(slug) {
   }
   
   const client = activeClients[slug];
-  if (!client || !clientStates[slug] || clientStates[slug].status !== 'connected') {
+  if (!client || !clientStates[slug] || (clientStates[slug].status !== 'ready' && clientStates[slug].status !== 'connected')) {
     const errMsg = 'WhatsApp client is not connected.';
     logInstanceEvent(slug, 'system', `Daily report failed: ${errMsg}`);
     throw new Error(errMsg);
