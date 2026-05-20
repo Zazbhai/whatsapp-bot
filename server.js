@@ -358,6 +358,51 @@ function saveIgnoredUser(number) {
   }
 }
 
+// =============================================================
+// SPAM DETECTION — Auto-mute repeat spammers for 10 minutes
+// =============================================================
+// Configurable thresholds
+const SPAM_MSG_LIMIT    = 5;          // messages within the window before flagging as spam
+const SPAM_WINDOW_MS    = 30 * 1000;  // 30-second rolling window
+const SPAM_COOLDOWN_MS  = 10 * 60 * 1000; // 10-minute mute duration
+
+// In-memory per-instance tracking (cleared on restart — intentional, lightweight)
+// spamTracker[slug][number] = [timestamp, timestamp, ...]
+const spamTracker  = {};
+// spamCooldowns[slug][number] = cooldownUntilTimestamp
+const spamCooldowns = {};
+
+function isSpamCoolingDown(slug, number) {
+  const until = (spamCooldowns[slug] || {})[number];
+  return until && Date.now() < until;
+}
+
+function recordSpamMessage(slug, number) {
+  if (!spamTracker[slug])   spamTracker[slug]   = {};
+  if (!spamCooldowns[slug]) spamCooldowns[slug] = {};
+
+  const now = Date.now();
+  const windowStart = now - SPAM_WINDOW_MS;
+
+  // Keep only timestamps within the rolling window
+  const timestamps = (spamTracker[slug][number] || []).filter(t => t > windowStart);
+  timestamps.push(now);
+  spamTracker[slug][number] = timestamps;
+
+  if (timestamps.length >= SPAM_MSG_LIMIT) {
+    // Activate cooldown
+    spamCooldowns[slug][number] = now + SPAM_COOLDOWN_MS;
+    spamTracker[slug][number] = []; // Reset after triggering
+    return true; // Spam threshold crossed
+  }
+  return false; // Not yet spamming
+}
+
+function clearSpamCooldown(slug, number) {
+  if (spamCooldowns[slug]) delete spamCooldowns[slug][number];
+  if (spamTracker[slug])   delete spamTracker[slug][number];
+}
+
 // =============================================================================
 // USER MEMORY — per-user conversation history per instance
 // =============================================================
@@ -1414,6 +1459,27 @@ function initInstanceClient(slug) {
       }
       return; // Ignore and halt completely!
     }
+
+    // ── SPAM DETECTION ──────────────────────────────────────────────────────
+    // If user is currently in a spam cooldown → silently ignore the message
+    if (isSpamCoolingDown(slug, senderNumber)) {
+      logInstanceEvent(slug, 'system', `⏳ Spam cooldown active for +${senderNumber}. Message silently ignored.`);
+      return;
+    }
+
+    // Record this message and check if threshold crossed
+    const justTriggeredSpam = recordSpamMessage(slug, senderNumber);
+    if (justTriggeredSpam) {
+      logInstanceEvent(slug, 'system', `🚫 Spam detected from +${senderNumber}. Sending warning and muting for 10 minutes.`);
+      try {
+        const spamWarning = `⚠️ You've been sending too many messages too quickly.\n\nPlease wait *10 minutes* before sending more messages. Our system has temporarily paused replies to your number.`;
+        await msg.reply(spamWarning);
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Failed to send spam warning to +${senderNumber}: ${err.message}`);
+      }
+      return; // Stop processing this message
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Auto-Ignore and Delete User on Specific Trigger Text
     const listConfig = loadInstances();
