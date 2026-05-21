@@ -1301,12 +1301,36 @@ async function processAIUserQueue(userLockKey) {
         // AI is unsure — send a direct clarification question to the user
         logInstanceEvent(slug, 'system', `❓ [ASK_ORDER] detected for +${senderNumber}. Sending order confirmation question.`);
         try {
-          const confirmationQ = `Did you successfully place your iPhone order on the app? Please reply *Yes* or *No* 😊`;
+          const textQuestion = `Did you successfully place your iPhone order on the app? 😊`;
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1200));
-          await sendSmartReply(slug, msg, chat, confirmationQ);
-          logInstanceEvent(slug, 'send', `Order confirmation question sent to +${senderNumber}`);
+          
+          try {
+            // Attempt to send as interactive buttons
+            const buttonsList = [
+              { id: 'btn_yes', body: 'Yes' },
+              { id: 'btn_no', body: 'No' }
+            ];
+            const confirmationQ = new Buttons(
+              textQuestion,
+              buttonsList,
+              null,
+              `Please select an option`
+            );
+            await msg.reply(confirmationQ);
+            logInstanceEvent(slug, 'send', `Order confirmation question (with buttons) sent to +${senderNumber}`);
+          } catch (btnErr) {
+            // Fallback to sending standard text if buttons fail
+            logInstanceEvent(slug, 'system', `Failed to send buttons, falling back to text: ${btnErr.message}`);
+            const fallbackText = `Did you successfully place your iPhone order on the app? Please reply *Yes* or *No* 😊`;
+            await sendSmartReply(slug, msg, chat, fallbackText);
+            logInstanceEvent(slug, 'send', `Order confirmation question (text fallback) sent to +${senderNumber}`);
+          }
+          
+          // Add the confirmation question text to memory so the Yes/No intercept works
+          addToMemory(slug, senderNumber, 'assistant', textQuestion);
+          
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmation question to +${senderNumber}: ${err.message}`);
         }
