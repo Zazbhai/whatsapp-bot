@@ -311,9 +311,15 @@ async function handleVoiceTtsReply(slug, msg, text, voiceName) {
     // Write text to temp file to bypass Windows console escaping issues
     fs.writeFileSync(textFilePath, text, 'utf8');
 
+    // Determine the Python executable path from environment config
+    let pythonPath = process.env.PYTHON_PATH || '';
+    if (!pythonPath) {
+      pythonPath = process.platform === 'win32' ? 'python' : 'python3';
+    }
+
     // Run Python TTS generator
     await new Promise((resolve, reject) => {
-      const pythonCmd = `python generate_tts.py "${textFilePath}" "${voiceName}" "${wavPath}"`;
+      const pythonCmd = `"${pythonPath}" generate_tts.py "${textFilePath}" "${voiceName}" "${wavPath}"`;
       exec(pythonCmd, (err, stdout, stderr) => {
         if (err) {
           logInstanceEvent(slug, 'error', `Python TTS script output: ${stdout}`);
