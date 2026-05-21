@@ -172,6 +172,7 @@ if (instancesList.length === 0) {
     aiApkPreamble: '',
     aiSmartApkEnabled: true,
     autoWelcomeMessage: '',
+    autoWelcomeSendApk: false,
     createdAt: new Date().toISOString()
   };
   instancesList.push(defaultInstance);
@@ -1747,10 +1748,16 @@ function initInstanceClient(slug) {
         logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
         try {
           await msg.reply(instConfig.autoWelcomeMessage);
+          
+          if (instConfig.autoWelcomeSendApk) {
+            logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
+            await sendCachedApkReply(slug, msg, senderNumber);
+          }
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
         }
         saveSeenUser(slug, senderNumber);
+        return; // Halt processing: skip all other rules or AI for this first message
       }
     }
 
@@ -2199,7 +2206,8 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
     aiSmartApkEnabled,
     adminForwardNumber,
     blockTriggerText,
-    autoWelcomeMessage
+    autoWelcomeMessage,
+    autoWelcomeSendApk
   } = req.body;
 
   const list = loadInstances();
@@ -2218,6 +2226,7 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   if (adminForwardNumber !== undefined) list[index].adminForwardNumber = adminForwardNumber.trim();
   if (blockTriggerText !== undefined) list[index].blockTriggerText = blockTriggerText.trim();
   if (autoWelcomeMessage !== undefined) list[index].autoWelcomeMessage = autoWelcomeMessage.trim();
+  if (autoWelcomeSendApk !== undefined) list[index].autoWelcomeSendApk = !!autoWelcomeSendApk;
 
   if (saveInstances(list)) {
     res.json(list[index]);

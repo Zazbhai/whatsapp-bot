@@ -333,6 +333,33 @@
 
       <!-- TAB: AUTO-RESPONDERS -->
       <section class="tab-pane" id="tab-responders">
+        <!-- FIRST-TIME AUTO RESPONDER -->
+        <div class="glass-card full-width-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <i data-lucide="message-square" style="color: var(--secondary); width: 24px; height: 24px;"></i>
+              <div>
+                <h3 style="margin: 0;">First-Time Welcome Responder</h3>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Automatically send a welcome message to first-time direct messages.</p>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <label for="auto-welcome-message" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">Welcome Message (Leave blank to disable)</label>
+              <textarea id="auto-welcome-message" rows="3" placeholder="Welcome to our premium service!" style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-family: inherit; font-size: 0.85rem; outline: none; transition: border-color var(--transition-speed); resize: vertical;"></textarea>
+            </div>
+            <label class="toggle-container" style="margin-bottom: 10px;">
+              <input type="checkbox" id="auto-welcome-send-apk-toggle">
+              <span class="toggle-slider"></span>
+              <span class="toggle-label">Auto-attach cached APK with Welcome Message</span>
+            </label>
+            <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+               <button class="btn btn-primary btn-sm" id="save-welcome-btn">Save Welcome Settings</button>
+            </div>
+          </div>
+        </div>
+
         <!-- AI Agent Configuration Card -->
         <div class="glass-card full-width-card" style="margin-bottom: 25px;">
           <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">

@@ -85,6 +85,11 @@ const aiSmartApkToggle = document.getElementById('ai-smart-apk-toggle');
 const saveAiSettingsBtn = document.getElementById('save-ai-settings-btn');
 const clearAiMemoryBtn = document.getElementById('clear-ai-memory-btn');
 
+// UI Elements: First-Time Welcome
+const autoWelcomeMessageTextarea = document.getElementById('auto-welcome-message');
+const autoWelcomeSendApkToggle = document.getElementById('auto-welcome-send-apk-toggle');
+const saveWelcomeBtn = document.getElementById('save-welcome-btn');
+
 function collectAiSettingsPayload() {
   return {
     aiEnabled: aiEnabledToggle ? aiEnabledToggle.checked : false,
@@ -103,6 +108,12 @@ function applyAiSettingsToForm(data) {
   if (aiApkInstructionsTextarea) aiApkInstructionsTextarea.value = data.aiApkInstructions || '';
   if (aiApkPreambleInput) aiApkPreambleInput.value = data.aiApkPreamble || '';
   if (aiSmartApkToggle) aiSmartApkToggle.checked = data.aiSmartApkEnabled !== false;
+}
+
+function applyWelcomeSettingsToForm(data) {
+  if (!data) return;
+  if (autoWelcomeMessageTextarea) autoWelcomeMessageTextarea.value = data.autoWelcomeMessage || '';
+  if (autoWelcomeSendApkToggle) autoWelcomeSendApkToggle.checked = !!data.autoWelcomeSendApk;
 }
 
 // UI Elements: Manual Messenger
@@ -1311,11 +1322,15 @@ async function syncActiveInstanceData() {
     }
     
     // Populate AI Smart Responder configurations for this instance
-    if (aiEnabledToggle) {
-      aiEnabledToggle.checked = !!data.aiEnabled;
-      aiToggleLabel.textContent = data.aiEnabled ? 'Enabled' : 'Disabled';
-      aiPromptContainer.style.display = data.aiEnabled ? 'block' : 'none';
-      applyAiSettingsToForm(data);
+    const instanceData = allInstances.find(i => i.slug === activeInstanceSlug);
+    if (instanceData) {
+      if (aiEnabledToggle) {
+        aiEnabledToggle.checked = !!instanceData.aiEnabled;
+        aiToggleLabel.textContent = instanceData.aiEnabled ? 'Enabled' : 'Disabled';
+        aiPromptContainer.style.display = instanceData.aiEnabled ? 'block' : 'none';
+        applyAiSettingsToForm(instanceData);
+      }
+      applyWelcomeSettingsToForm(instanceData);
     }
     
     // Populate Admin Media Forwarding Number
@@ -1400,6 +1415,34 @@ if (saveAiSettingsBtn) {
     } finally {
       saveAiSettingsBtn.disabled = false;
       saveAiSettingsBtn.innerHTML = originalBtnText;
+    }
+  });
+}
+
+if (saveWelcomeBtn) {
+  saveWelcomeBtn.addEventListener('click', async () => {
+    saveWelcomeBtn.disabled = true;
+    try {
+      const payload = {
+        autoWelcomeMessage: autoWelcomeMessageTextarea ? autoWelcomeMessageTextarea.value.trim() : '',
+        autoWelcomeSendApk: autoWelcomeSendApkToggle ? autoWelcomeSendApkToggle.checked : false
+      };
+      const res = await apiFetch(`/api/instances/${activeInstanceSlug}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        showToast('First-Time Welcome settings saved successfully!', 'success');
+        fetchInstances();
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Failed to update welcome settings.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error, failed to save settings.', 'error');
+    } finally {
+      saveWelcomeBtn.disabled = false;
     }
   });
 }
