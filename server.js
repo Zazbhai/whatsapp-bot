@@ -2246,13 +2246,19 @@ function initInstanceClient(slug) {
     // Return early if message contains no text content (e.g. captionless images/documents)
     if (!msg.body) return;
 
-    const senderName = msg._data.notifyName || 'Unknown Contact';
+    const senderName = msg._data.notifyName || '';
+    
+    // Always persist the sender's name so it shows correctly in the Users dashboard tab
+    // (previously this only ran for @c.us DMs, so group chat users showed as "Unknown Contact")
+    if (senderName) {
+      saveSeenUser(slug, senderNumber, senderName);
+    }
     
     clientStates[slug].stats.received++;
     io.to(`instance_${slug}`).emit('stat_increment', 'received');
     
     const logTag = isVoiceNote ? ' [🎙️ Voice Note]' : '';
-    logInstanceEvent(slug, 'receive', `From "${senderName}" (+${senderNumber})${logTag}: "${msg.body}"`);
+    logInstanceEvent(slug, 'receive', `From "${senderName || 'Unknown Contact'}" (+${senderNumber})${logTag}: "${msg.body}"`);
 
     const rules = loadInstanceRules(slug);
     const incomingText = msg.body.toLowerCase().trim();
