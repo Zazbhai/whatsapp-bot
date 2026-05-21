@@ -22,7 +22,15 @@ def main():
     else:
         text = text_arg
         
-    print(f"Synthesizing text of length {len(text)} using voice '{voice_name}'...")
+    import re
+    # Clean text: keep only Devanagari script, numbers, whitespaces, and basic punctuation.
+    # This strips emojis and special symbols like ♪ to avoid synthesis corruption or audio glitches.
+    cleaned_text = re.sub(r'[^\u0900-\u097F0-9\s.,?!|\-।()\'":]', '', text)
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+    if not cleaned_text:
+        cleaned_text = text
+
+    print(f"Synthesizing text of length {len(cleaned_text)} (original: {len(text)}) using voice '{voice_name}'...")
     
     try:
         from supertonic import TTS
@@ -33,7 +41,7 @@ def main():
         
         # Synthesize audio. lang="hi" is forced as per user request:
         # "use only hindi/hi in language no other voice"
-        wav, duration = tts.synthesize(text, voice_style=style, lang="hi")
+        wav, duration = tts.synthesize(cleaned_text, voice_style=style, lang="hi")
         
         # Save output
         tts.save_audio(wav, output_path)

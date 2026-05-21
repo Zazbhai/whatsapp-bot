@@ -369,7 +369,7 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
   let voiceName = userEntry ? userEntry.voiceName : null;
   const demanded = userEntry ? !!userEntry.demandedVoiceNote : false;
   
-  if (demanded && isPureHindi(replyText)) {
+  if (isPureHindi(replyText)) {
     if (!voiceName) {
       const voices = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'];
       const shuffled = [...voices].sort(() => Math.random() - 0.5);
