@@ -1508,12 +1508,12 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
   ];
 
   const openrouterModels = [
-    process.env.LLM_MODEL || 'openrouter/free',
-    'openrouter/free',
+    process.env.LLM_MODEL || 'openai/gpt-oss-120b:free',
     'openai/gpt-oss-120b:free',
     'nvidia/nemotron-3-super-120b-a12b:free',
     'qwen/qwen3-next-80b-a3b-instruct:free',
-    'meta-llama/llama-3.3-70b-instruct:free'
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'openrouter/free'
   ];
 
   const groqModels = [
