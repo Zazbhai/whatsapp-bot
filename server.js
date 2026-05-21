@@ -171,8 +171,45 @@ if (instancesList.length === 0) {
     aiApkInstructions: '',
     aiApkPreamble: '',
     aiSmartApkEnabled: true,
+    autoWelcomeMessage: '',
     createdAt: new Date().toISOString()
   };
+  instancesList.push(defaultInstance);
+  saveInstances(instancesList);
+}
+
+// Seen users cache to track who has received the welcome message
+const seenUsersCache = {};
+
+function loadSeenUsers(slug) {
+  if (seenUsersCache[slug]) return seenUsersCache[slug];
+  try {
+    const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+    if (!fs.existsSync(filePath)) {
+      seenUsersCache[slug] = [];
+      return seenUsersCache[slug];
+    }
+    const data = fs.readFileSync(filePath, 'utf8');
+    seenUsersCache[slug] = JSON.parse(data) || [];
+  } catch (err) {
+    console.error(`Failed to load seen users for ${slug}:`, err);
+    seenUsersCache[slug] = [];
+  }
+  return seenUsersCache[slug];
+}
+
+function saveSeenUser(slug, number) {
+  const users = loadSeenUsers(slug);
+  if (!users.includes(number)) {
+    users.push(number);
+    try {
+      const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+      fs.promises.writeFile(filePath, JSON.stringify(users), 'utf8')
+        .catch(err => console.error(`Async seen users write failed for ${slug}:`, err));
+    } catch (err) {
+      console.error(`Failed to save seen users for ${slug}:`, err);
+    }
+  }
 }
 
 // Helper to add logs to specific bot instance
@@ -373,7 +410,7 @@ function removeIgnoredUser(number) {
 // Configurable thresholds
 const SPAM_MSG_LIMIT    = 5;          // messages within the window before flagging as spam
 const SPAM_WINDOW_MS    = 30 * 1000;  // 30-second rolling window
-const SPAM_COOLDOWN_MS  = 10 * 60 * 1000; // 10-minute mute duration
+const SPAM_COOLDOWN_MS  = 2 * 60 * 1000; // 2-minute mute duration
 
 // In-memory per-instance tracking (cleared on restart — intentional, lightweight)
 // spamTracker[slug][number] = [timestamp, timestamp, ...]
@@ -811,6 +848,12 @@ function enqueueAIReply(slug, senderNumber, msg) {
     clearTimeout(pendingDebounces[userLockKey].timer);
   }
   
+  let delay = 2000;
+  if (isSpamCoolingDown(slug, senderNumber)) {
+    const until = spamCooldowns[slug][senderNumber];
+    delay = Math.max(2000, until - Date.now());
+  }
+  
   pendingDebounces[userLockKey].timer = setTimeout(() => {
     const data = pendingDebounces[userLockKey];
     delete pendingDebounces[userLockKey];
@@ -1109,6 +1152,29 @@ function initApiKeysRegistryIfEmpty() {
 // Initialize the API keys registry on startup
 initApiKeysRegistry();
 
+function flushKeyQueue() {
+  const now = Date.now();
+  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
+
+  let i = 0;
+  while (i < pendingKeyRequests.length) {
+    const req = pendingKeyRequests[i];
+    const nextKey = reserveApiKey(req.attemptedKeys);
+    if (nextKey) {
+      req.resolve(nextKey);
+      pendingKeyRequests.splice(i, 1);
+    } else {
+      const untriedKeys = activeKeys.filter(k => !req.attemptedKeys.has(k.key));
+      if (untriedKeys.length === 0) {
+        req.resolve(null);
+        pendingKeyRequests.splice(i, 1);
+      } else {
+        i++;
+      }
+    }
+  }
+}
+
 function putKeyOnCooldown(keyString) {
   const cooldowns = loadCooldowns();
   const cooldownUntil = Date.now() + 24 * 60 * 60 * 1000; // 24 hours cooldown
@@ -1118,6 +1184,8 @@ function putKeyOnCooldown(keyString) {
   if (apiKeysRegistry[keyString]) {
     apiKeysRegistry[keyString].cooldownUntil = cooldownUntil;
   }
+  
+  flushKeyQueue();
 }
 
 function reserveApiKey(attemptedKeys = new Set()) {
@@ -1161,6 +1229,15 @@ function acquireApiKey(attemptedKeys) {
   if (key) {
     return Promise.resolve(key);
   }
+
+  const now = Date.now();
+  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
+  const untriedKeys = activeKeys.filter(k => !attemptedKeys.has(k.key));
+  
+  if (untriedKeys.length === 0) {
+    return Promise.resolve(null);
+  }
+
   return new Promise(resolve => {
     pendingKeyRequests.push({ resolve, attemptedKeys });
   });
@@ -1170,22 +1247,7 @@ function releaseApiKey(keyObj) {
   if (keyObj) {
     keyObj.busy = false;
   }
-  
-  if (pendingKeyRequests.length > 0) {
-    let foundIndex = -1;
-    for (let i = 0; i < pendingKeyRequests.length; i++) {
-      const req = pendingKeyRequests[i];
-      const nextKey = reserveApiKey(req.attemptedKeys);
-      if (nextKey) {
-        foundIndex = i;
-        req.resolve(nextKey);
-        break;
-      }
-    }
-    if (foundIndex !== -1) {
-      pendingKeyRequests.splice(foundIndex, 1);
-    }
-  }
+  flushKeyQueue();
 }
 
 // Native LLM Requester with global concurrency key load balancing, Hugging Face priority, and 24-hr cooldown
@@ -1199,8 +1261,8 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
 
   // Fallback model chains
   const hfModels = [
-    process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V3',
-    'deepseek-ai/DeepSeek-V3',
+    process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V4-Flash:novita',
+    'deepseek-ai/DeepSeek-V4-Flash:novita',
     'meta-llama/Llama-3.3-70B-Instruct',
     'Qwen/Qwen2.5-72B-Instruct'
   ];
@@ -1247,6 +1309,10 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
 
     // Acquire key from pool (waits/queues if all are busy or cooldowned)
     const keyObj = await acquireApiKey(attemptedKeys);
+    if (!keyObj) {
+      logInstanceEvent(slug, 'system', 'No available keys could be acquired (all attempted or cooldowned).');
+      break;
+    }
     const activeApiKey = keyObj.key;
     const provider = keyObj.provider;
     const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
@@ -1397,7 +1463,7 @@ async function transcribeAudio(slug, media) {
     logInstanceEvent(slug, 'system', `No active Hugging Face tokens available. Using local offline Google engine...`);
   }
 
-  // 2. Fallback to Local Offline Python-based Google Speech Engine
+  // 2. Fallback to Direct Node.js Google Speech API Integration
   let format = 'ogg';
   if (media.mimetype) {
     const mainMime = media.mimetype.split(';')[0].toLowerCase();
@@ -1409,47 +1475,81 @@ async function transcribeAudio(slug, media) {
     else if (mainMime.includes('ogg')) format = 'ogg';
   }
 
-  // Create a unique temporary audio file in data directory
+  // Create unique temporary files in data directory
   const tempId = Math.random().toString(36).substring(7);
   const tempFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.${format}`);
+  const flacFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.flac`);
   
   try {
-    logInstanceEvent(slug, 'system', `Saving voice note buffer to temporary file: "${path.basename(tempFile)}"`);
+    logInstanceEvent(slug, 'system', `Saving voice note buffer to temporary file...`);
     fs.writeFileSync(tempFile, Buffer.from(media.data, 'base64'));
 
-    logInstanceEvent(slug, 'system', `Executing local Python offline SpeechRecognition script...`);
+    logInstanceEvent(slug, 'system', `Converting audio to FLAC via FFmpeg for Google Speech API...`);
     
-    const transcription = await new Promise((resolve, reject) => {
-      // Support Python execution dynamically (configured in .env, falling back to process defaults)
-      const pythonCmd = process.env.PYTHON_PATH || (process.platform === 'win32' ? 'python' : 'python3');
-      const cmd = `${pythonCmd} transcribe.py "${tempFile}"`;
-      
+    await new Promise((resolve, reject) => {
+      // Use FFmpeg to convert input to mono 16kHz FLAC required by Google API
+      const cmd = `ffmpeg -y -i "${tempFile}" -ac 1 -ar 16000 -f flac "${flacFile}"`;
       exec(cmd, (error, stdout, stderr) => {
         if (error) {
           return reject(new Error(stderr.trim() || error.message));
         }
-        resolve(stdout.trim());
+        resolve();
       });
     });
 
-    if (transcription) {
-      logInstanceEvent(slug, 'system', `Local offline Google transcription completed successfully!`);
-      return transcription;
+    logInstanceEvent(slug, 'system', `Executing direct Google Speech API fetch...`);
+    
+    const flacBuffer = fs.readFileSync(flacFile);
+    const key = 'AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw';
+    const res = await fetch(`http://www.google.com/speech-api/v2/recognize?lang=en-US&client=chromium&key=${key}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'audio/x-flac; rate=16000',
+        'User-Agent': 'Mozilla/5.0'
+      },
+      body: flacBuffer
+    });
+
+    if (!res.ok) {
+       throw new Error(`Google Speech API returned status ${res.status}: ${await res.text()}`);
+    }
+
+    const textResponse = await res.text();
+    let finalTranscription = null;
+
+    // Parse the multiple newline-separated JSON objects
+    const lines = textResponse.split('\n').filter(l => l.trim().length > 0);
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.result && parsed.result.length > 0) {
+          const alt = parsed.result[0].alternative;
+          if (alt && alt.length > 0 && alt[0].transcript) {
+            finalTranscription = alt[0].transcript.trim();
+          }
+        }
+      } catch (e) {
+        // ignore malformed lines
+      }
+    }
+
+    if (finalTranscription) {
+      logInstanceEvent(slug, 'system', `Direct Node.js Google transcription completed successfully!`);
+      return finalTranscription;
     } else {
-      logInstanceEvent(slug, 'system', `Local transcription returned empty text (audio might be silent or unclear).`);
+      logInstanceEvent(slug, 'system', `Google Speech API returned empty text (audio might be silent or unclear).`);
       return null;
     }
   } catch (err) {
-    logInstanceEvent(slug, 'error', `Local offline transcription failed: ${err.message}`);
+    logInstanceEvent(slug, 'error', `Direct Node.js transcription failed: ${err.message}`);
     return null;
   } finally {
     // Force cleanup of temporary files to prevent disk leakages
     if (fs.existsSync(tempFile)) {
-      try {
-        fs.unlinkSync(tempFile);
-      } catch (cleanupErr) {
-        console.error(`[SYSTEM] Failed to clean up temp transcribe file: ${cleanupErr.message}`);
-      }
+      try { fs.unlinkSync(tempFile); } catch (e) {}
+    }
+    if (fs.existsSync(flacFile)) {
+      try { fs.unlinkSync(flacFile); } catch (e) {}
     }
   }
 }
@@ -1592,6 +1692,24 @@ function initInstanceClient(slug) {
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
 
+    // --- NEW GROUP WHITELIST LOGIC ---
+    if (msg.from.endsWith('@g.us')) {
+      const allowedGroupsEnv = process.env.ALLOWED_APK_GROUPS || '';
+      const allowedGroups = allowedGroupsEnv.split(',').map(g => g.trim().toLowerCase()).filter(Boolean);
+      
+      if (allowedGroups.length > 0) {
+        let chatName = '';
+        try { 
+          const chat = await msg.getChat();
+          chatName = (chat.name || '').trim().toLowerCase();
+        } catch (e) {}
+        
+        if (!allowedGroups.includes(chatName)) {
+           return; // Ignore message from non-whitelisted group
+        }
+      }
+    }
+
     // Check if user is in the bot's ignore list — silently drop, no reply, no delete (delete triggers new events = infinite loop)
     const senderNumber = msg.from.split('@')[0];
     const ignoredList = loadIgnoredUsers();
@@ -1603,13 +1721,7 @@ function initInstanceClient(slug) {
     // Track message rate for spam detection (but do NOT block yet — auto-responders must still fire)
     const justTriggeredSpam = recordSpamMessage(slug, senderNumber);
     if (justTriggeredSpam) {
-      logInstanceEvent(slug, 'system', `🚫 Spam threshold crossed for +${senderNumber}. Sending one-time warning. AI/auto-replies will pause for 10 minutes.`);
-      try {
-        const spamWarning = `⚠️ You've been sending too many messages too quickly.\n\nPlease wait *10 minutes* before sending more messages. Our system has temporarily paused auto-replies to your number.`;
-        await msg.reply(spamWarning);
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to send spam warning to +${senderNumber}: ${err.message}`);
-      }
+      logInstanceEvent(slug, 'system', `🚫 Spam threshold crossed for +${senderNumber}. AI/auto-replies will pause and queue for 2 minutes.`);
       // Do NOT return — auto-responders still run, only AI will be blocked below
     }
 
@@ -1625,6 +1737,20 @@ function initInstanceClient(slug) {
         saveIgnoredUser(senderNumber);
         logInstanceEvent(slug, 'system', `🚨 User +${senderNumber} added to ignore list. All future messages from this user will be silently ignored.`);
         return; // Halted completely — no delete (causes infinite loop via message re-fire)
+      }
+    }
+
+    // First-Time Auto Responder (Welcome Message) for Direct Messages
+    if (msg.from.endsWith('@c.us') && instConfig && instConfig.autoWelcomeMessage) {
+      const users = loadSeenUsers(slug);
+      if (!users.includes(senderNumber)) {
+        logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
+        try {
+          await msg.reply(instConfig.autoWelcomeMessage);
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
+        }
+        saveSeenUser(slug, senderNumber);
       }
     }
 
@@ -1907,14 +2033,13 @@ function initInstanceClient(slug) {
     }
 
     // AI Smart Auto-Responder Fallback (includes smart APK delivery)
-    // Skipped if user is currently in a spam mute cooldown
+    // Delayed if user is currently in a spam mute cooldown
     if (!ruleMatched) {
       if (aiHandlesApk) {
         if (isSpamCoolingDown(slug, senderNumber)) {
-          logInstanceEvent(slug, 'system', `⏳ AI reply skipped for +${senderNumber} — spam cooldown active.`);
-        } else {
-          enqueueAIReply(slug, senderNumber, msg);
+          logInstanceEvent(slug, 'system', `⏳ AI reply delayed for +${senderNumber} — spam cooldown active. Queueing message...`);
         }
+        enqueueAIReply(slug, senderNumber, msg);
       }
     }
   });
@@ -2073,7 +2198,8 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
     aiApkPreamble,
     aiSmartApkEnabled,
     adminForwardNumber,
-    blockTriggerText
+    blockTriggerText,
+    autoWelcomeMessage
   } = req.body;
 
   const list = loadInstances();
@@ -2091,6 +2217,7 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   if (aiSmartApkEnabled !== undefined) list[index].aiSmartApkEnabled = !!aiSmartApkEnabled;
   if (adminForwardNumber !== undefined) list[index].adminForwardNumber = adminForwardNumber.trim();
   if (blockTriggerText !== undefined) list[index].blockTriggerText = blockTriggerText.trim();
+  if (autoWelcomeMessage !== undefined) list[index].autoWelcomeMessage = autoWelcomeMessage.trim();
 
   if (saveInstances(list)) {
     res.json(list[index]);
@@ -2128,7 +2255,7 @@ app.delete('/api/instances/:slug', authenticateToken, async (req, res) => {
   delete clientStates[slug];
 
   // 2. Wipes active browser session cache
-  const authPath = path.join(__dirname, '.wwebjs_auth', `session_session_${slug}`);
+  const authPath = path.join(__dirname, '.wwebjs_auth', `session-session_${slug}`);
   if (fs.existsSync(authPath)) {
     try {
       fs.rmSync(authPath, { recursive: true, force: true });
@@ -2497,7 +2624,7 @@ app.post('/api/logout', authenticateToken, requireInstance, async (req, res) => 
       await client.logout();
     }
     
-    const authPath = path.join(__dirname, '.wwebjs_auth', `session_session_${slug}`);
+    const authPath = path.join(__dirname, '.wwebjs_auth', `session-session_${slug}`);
     if (fs.existsSync(authPath)) {
       setTimeout(() => {
         try {
