@@ -5,3 +5,5 @@ uploads/*
 !uploads/.gitkeep
 .env
 data/
+*.wav
+*.ogg

@@ -223,6 +223,182 @@ function saveSeenUser(slug, number) {
   }
 }
 
+// Helper functions for Hindi TTS voice note capability
+function isPureHindi(text) {
+  if (!text) return false;
+  // Regex to check for Devanagari script characters (Hindi alphabet)
+  const devanagariRegex = /[\u0900-\u097F]/;
+  // Ensure the text has Devanagari and does NOT contain English letters (a-z, A-Z)
+  const latinRegex = /[a-zA-Z]/;
+  return devanagariRegex.test(text) && !latinRegex.test(text);
+}
+
+function updateUserVoiceSettings(slug, senderNumber, updateFields) {
+  const users = loadSeenUsers(slug);
+  let userEntry = users.find(u => u.number === senderNumber);
+  let changed = false;
+  if (!userEntry) {
+    userEntry = { number: senderNumber, firstSeen: Date.now() };
+    users.push(userEntry);
+    changed = true;
+  }
+  for (const [key, value] of Object.entries(updateFields)) {
+    if (userEntry[key] !== value) {
+      userEntry[key] = value;
+      changed = true;
+    }
+  }
+  if (changed) {
+    try {
+      const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+    } catch (err) {
+      console.error(`Failed to update seen users settings for ${slug}:`, err);
+    }
+  }
+  return userEntry;
+}
+
+function checkAndSetVoiceNoteDemand(slug, senderNumber, msg) {
+  if (!msg.from.endsWith('@c.us')) return;
+  
+  const isPtt = msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio');
+  const bodyText = msg.body || '';
+  const bodyLower = bodyText.toLowerCase().trim();
+  
+  // ASCII words with word boundaries to avoid false positives (e.g. matching "bol" in "symbol")
+  const asciiRegex = /\b(voice|audio|suno|bol|understand|samajh|samjha|samjh|awaaz|awaj|boliye|suna|sound)\b/i;
+  // Pure Hindi Devanagari keywords
+  const devanagariKeywords = ['समझ', 'बोल', 'सुन', 'आवाज़', 'आवाज', 'ऑडियो', 'वॉइस', 'वायस', 'ध्वनि', 'भेजो', 'सुनाओ'];
+  
+  const hasVoiceDemandKeyword = asciiRegex.test(bodyLower) ||
+                                devanagariKeywords.some(kw => bodyLower.includes(kw)) ||
+                                bodyLower.includes('samajh nahi') ||
+                                bodyLower.includes('samajh nhi') ||
+                                bodyLower.includes('samjh nahi') ||
+                                bodyLower.includes('samjh nhi') ||
+                                bodyLower.includes('audio bhejo') ||
+                                bodyLower.includes('voice note bhejo') ||
+                                bodyLower.includes('samajh nahi aaya') ||
+                                bodyLower.includes('samajh nahi aya') ||
+                                bodyLower.includes('samjh nahi aaya') ||
+                                bodyLower.includes('samjh nahi aya');
+  
+  if (isPtt || hasVoiceDemandKeyword) {
+    const users = loadSeenUsers(slug);
+    const userEntry = users.find(u => u.number === senderNumber);
+    const update = { demandedVoiceNote: true };
+    if (!userEntry || !userEntry.voiceName) {
+      const voices = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'];
+      const shuffled = [...voices].sort(() => Math.random() - 0.5);
+      update.voiceName = shuffled[0];
+    }
+    const updated = updateUserVoiceSettings(slug, senderNumber, update);
+    logInstanceEvent(slug, 'system', `🔊 Voice note demand triggered for +${senderNumber}. (Voice style: ${updated.voiceName})`);
+  }
+}
+
+async function handleVoiceTtsReply(slug, msg, text, voiceName) {
+  const { exec } = require('child_process');
+  const tempId = Math.random().toString(36).substring(7);
+  const textFilePath = path.join(uploadDir, `tts_text_${slug}_${tempId}.txt`);
+  const wavPath = path.join(uploadDir, `tts_${slug}_${tempId}.wav`);
+  const oggPath = path.join(uploadDir, `tts_${slug}_${tempId}.ogg`);
+
+  try {
+    logInstanceEvent(slug, 'system', `Generating Hindi TTS for +${msg.from.split('@')[0]} using voice "${voiceName}"...`);
+    
+    // Write text to temp file to bypass Windows console escaping issues
+    fs.writeFileSync(textFilePath, text, 'utf8');
+
+    // Run Python TTS generator
+    await new Promise((resolve, reject) => {
+      const pythonCmd = `python generate_tts.py "${textFilePath}" "${voiceName}" "${wavPath}"`;
+      exec(pythonCmd, (err, stdout, stderr) => {
+        if (err) {
+          logInstanceEvent(slug, 'error', `Python TTS script output: ${stdout}`);
+          logInstanceEvent(slug, 'error', `Python TTS script error: ${stderr}`);
+          return reject(new Error(`Python TTS execution failed: ${err.message}`));
+        }
+        resolve();
+      });
+    });
+
+    // Convert WAV to OGG via FFmpeg
+    await new Promise((resolve, reject) => {
+      const ffmpegCmd = `ffmpeg -y -i "${wavPath}" -c:a libopus "${oggPath}"`;
+      exec(ffmpegCmd, (err, stdout, stderr) => {
+        if (err) {
+          return reject(new Error(`FFmpeg audio conversion failed: ${err.message}`));
+        }
+        resolve();
+      });
+    });
+
+    // Load OGG media and send
+    if (fs.existsSync(oggPath)) {
+      const media = MessageMedia.fromFilePath(oggPath);
+      const chat = await msg.getChat();
+      await chat.sendStateTyping();
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await msg.reply(media, undefined, { sendAudioAsVoice: true });
+      logInstanceEvent(slug, 'send', `Dispatched TTS Hindi voice note to +${msg.from.split('@')[0]}`);
+    } else {
+      throw new Error("Generated OGG file not found.");
+    }
+  } catch (err) {
+    logInstanceEvent(slug, 'error', `Failed to generate and send voice note: ${err.message}`);
+    throw err;
+  } finally {
+    // Clean up temporary files asynchronously
+    setTimeout(() => {
+      try { if (fs.existsSync(textFilePath)) fs.unlinkSync(textFilePath); } catch (e) {}
+      try { if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath); } catch (e) {}
+      try { if (fs.existsSync(oggPath)) fs.unlinkSync(oggPath); } catch (e) {}
+    }, 5000);
+  }
+}
+
+async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
+  if (!replyText) return;
+  
+  const senderNumber = msg.from.split('@')[0];
+  const users = loadSeenUsers(slug);
+  const userEntry = users.find(u => u.number === senderNumber);
+  
+  let voiceName = userEntry ? userEntry.voiceName : null;
+  const demanded = userEntry ? !!userEntry.demandedVoiceNote : false;
+  
+  if (demanded && isPureHindi(replyText)) {
+    if (!voiceName) {
+      const voices = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'];
+      const shuffled = [...voices].sort(() => Math.random() - 0.5);
+      voiceName = shuffled[0];
+      updateUserVoiceSettings(slug, senderNumber, { voiceName });
+    }
+    
+    try {
+      await handleVoiceTtsReply(slug, msg, replyText, voiceName);
+      return;
+    } catch (err) {
+      logInstanceEvent(slug, 'error', `Fallback to text message due to TTS error: ${err.message}`);
+    }
+  }
+  
+  // If not demanded, not pure Hindi, or TTS fails, send as normal text
+  if (isWelcome) {
+    await msg.reply(replyText);
+  } else if (chat) {
+    await Promise.race([
+      chat.sendMessage(replyText),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending reply")), 15000))
+    ]);
+  } else {
+    await msg.reply(replyText);
+  }
+}
+
+
 // Automatically check and mute/ignore users older than configured threshold
 async function checkAndAutoMuteUsers(slug) {
   try {
@@ -963,10 +1139,7 @@ async function processAIUserQueue(userLockKey) {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1000));
-          await Promise.race([
-            chat.sendMessage(`✅ Great! Your order has been registered. Our team will process it shortly. Thank you! 😊`),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending order confirm")), 15000))
-          ]);
+          await sendSmartReply(slug, msg, chat, `✅ Great! Your order has been registered. Our team will process it shortly. Thank you! 😊`);
           logInstanceEvent(slug, 'send', `Order confirmed farewell message sent to +${senderNumber}`);
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmed message to +${senderNumber}: ${err.message}`);
@@ -983,10 +1156,7 @@ async function processAIUserQueue(userLockKey) {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1000));
-          await Promise.race([
-            chat.sendMessage(`No worries! Let me know when you're ready to place your order and I'll help you out 😊`),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending no-order")), 15000))
-          ]);
+          await sendSmartReply(slug, msg, chat, `No worries! Let me know when you're ready to place your order and I'll help you out 😊`);
           addToMemory(slug, senderNumber, 'user', msg.body);
           addToMemory(slug, senderNumber, 'assistant', `No worries! Let me know when you're ready to place your order and I'll help you out 😊`);
         } catch (err) {
@@ -1004,10 +1174,7 @@ async function processAIUserQueue(userLockKey) {
         const chat = await msg.getChat();
         await chat.sendStateTyping();
         await new Promise(resolve => setTimeout(resolve, 1500));
-        await Promise.race([
-          chat.sendMessage(processReply),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending process reply")), 15000))
-        ]);
+        await sendSmartReply(slug, msg, chat, processReply);
         logInstanceEvent(slug, 'send', `Process reply sent to +${senderNumber}`);
         addToMemory(slug, senderNumber, 'user', msg.body);
         addToMemory(slug, senderNumber, 'assistant', processReply);
@@ -1083,10 +1250,7 @@ async function processAIUserQueue(userLockKey) {
         await chat.sendStateTyping();
         await new Promise(resolve => setTimeout(resolve, 1500));
 
-        await Promise.race([
-          chat.sendMessage(replyText),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending AI reply")), 15000))
-        ]);
+        await sendSmartReply(slug, msg, chat, replyText);
         logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${replyText.replace(/\n/g, ' ')}"`);
 
         addToMemory(slug, senderNumber, 'user', msg.body);
@@ -1121,10 +1285,7 @@ async function processAIUserQueue(userLockKey) {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1200));
-          await Promise.race([
-            chat.sendMessage(confirmationQ),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending confirmation Q")), 15000))
-          ]);
+          await sendSmartReply(slug, msg, chat, confirmationQ);
           logInstanceEvent(slug, 'send', `Order confirmation question sent to +${senderNumber}`);
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmation question to +${senderNumber}: ${err.message}`);
@@ -1814,7 +1975,7 @@ function initInstanceClient(slug) {
         if (instConfig && instConfig.autoWelcomeMessage) {
           logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
           try {
-            await msg.reply(instConfig.autoWelcomeMessage);
+            await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
             
             if (instConfig.autoWelcomeSendApk) {
               logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
@@ -1929,6 +2090,9 @@ function initInstanceClient(slug) {
         logInstanceEvent(slug, 'error', `Voice note transcription failed: ${err.message}`);
       }
     }
+
+    // Check if the user is demanding a voice note
+    checkAndSetVoiceNoteDemand(slug, senderNumber, msg);
 
     // Return early if message contains no text content (e.g. captionless images/documents)
     if (!msg.body) return;
@@ -2053,7 +2217,7 @@ function initInstanceClient(slug) {
               const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
               await msg.reply(menuButtons);
             } else {
-              await msg.reply(replyText);
+              await sendSmartReply(slug, msg, null, replyText);
             }
 
             logInstanceEvent(slug, 'send', `Replied sequentially [${i + 1}/${textReplies.length}] to +${senderNumber}: "${replyText.substring(0, 80)}"`);
