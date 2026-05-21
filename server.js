@@ -233,6 +233,49 @@ function saveSeenUser(slug, number, name = '') {
   }
 }
 
+function detectUserLanguage(text) {
+  if (!text) return 'en';
+  const clean = text.toLowerCase().trim();
+  
+  // If it has Devanagari script, it's definitely Hindi
+  if (/[\u0900-\u097F]/.test(text)) {
+    return 'hi';
+  }
+  
+  // Common Hinglish keywords
+  const hinglishKeywords = [
+    'kya', 'hai', 'ho', 'gaya', 'kar', 'diya', 'tha', 'rha', 'raha', 'nhi', 'nahi', 
+    'hua', 'kaise', 'kab', 'bhejo', 'dedo', 'chahiye', 'pe', 'se', 'par', 'ko', 
+    'karo', 'karke', 'apna', 'apni', 'tum', 'aap', 'kaise', 'kab', 'kaha', 'kahan',
+    'sahi', 'galat', 'baat', 'bol', 'batao', 'sunao', 'hawa', 'garam', 'chal', 'chala'
+  ];
+  
+  const words = clean.split(/\s+/);
+  const isHinglish = words.some(w => hinglishKeywords.includes(w));
+  if (isHinglish) {
+    return 'hinglish';
+  }
+  
+  return 'en';
+}
+
+function detectUserLanguageFromHistory(slug, number, currentMessageText) {
+  let lang = detectUserLanguage(currentMessageText);
+  if (lang !== 'en') return lang;
+  
+  const recentHistory = getConversationHistory(slug, number);
+  const userMessages = recentHistory.filter(m => m.role === 'user').map(m => m.content);
+  
+  for (let i = userMessages.length - 1; i >= 0; i--) {
+    const historicalLang = detectUserLanguage(userMessages[i]);
+    if (historicalLang !== 'en') {
+      return historicalLang;
+    }
+  }
+  
+  return 'en';
+}
+
 // Helper functions for Hindi TTS voice note capability
 function isPureHindi(text) {
   if (!text) return false;
@@ -1155,21 +1198,33 @@ async function processAIUserQueue(userLockKey) {
     // ── Order confirmation reply intercept (after [ASK_ORDER] was sent) ──────
     // If the user replies Yes/No to the order confirmation question, handle it directly
     const bodyLower = (msg.body || '').toLowerCase().trim();
-    const isYesReply = /^(yes|yep|yeah|yup|haan|ha|han|ji|done|ji ha|ji haan|hnji|confirmed|order ho gaya|order hua|placed|order place|order placed|ho gaya|ho gya|kar diya|kar di|kiya|laga diya)$/i.test(bodyLower);
-    const isNoReply  = /^(no|nope|nahi|nhi|na|nope|abhi nahi|baad mein|later|not yet|nope)$/i.test(bodyLower);
+    const isYesReply = /^(yes|yep|yeah|yup|haan|ha|han|ji|done|ji ha|ji haan|hnji|confirmed|order ho gaya|order hua|placed|order place|order placed|ho gaya|ho gya|kar diya|kar di|kiya|laga diya|हाँ|हाँ, कर दिया)$/i.test(bodyLower);
+    const isNoReply  = /^(no|nope|nahi|nhi|na|nope|abhi nahi|baad mein|later|not yet|nope|नहीं|नहीं, अभी नहीं)$/i.test(bodyLower);
     if (isYesReply) {
       // Check if recent chat history had an ASK_ORDER question (last bot message)
       const recentHistory = getConversationHistory(slug, senderNumber);
       const lastBotMsg = [...recentHistory].reverse().find(m => m.role === 'assistant');
       const lastBotText = (lastBotMsg && lastBotMsg.content) || '';
-      if (lastBotText.includes('Did you successfully place your iPhone order')) {
+      const isAskOrderQ = lastBotText.includes('Did you successfully place your iPhone order') ||
+                          lastBotText.includes('Kya aapne app par iPhone order') ||
+                          lastBotText.includes('क्या आपने ऐप पर iPhone ऑर्डर');
+      if (isAskOrderQ) {
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} confirmed iPhone order via Yes reply. Adding to ignore list.`);
         saveIgnoredUser(senderNumber);
         try {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1000));
-          await sendSmartReply(slug, msg, chat, `✅ Great! Your order has been registered. Our team will process it shortly. Thank you! 😊`);
+          
+          const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+          let yesResponse = `✅ Great! Your order has been registered. Our team will process it shortly. Thank you! 😊`;
+          if (userLang === 'hinglish') {
+            yesResponse = `✅ Great! Aapka order register ho gaya hai. Hamari team isse jaldi hi process karegi. Thank you! 😊`;
+          } else if (userLang === 'hi') {
+            yesResponse = `✅ बहुत बढ़िया! आपका ऑर्डर रजिस्टर हो गया है। हमारी टीम जल्द ही इसे प्रोसेस करेगी। धन्यवाद! 😊`;
+          }
+          
+          await sendSmartReply(slug, msg, chat, yesResponse);
           logInstanceEvent(slug, 'send', `Order confirmed farewell message sent to +${senderNumber}`);
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmed message to +${senderNumber}: ${err.message}`);
@@ -1180,15 +1235,27 @@ async function processAIUserQueue(userLockKey) {
       const recentHistory = getConversationHistory(slug, senderNumber);
       const lastBotMsg = [...recentHistory].reverse().find(m => m.role === 'assistant');
       const lastBotText = (lastBotMsg && lastBotMsg.content) || '';
-      if (lastBotText.includes('Did you successfully place your iPhone order')) {
+      const isAskOrderQ = lastBotText.includes('Did you successfully place your iPhone order') ||
+                          lastBotText.includes('Kya aapne app par iPhone order') ||
+                          lastBotText.includes('क्या आपने ऐप पर iPhone ऑर्डर');
+      if (isAskOrderQ) {
         logInstanceEvent(slug, 'system', `ℹ️ User +${senderNumber} replied No to order confirmation. Continuing normal replies.`);
         try {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1000));
-          await sendSmartReply(slug, msg, chat, `No worries! Let me know when you're ready to place your order and I'll help you out 😊`);
+          
+          const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+          let noResponse = `No worries! Let me know when you're ready to place your order and I'll help you out 😊`;
+          if (userLang === 'hinglish') {
+            noResponse = `Koi baat nahi! Jab aap order karne ke liye ready ho jayein toh mujhe batayein, main aapki help karunga 😊`;
+          } else if (userLang === 'hi') {
+            noResponse = `कोई बात नहीं! जब आप ऑर्डर करने के लिए तैयार हों तो मुझे बताएं, मैं आपकी मदद करूँगा 😊`;
+          }
+          
+          await sendSmartReply(slug, msg, chat, noResponse);
           addToMemory(slug, senderNumber, 'user', msg.body);
-          addToMemory(slug, senderNumber, 'assistant', `No worries! Let me know when you're ready to place your order and I'll help you out 😊`);
+          addToMemory(slug, senderNumber, 'assistant', noResponse);
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send no-order reply to +${senderNumber}: ${err.message}`);
         }
@@ -1311,31 +1378,52 @@ async function processAIUserQueue(userLockKey) {
         // AI is unsure — send a direct clarification question to the user
         logInstanceEvent(slug, 'system', `❓ [ASK_ORDER] detected for +${senderNumber}. Sending order confirmation question.`);
         try {
-          const textQuestion = `Did you successfully place your iPhone order on the app? 😊`;
+          const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+          let textQuestion = `Did you successfully place your iPhone order on the app? 😊`;
+          let buttonsList = [
+            { id: 'btn_yes', body: 'Yes' },
+            { id: 'btn_no', body: 'No' }
+          ];
+          let selectOptionText = `Please select an option`;
+          let fallbackText = `Did you successfully place your iPhone order on the app? Please reply *Yes* or *No* 😊`;
+
+          if (userLang === 'hinglish') {
+            textQuestion = `Kya aapne app par iPhone order successfully place kar diya hai? 😊`;
+            buttonsList = [
+              { id: 'btn_yes', body: 'Haan' },
+              { id: 'btn_no', body: 'Nahi' }
+            ];
+            selectOptionText = `Ek option select karein`;
+            fallbackText = `Kya aapne app par iPhone order successfully place kar diya hai? Please *Haan* ya *Nahi* reply karein 😊`;
+          } else if (userLang === 'hi') {
+            textQuestion = `क्या आपने ऐप पर iPhone ऑर्डर सफलतापूर्वक प्लेस कर दिया है? 😊`;
+            buttonsList = [
+              { id: 'btn_yes', body: 'हाँ' },
+              { id: 'btn_no', body: 'नहीं' }
+            ];
+            selectOptionText = `कृपया एक विकल्प चुनें`;
+            fallbackText = `क्या आपने ऐप पर iPhone ऑर्डर सफलतापूर्वक प्लेस कर दिया है? कृपया *हाँ* या *नहीं* लिखकर जवाब दें 😊`;
+          }
+
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1200));
           
           try {
             // Attempt to send as interactive buttons
-            const buttonsList = [
-              { id: 'btn_yes', body: 'Yes' },
-              { id: 'btn_no', body: 'No' }
-            ];
             const confirmationQ = new Buttons(
               textQuestion,
               buttonsList,
               null,
-              `Please select an option`
+              selectOptionText
             );
             await msg.reply(confirmationQ);
-            logInstanceEvent(slug, 'send', `Order confirmation question (with buttons) sent to +${senderNumber}`);
+            logInstanceEvent(slug, 'send', `Order confirmation question (with buttons) sent to +${senderNumber} in language: ${userLang}`);
           } catch (btnErr) {
             // Fallback to sending standard text if buttons fail
             logInstanceEvent(slug, 'system', `Failed to send buttons, falling back to text: ${btnErr.message}`);
-            const fallbackText = `Did you successfully place your iPhone order on the app? Please reply *Yes* or *No* 😊`;
             await sendSmartReply(slug, msg, chat, fallbackText);
-            logInstanceEvent(slug, 'send', `Order confirmation question (text fallback) sent to +${senderNumber}`);
+            logInstanceEvent(slug, 'send', `Order confirmation question (text fallback) sent to +${senderNumber} in language: ${userLang}`);
           }
           
           // Add the confirmation question text to memory so the Yes/No intercept works
