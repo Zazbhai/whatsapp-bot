@@ -1484,59 +1484,11 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
   return null;
 }
 
-// Voice Note Transcription engine — uses a local, free, offline Python-based SpeechRecognition script
-// No API keys or external subscription/billing tokens are required!
+// Voice Note Transcription engine — uses direct Google Speech API fetch
 async function transcribeAudio(slug, media) {
   const { exec } = require('child_process');
   
-  // 1. Try Hugging Face Whisper API first if key is available
-  initApiKeysRegistryIfEmpty();
-  const now = Date.now();
-  const hfKeys = Object.values(apiKeysRegistry).filter(k => k.provider === 'huggingface' && k.cooldownUntil < now);
-  
-  if (hfKeys.length > 0) {
-    const selectedKeyObj = hfKeys[0];
-    const selectedKey = selectedKeyObj.key;
-    
-    try {
-      logInstanceEvent(slug, 'system', `Hugging Face token available. Requesting OpenAI Whisper-Large-V3-Turbo API...`);
-      const modelUrl = 'https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo';
-      
-      const response = await fetch(modelUrl, {
-        headers: { 
-          Authorization: `Bearer ${selectedKey}`,
-          'Content-Type': media.mimetype || 'audio/ogg'
-        },
-        method: 'POST',
-        body: Buffer.from(media.data, 'base64')
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result && result.text) {
-          logInstanceEvent(slug, 'system', `Hugging Face Whisper API transcription completed successfully!`);
-          return result.text.trim();
-        }
-      } else {
-        const errorText = await response.text();
-        logInstanceEvent(slug, 'system', `Hugging Face Whisper API returned error status ${response.status}: ${errorText}`);
-        
-        // Put key on cooldown if rate-limited or unauthorized
-        if (response.status === 429 || response.status === 401 || response.status === 403) {
-          putKeyOnCooldown(selectedKey);
-          logInstanceEvent(slug, 'system', `Hugging Face token put on 24h cooldown due to API response.`);
-        }
-      }
-    } catch (hfErr) {
-      logInstanceEvent(slug, 'system', `Failed to transcribe using Hugging Face Whisper API: ${hfErr.message}`);
-    }
-    
-    logInstanceEvent(slug, 'system', `Hugging Face Whisper API failed. Falling back to local offline Google engine...`);
-  } else {
-    logInstanceEvent(slug, 'system', `No active Hugging Face tokens available. Using local offline Google engine...`);
-  }
-
-  // 2. Fallback to Direct Node.js Google Speech API Integration
+  // Direct Node.js Google Speech API Integration
   let format = 'ogg';
   if (media.mimetype) {
     const mainMime = media.mimetype.split(';')[0].toLowerCase();
