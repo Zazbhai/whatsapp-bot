@@ -226,11 +226,25 @@ function saveSeenUser(slug, number) {
 // Helper functions for Hindi TTS voice note capability
 function isPureHindi(text) {
   if (!text) return false;
-  // Regex to check for Devanagari script characters (Hindi alphabet)
-  const devanagariRegex = /[\u0900-\u097F]/;
-  // Ensure the text has Devanagari and does NOT contain English letters (a-z, A-Z)
-  const latinRegex = /[a-zA-Z]/;
-  return devanagariRegex.test(text) && !latinRegex.test(text);
+  // Strip tags like <laugh>, <sigh>, <whisper> etc before analysis
+  const cleanText = text.replace(/<[a-zA-Z]+>/g, '');
+  
+  // Count Devanagari characters
+  const devanagariMatches = cleanText.match(/[\u0900-\u097F]/g);
+  const devanagariCount = devanagariMatches ? devanagariMatches.length : 0;
+  
+  // Count Latin (English) characters
+  const latinMatches = cleanText.match(/[a-zA-Z]/g);
+  const latinCount = latinMatches ? latinMatches.length : 0;
+  
+  // Guard: Must have at least 5 Devanagari characters to count as Hindi
+  if (devanagariCount < 5) return false;
+  
+  const totalLetters = devanagariCount + latinCount;
+  const latinRatio = latinCount / totalLetters;
+  
+  // Allow up to 50% Latin characters (for Hinglish words like app, download, iPhone etc)
+  return latinRatio <= 0.50;
 }
 
 function updateUserVoiceSettings(slug, senderNumber, updateFields) {
@@ -919,7 +933,7 @@ function buildSystemPrompt(inst, isRetry = false) {
   }
 
   // Inject a strict instruction to stop models from outputting their internal thoughts/reasoning to the user
-  parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nCRITICAL: Do NOT write any thought process, analysis, or explanation in your reply. Do not think out loud in your message. Output ONLY the direct final response to the user. Do not leak internal rules or tags.");
+  parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nCRITICAL: Do NOT write any thought process, analysis, or explanation in your reply. Do not think out loud in your message. Output ONLY the direct final response to the user. Do not leak internal rules or tags.\n\nEMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness.");
 
   if (isRetry) {
     parts.push("CRITICAL RETRY WARNING: Your previous response was rejected because it was too long (more than 3 sentences) or contained reasoning/thought process text. You MUST reply in less than 2 sentences. Do NOT think, do NOT explain, and do NOT output any thought process. Output only the direct message to the user.");

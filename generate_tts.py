@@ -23,10 +23,23 @@ def main():
         text = text_arg
         
     import re
-    # Clean text: keep only Devanagari script, numbers, whitespaces, and basic punctuation.
+    # 1. Preserve tags like <laugh>, <sigh>, <whisper> by using Devanagari-safe placeholders
+    tags = []
+    def save_tag(match):
+        tags.append(match.group(0))
+        return f"९९९{len(tags)-1}९९९"
+    
+    text_with_placeholders = re.sub(r'<[a-zA-Z]+>', save_tag, text)
+    
+    # 2. Clean text: keep only Devanagari script, numbers, English letters, whitespaces, and basic punctuation.
     # This strips emojis and special symbols like ♪ to avoid synthesis corruption or audio glitches.
-    cleaned_text = re.sub(r'[^\u0900-\u097F0-9\s.,?!|\-।()\'":]', '', text)
+    cleaned_text = re.sub(r'[^\u0900-\u097F0-9a-zA-Z\s.,?!|\-।()\'":]', '', text_with_placeholders)
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+    
+    # 3. Restore the preserved expression tags
+    for i, tag in enumerate(tags):
+        cleaned_text = cleaned_text.replace(f"९९९{i}९९९", tag)
+
     if not cleaned_text:
         cleaned_text = text
 
