@@ -354,6 +354,15 @@
               <span class="toggle-slider"></span>
               <span class="toggle-label">Auto-attach cached APK with Welcome Message</span>
             </label>
+            <div style="display: flex; align-items: center; gap: 8px; margin-top: 10px; margin-bottom: 10px; flex-wrap: wrap;">
+              <label class="toggle-container" style="margin-bottom: 0;">
+                <input type="checkbox" id="auto-mute-older-12h-toggle">
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Auto-mute/ignore users older than</span>
+              </label>
+              <input type="number" id="auto-mute-hours-input" min="1" max="8760" value="12" style="width: 65px; padding: 6px 8px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--panel-border); border-radius: 6px; color: var(--text-light); text-align: center; font-size: 0.85rem; font-family: inherit; outline: none; transition: border-color var(--transition-speed);">
+              <span style="font-size: 0.85rem; color: var(--text-muted);">hours</span>
+            </div>
             <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
                <button class="btn btn-primary btn-sm" id="save-welcome-btn">Save Welcome Settings</button>
             </div>
@@ -462,6 +471,30 @@
                 <i data-lucide="save" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                 <span>Save Block Trigger</span>
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auto-Muted Users Panel -->
+        <div class="glass-card full-width-card" style="margin-bottom: 25px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+               <i data-lucide="volume-x" style="color: #ff9500; width: 24px; height: 24px;"></i>
+               <div>
+                 <h3 style="margin: 0;">Auto-Muted Users</h3>
+                 <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Users automatically muted/ignored after the threshold limit. Admins can unmute them here.</p>
+               </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="refresh-auto-muted-btn" type="button">
+              <i data-lucide="refresh-cw" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+              <span>Refresh</span>
+            </button>
+          </div>
+          <div style="margin-top: 15px;">
+            <div id="auto-muted-users-list" style="display: flex; flex-direction: column; gap: 8px;">
+              <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0; text-align: center; padding: 12px;">
+                Click <strong>Refresh</strong> to load auto-muted users.
+              </p>
             </div>
           </div>
         </div>

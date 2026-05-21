@@ -173,6 +173,8 @@ if (instancesList.length === 0) {
     aiSmartApkEnabled: true,
     autoWelcomeMessage: '',
     autoWelcomeSendApk: false,
+    autoMuteOlderThan12Hours: false,
+    autoMuteHours: 12,
     createdAt: new Date().toISOString()
   };
   instancesList.push(defaultInstance);
@@ -191,7 +193,14 @@ function loadSeenUsers(slug) {
       return seenUsersCache[slug];
     }
     const data = fs.readFileSync(filePath, 'utf8');
-    seenUsersCache[slug] = JSON.parse(data) || [];
+    const rawList = JSON.parse(data) || [];
+    // Migrate legacy array of strings to objects with timestamp
+    seenUsersCache[slug] = rawList.map(item => {
+      if (typeof item === 'string') {
+        return { number: item, firstSeen: Date.now() };
+      }
+      return item;
+    });
   } catch (err) {
     console.error(`Failed to load seen users for ${slug}:`, err);
     seenUsersCache[slug] = [];
@@ -201,15 +210,56 @@ function loadSeenUsers(slug) {
 
 function saveSeenUser(slug, number) {
   const users = loadSeenUsers(slug);
-  if (!users.includes(number)) {
-    users.push(number);
+  const exists = users.some(u => u.number === number);
+  if (!exists) {
+    users.push({ number, firstSeen: Date.now() });
     try {
       const filePath = path.join(dataDir, `seen_users_${slug}.json`);
-      fs.promises.writeFile(filePath, JSON.stringify(users), 'utf8')
+      fs.promises.writeFile(filePath, JSON.stringify(users, null, 2), 'utf8')
         .catch(err => console.error(`Async seen users write failed for ${slug}:`, err));
     } catch (err) {
       console.error(`Failed to save seen users for ${slug}:`, err);
     }
+  }
+}
+
+// Automatically check and mute/ignore users older than configured threshold
+async function checkAndAutoMuteUsers(slug) {
+  try {
+    const listConfig = loadInstances();
+    const instConfig = listConfig.find(i => i.slug === slug);
+    if (!instConfig || !instConfig.autoMuteOlderThan12Hours) return;
+
+    const client = activeClients[slug];
+    if (!client || !clientStates[slug] || clientStates[slug].status !== 'ready') {
+      return;
+    }
+
+    const thresholdHours = instConfig.autoMuteHours !== undefined ? Number(instConfig.autoMuteHours) : 12;
+    const cutoffMs = thresholdHours * 60 * 60 * 1000;
+    const now = Date.now();
+    const users = loadSeenUsers(slug);
+    let changed = false;
+
+    for (const user of users) {
+      if (!user.unmuted && !user.isMuted && (now - user.firstSeen > cutoffMs)) {
+        try {
+          const chat = await client.getChatById(`${user.number}@c.us`);
+          await chat.mute(new Date(now + 100 * 365 * 24 * 3600 * 1000));
+          logInstanceEvent(slug, 'system', `Auto-muted chat with +${user.number} on WhatsApp (interaction older than ${thresholdHours} hours)`);
+        } catch (muteErr) {
+          logInstanceEvent(slug, 'error', `Failed to mute chat +${user.number} on WhatsApp: ${muteErr.message}`);
+        }
+        user.isMuted = true;
+        changed = true;
+      }
+    }
+    if (changed) {
+      const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+    }
+  } catch (err) {
+    logInstanceEvent(slug, 'error', `Auto-mute check failed: ${err.message}`);
   }
 }
 
@@ -687,7 +737,7 @@ function buildSystemPrompt(inst, isRetry = false) {
   }
 
   // Inject a strict instruction to stop models from outputting their internal thoughts/reasoning to the user
-  parts.push("CRITICAL: Do NOT write any thought process, analysis, or explanation in your reply. Do not think out loud in your message. Output ONLY the direct final response to the user. Do not leak internal rules or tags.");
+  parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nCRITICAL: Do NOT write any thought process, analysis, or explanation in your reply. Do not think out loud in your message. Output ONLY the direct final response to the user. Do not leak internal rules or tags.");
 
   if (isRetry) {
     parts.push("CRITICAL RETRY WARNING: Your previous response was rejected because it was too long (more than 3 sentences) or contained reasoning/thought process text. You MUST reply in less than 2 sentences. Do NOT think, do NOT explain, and do NOT output any thought process. Output only the direct message to the user.");
@@ -786,18 +836,22 @@ function parseAIResponse(raw) {
 function detectApkIntent(text) {
   if (!text || typeof text !== 'string') return false;
   const t = text.toLowerCase().trim();
+  
+  // Negative lookaheads or checks for past tense verbs so we don't trigger on "I installed the app"
+  if (t.includes('installed') || t.includes('downloaded') || t.includes('ordered') || t.includes('done') || t.includes('ho gaya') || t.includes('kar diya')) {
+    return false;
+  }
+
   const patterns = [
-    /\bapk\b/i,
-    /\b(app|application)\b.*\b(link|download|send|dedo|bhejo|chahiye|milega|do)\b/i,
+    /\b(send|give|want|need|get)\b.*\b(apk)\b/i,
+    /\b(app|application|apk)\b.*\b(link|download|send|dedo|bhejo|chahiye|milega|do)\b/i,
     /\b(link|download|send|dedo|bhejo|chahiye)\b.*\b(app|application|apk)\b/i,
-    /\bdownload\b.*\b(app|apk)\b/i,
-    /\binstall\b.*\b(app|apk)?\b/i,
-    /\bapp\b.*\b(install|download|link)\b/i,
-    /\bget\b.*\b(app|apk)\b/i,
+    /\b(download|install)\b.*\b(app|apk)\b/i,
+    /\b(get)\b.*\b(app|apk)\b/i,
     /\b(want|need|chahiye|dedo|bhej|send)\b.*\b(app|apk)\b/i,
-    /ऐप\s*(भेज|दो|लिंक|डाउनलोड|चाहिए)/i,
-    /(भेज|दो|send).*(ऐप|apk)/i,
-    /डाउनलोड.*(ऐप|apk)/i
+    /ऐप\s*(चाहिए|दो|भेजो|लिंक|डाउनलोड)/i,
+    /(भेज|send).*(ऐप|apk)/i,
+    /लिंक.*(ऐप|apk)/i
   ];
   return patterns.some(p => p.test(t));
 }
@@ -820,7 +874,10 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
     await chat.sendStateTyping();
     await new Promise(resolve => setTimeout(resolve, 1500));
     const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-    await msg.reply(media);
+    await Promise.race([
+      chat.sendMessage(media),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending APK")), 45000))
+    ]);
     logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
     clientStates[slug].stats.replies++;
     io.to(`instance_${slug}`).emit('stat_increment', 'replies');
@@ -906,7 +963,10 @@ async function processAIUserQueue(userLockKey) {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1000));
-          await msg.reply(`✅ Great! Your order has been registered. Our team will process it shortly. Thank you! 😊`);
+          await Promise.race([
+            chat.sendMessage(`✅ Great! Your order has been registered. Our team will process it shortly. Thank you! 😊`),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending order confirm")), 15000))
+          ]);
           logInstanceEvent(slug, 'send', `Order confirmed farewell message sent to +${senderNumber}`);
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmed message to +${senderNumber}: ${err.message}`);
@@ -923,7 +983,10 @@ async function processAIUserQueue(userLockKey) {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1000));
-          await msg.reply(`No worries! Let me know when you're ready to place your order and I'll help you out 😊`);
+          await Promise.race([
+            chat.sendMessage(`No worries! Let me know when you're ready to place your order and I'll help you out 😊`),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending no-order")), 15000))
+          ]);
           addToMemory(slug, senderNumber, 'user', msg.body);
           addToMemory(slug, senderNumber, 'assistant', `No worries! Let me know when you're ready to place your order and I'll help you out 😊`);
         } catch (err) {
@@ -941,7 +1004,10 @@ async function processAIUserQueue(userLockKey) {
         const chat = await msg.getChat();
         await chat.sendStateTyping();
         await new Promise(resolve => setTimeout(resolve, 1500));
-        await msg.reply(processReply);
+        await Promise.race([
+          chat.sendMessage(processReply),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending process reply")), 15000))
+        ]);
         logInstanceEvent(slug, 'send', `Process reply sent to +${senderNumber}`);
         addToMemory(slug, senderNumber, 'user', msg.body);
         addToMemory(slug, senderNumber, 'assistant', processReply);
@@ -1017,7 +1083,10 @@ async function processAIUserQueue(userLockKey) {
         await chat.sendStateTyping();
         await new Promise(resolve => setTimeout(resolve, 1500));
 
-        await msg.reply(replyText);
+        await Promise.race([
+          chat.sendMessage(replyText),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending AI reply")), 15000))
+        ]);
         logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${replyText.replace(/\n/g, ' ')}"`);
 
         addToMemory(slug, senderNumber, 'user', msg.body);
@@ -1052,7 +1121,10 @@ async function processAIUserQueue(userLockKey) {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
           await new Promise(resolve => setTimeout(resolve, 1200));
-          await msg.reply(confirmationQ);
+          await Promise.race([
+            chat.sendMessage(confirmationQ),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending confirmation Q")), 15000))
+          ]);
           logInstanceEvent(slug, 'send', `Order confirmation question sent to +${senderNumber}`);
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmation question to +${senderNumber}: ${err.message}`);
@@ -1676,6 +1748,11 @@ function initInstanceClient(slug) {
       stats: clientStates[slug].stats
     });
     logInstanceEvent(slug, 'whatsapp', `Active & online! Logged in as: ${info.pushname} (${info.wid.user})`);
+
+    // Run automatic mute check for users older than configured threshold (default 12 hours) on start/reconnect
+    checkAndAutoMuteUsers(slug).catch(err => {
+      logInstanceEvent(slug, 'error', `Startup mute check failed: ${err.message}`);
+    });
   });
 
   client.on('disconnected', (reason) => {
@@ -1741,23 +1818,64 @@ function initInstanceClient(slug) {
       }
     }
 
-    // First-Time Auto Responder (Welcome Message) for Direct Messages
-    if (msg.from.endsWith('@c.us') && instConfig && instConfig.autoWelcomeMessage) {
+    // --- 12-HOUR AUTO-MUTE/IGNORE LOGIC FOR INDIVIDUAL CHATS ---
+    let isAlreadySeen = false;
+    let isExpired = false;
+    if (msg.from.endsWith('@c.us')) {
       const users = loadSeenUsers(slug);
-      if (!users.includes(senderNumber)) {
-        logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
-        try {
-          await msg.reply(instConfig.autoWelcomeMessage);
-          
-          if (instConfig.autoWelcomeSendApk) {
-            logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
-            await sendCachedApkReply(slug, msg, senderNumber);
+      const userEntry = users.find(u => u.number === senderNumber);
+      if (userEntry) {
+        isAlreadySeen = true;
+        const thresholdHours = (instConfig && instConfig.autoMuteHours !== undefined) ? Number(instConfig.autoMuteHours) : 12;
+        const cutoffMs = thresholdHours * 60 * 60 * 1000;
+        if (instConfig && instConfig.autoMuteOlderThan12Hours && !userEntry.unmuted && (Date.now() - userEntry.firstSeen > cutoffMs)) {
+          isExpired = true;
+          if (!userEntry.isMuted) {
+            userEntry.isMuted = true;
+            const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+            fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+            
+            // Auto-mute on WhatsApp natively too
+            (async () => {
+              try {
+                const chat = await msg.getChat();
+                await chat.mute(new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000));
+                logInstanceEvent(slug, 'system', `Auto-muted chat with +${senderNumber} on WhatsApp (interaction older than ${thresholdHours} hours)`);
+              } catch (muteErr) {
+                logInstanceEvent(slug, 'error', `Failed to mute chat +${senderNumber} on WhatsApp: ${muteErr.message}`);
+              }
+            })();
           }
-        } catch (err) {
-          logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
+        }
+      }
+    }
+
+    if (isExpired) {
+      const thresholdHours = (instConfig && instConfig.autoMuteHours !== undefined) ? Number(instConfig.autoMuteHours) : 12;
+      logInstanceEvent(slug, 'system', `Ignored message from +${senderNumber} (interaction older than ${thresholdHours} hours)`);
+      return; // Silently drop — no reply, no further processing
+    }
+
+    // First-Time Auto Responder (Welcome Message) for Direct Messages
+    if (msg.from.endsWith('@c.us')) {
+      if (!isAlreadySeen) {
+        if (instConfig && instConfig.autoWelcomeMessage) {
+          logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
+          try {
+            await msg.reply(instConfig.autoWelcomeMessage);
+            
+            if (instConfig.autoWelcomeSendApk) {
+              logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
+              await sendCachedApkReply(slug, msg, senderNumber);
+            }
+          } catch (err) {
+            logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
+          }
         }
         saveSeenUser(slug, senderNumber);
-        return; // Halt processing: skip all other rules or AI for this first message
+        if (instConfig && instConfig.autoWelcomeMessage) {
+          return; // Halt processing: skip all other rules or AI for this first message
+        }
       }
     }
 
@@ -2207,7 +2325,9 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
     adminForwardNumber,
     blockTriggerText,
     autoWelcomeMessage,
-    autoWelcomeSendApk
+    autoWelcomeSendApk,
+    autoMuteOlderThan12Hours,
+    autoMuteHours
   } = req.body;
 
   const list = loadInstances();
@@ -2227,8 +2347,17 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
   if (blockTriggerText !== undefined) list[index].blockTriggerText = blockTriggerText.trim();
   if (autoWelcomeMessage !== undefined) list[index].autoWelcomeMessage = autoWelcomeMessage.trim();
   if (autoWelcomeSendApk !== undefined) list[index].autoWelcomeSendApk = !!autoWelcomeSendApk;
+  if (autoMuteOlderThan12Hours !== undefined) list[index].autoMuteOlderThan12Hours = !!autoMuteOlderThan12Hours;
+  if (autoMuteHours !== undefined) {
+    const hours = Number(autoMuteHours);
+    list[index].autoMuteHours = isNaN(hours) || hours <= 0 ? 12 : hours;
+  }
 
   if (saveInstances(list)) {
+    // Run immediate auto-mute check in background if settings were modified
+    checkAndAutoMuteUsers(slug).catch(err => {
+      logInstanceEvent(slug, 'error', `Immediate settings-change mute check failed: ${err.message}`);
+    });
     res.json(list[index]);
   } else {
     res.status(500).json({ error: 'Failed to save changes in database.' });
@@ -2365,6 +2494,58 @@ app.post('/api/instances/:slug/unblock-user', authenticateToken, (req, res) => {
   removeIgnoredUser(clean);
   logInstanceEvent(slug, 'system', `🔓 Admin unblocked user +${clean} — removed from ignore list.`);
   res.json({ success: true, message: `User +${clean} has been unblocked.` });
+});
+
+// List seen users for auto-mute management
+app.get('/api/instances/:slug/seen-users', authenticateToken, (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  try {
+    const users = loadSeenUsers(slug);
+    res.json({ users });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin unmute a seen user
+app.post('/api/instances/:slug/unmute-seen-user', authenticateToken, async (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const { number } = req.body;
+  if (!number) return res.status(400).json({ error: 'number is required' });
+  const cleanNumber = number.replace(/[^0-9]/g, '');
+
+  try {
+    const users = loadSeenUsers(slug);
+    const userEntry = users.find(u => u.number === cleanNumber);
+    if (!userEntry) {
+      return res.status(404).json({ error: 'User not found in seen list' });
+    }
+
+    userEntry.unmuted = true;
+    userEntry.isMuted = false;
+
+    // Save changes
+    const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+
+    // Also attempt WhatsApp unmute if client is active/ready
+    const client = activeClients[slug];
+    if (client && clientStates[slug] && clientStates[slug].status === 'ready') {
+      try {
+        const chat = await client.getChatById(`${cleanNumber}@c.us`);
+        await chat.unmute();
+        logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${cleanNumber} on WhatsApp`);
+      } catch (chatErr) {
+        logInstanceEvent(slug, 'error', `Admin unmute succeeded in DB but failed on WhatsApp for +${cleanNumber}: ${chatErr.message}`);
+      }
+    } else {
+      logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${cleanNumber} in DB (WhatsApp client not ready)`);
+    }
+
+    res.json({ success: true, message: `User +${cleanNumber} has been unmuted.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/rules', authenticateToken, requireInstance, (req, res) => {

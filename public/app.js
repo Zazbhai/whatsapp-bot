@@ -88,6 +88,8 @@ const clearAiMemoryBtn = document.getElementById('clear-ai-memory-btn');
 // UI Elements: First-Time Welcome
 const autoWelcomeMessageTextarea = document.getElementById('auto-welcome-message');
 const autoWelcomeSendApkToggle = document.getElementById('auto-welcome-send-apk-toggle');
+const autoMuteOlder12hToggle = document.getElementById('auto-mute-older-12h-toggle');
+const autoMuteHoursInput = document.getElementById('auto-mute-hours-input');
 const saveWelcomeBtn = document.getElementById('save-welcome-btn');
 
 function collectAiSettingsPayload() {
@@ -114,6 +116,8 @@ function applyWelcomeSettingsToForm(data) {
   if (!data) return;
   if (autoWelcomeMessageTextarea) autoWelcomeMessageTextarea.value = data.autoWelcomeMessage || '';
   if (autoWelcomeSendApkToggle) autoWelcomeSendApkToggle.checked = !!data.autoWelcomeSendApk;
+  if (autoMuteOlder12hToggle) autoMuteOlder12hToggle.checked = !!data.autoMuteOlderThan12Hours;
+  if (autoMuteHoursInput) autoMuteHoursInput.value = data.autoMuteHours !== undefined ? data.autoMuteHours : 12;
 }
 
 // UI Elements: Manual Messenger
@@ -1425,7 +1429,9 @@ if (saveWelcomeBtn) {
     try {
       const payload = {
         autoWelcomeMessage: autoWelcomeMessageTextarea ? autoWelcomeMessageTextarea.value.trim() : '',
-        autoWelcomeSendApk: autoWelcomeSendApkToggle ? autoWelcomeSendApkToggle.checked : false
+        autoWelcomeSendApk: autoWelcomeSendApkToggle ? autoWelcomeSendApkToggle.checked : false,
+        autoMuteOlderThan12Hours: autoMuteOlder12hToggle ? autoMuteOlder12hToggle.checked : false,
+        autoMuteHours: autoMuteHoursInput ? Number(autoMuteHoursInput.value) : 12
       };
       const res = await apiFetch(`/api/instances/${activeInstanceSlug}`, {
         method: 'PUT',
@@ -1698,6 +1704,79 @@ if (unblockUserBtn) {
     if (!number) { showToast('Please enter a phone number to unblock.', 'error'); return; }
     unblockUser(number);
   });
+}
+
+// ── Auto-Muted Users Panel ───────────────────────────────────
+async function loadAutoMutedUsers() {
+  const list = document.getElementById('auto-muted-users-list');
+  if (!list || !activeInstanceSlug) return;
+  list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">Loading...</p>';
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/seen-users`);
+    const data = await res.json();
+    
+    // Filter only muted users (isMuted is true)
+    const mutedUsers = (data.users || []).filter(u => u.isMuted);
+    
+    if (mutedUsers.length === 0) {
+      list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">✅ No users are currently auto-muted.</p>';
+      return;
+    }
+    
+    list.innerHTML = mutedUsers.map(user => {
+      const dateStr = new Date(user.firstSeen).toLocaleString();
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
+          padding:10px 14px;background:rgba(255,149,0,0.08);border:1px solid rgba(255,149,0,0.25);
+          border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <i data-lucide="volume-x" style="width:15px;height:15px;color:#ff9500;flex-shrink:0;"></i>
+            <span style="font-size:0.85rem;font-weight:600;color:var(--text-light);">+${user.number}</span>
+            <span style="font-size:0.72rem;color:#ff9500;background:rgba(255,149,0,0.15);padding:2px 8px;border-radius:20px;">Muted</span>
+            <span style="font-size:0.72rem;color:var(--text-muted);">First seen: ${dateStr}</span>
+          </div>
+          <button class="btn btn-secondary btn-sm unmute-seen-inline-btn"
+            data-number="${user.number}"
+            style="background:linear-gradient(135deg,#30d158 0%,#25a244 100%);border-color:transparent;color:white;font-size:0.75rem;padding:5px 10px;">
+            <i data-lucide="volume-2" style="width:12px;height:12px;margin-right:4px;"></i> Unmute
+          </button>
+        </div>`;
+    }).join('');
+
+    if (window.lucide) lucide.createIcons();
+
+    list.querySelectorAll('.unmute-seen-inline-btn').forEach(btn => {
+      btn.addEventListener('click', () => unmuteSeenUser(btn.dataset.number));
+    });
+  } catch (err) {
+    list.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;text-align:center;padding:12px;">Failed to load auto-muted users.</p>';
+  }
+}
+
+async function unmuteSeenUser(number) {
+  if (!number || !activeInstanceSlug) return;
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/unmute-seen-user`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number })
+    });
+    if (res.ok) {
+      showToast(`Successfully unmuted +${number}`, 'success');
+      loadAutoMutedUsers();
+    } else {
+      const errData = await res.json();
+      showToast(errData.error || 'Failed to unmute user', 'error');
+    }
+  } catch (err) {
+    showToast('Network error, failed to unmute user.', 'error');
+  }
+}
+
+// Event listener for auto-muted refresh button
+const refreshAutoMutedBtn = document.getElementById('refresh-auto-muted-btn');
+if (refreshAutoMutedBtn) {
+  refreshAutoMutedBtn.addEventListener('click', loadAutoMutedUsers);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
