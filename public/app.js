@@ -6,6 +6,7 @@ let currentStatus = 'disconnected';
 let allRules = [];
 let allLogs = [];
 let allInstances = [];
+let allUsers = [];
 let currentLogFilter = 'all';
 let stats = { sent: 0, received: 0, replies: 0 };
 let uptimeInterval = null;
@@ -274,6 +275,11 @@ function switchTab(tabName) {
       pageTitle.textContent = 'Bot Instances';
       pageSubtitle.textContent = 'Admin panel to provision, inspect, or delete WhatsApp bot engines.';
       fetchInstances();
+      break;
+    case 'users':
+      pageTitle.textContent = 'Users Management';
+      pageSubtitle.textContent = 'Manage registered seen users, mute states, block states, and memory cache.';
+      fetchUsers();
       break;
   }
 }
@@ -1323,6 +1329,8 @@ async function syncActiveInstanceData() {
     allRules = data.rules || [];
     if (activeTab === 'responders') {
       renderRules();
+    } else if (activeTab === 'users') {
+      fetchUsers();
     }
     
     // Populate AI Smart Responder configurations for this instance
@@ -1866,4 +1874,178 @@ if (startupToken) {
   dashboardLogoutBtn.style.display = 'none';
   botSelectorWrapper.style.display = 'none';
   lucide.createIcons();
+}
+
+// ── Users Management Panel ───────────────────────────────────
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+}
+
+async function fetchUsers() {
+  if (!activeInstanceSlug) return;
+  const container = document.getElementById('users-list-container');
+  if (!container) return;
+  container.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px;">Loading users...</td></tr>';
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/all-users`);
+    if (!res.ok) throw new Error('Failed to fetch');
+    const data = await res.json();
+    allUsers = data.users || [];
+    renderUsersList();
+  } catch (err) {
+    container.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--danger);padding:20px;">Failed to load users.</td></tr>';
+  }
+}
+
+function renderUsersList() {
+  const container = document.getElementById('users-list-container');
+  const searchInput = document.getElementById('users-search-input');
+  if (!container) return;
+  
+  const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+  const filtered = allUsers.filter(u => {
+    const num = (u.number || '').toLowerCase();
+    const name = (u.name || '').toLowerCase();
+    return num.includes(query) || name.includes(query);
+  });
+  
+  if (filtered.length === 0) {
+    container.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px;">No users found.</td></tr>';
+    return;
+  }
+  
+  container.innerHTML = filtered.map(u => {
+    const dateStr = u.firstSeen ? new Date(u.firstSeen).toLocaleString() : 'Never';
+    const voiceBadge = u.demandedVoiceNote
+      ? `<span class="badge" style="background:rgba(6,182,212,0.1);color:var(--secondary);border:1px solid rgba(6,182,212,0.2);padding:2px 8px;border-radius:20px;font-size:0.75rem;">${u.voiceName || 'Auto'}</span>`
+      : `<span style="color:var(--text-muted);font-size:0.8rem;">Text-only</span>`;
+      
+    const muteBadge = u.isMuted
+      ? `<span class="badge" style="background:rgba(255,149,0,0.1);color:#ff9500;border:1px solid rgba(255,149,0,0.2);padding:2px 8px;border-radius:20px;font-size:0.75rem;">Muted</span>`
+      : `<span class="badge" style="background:rgba(52,199,89,0.1);color:#34c759;border:1px solid rgba(52,199,89,0.2);padding:2px 8px;border-radius:20px;font-size:0.75rem;">Active</span>`;
+      
+    const blockBadge = u.isBlocked
+      ? `<span class="badge" style="background:rgba(255,59,48,0.1);color:#ff3b30;border:1px solid rgba(255,59,48,0.2);padding:2px 8px;border-radius:20px;font-size:0.75rem;">Blocked</span>`
+      : `<span class="badge" style="background:rgba(52,199,89,0.1);color:#34c759;border:1px solid rgba(52,199,89,0.2);padding:2px 8px;border-radius:20px;font-size:0.75rem;">Allowed</span>`;
+      
+    const memoryBtnClass = u.hasMemory ? 'btn-danger' : 'btn-secondary';
+    const memoryBtnText = u.hasMemory ? 'Clear Memory' : 'No Memory';
+    const memoryBtnDisabled = u.hasMemory ? '' : 'disabled';
+    
+    return `
+      <tr style="border-bottom:1px solid var(--panel-border);">
+        <td style="padding:15px 20px;font-weight:600;color:var(--text-light);">${escapeHtml(u.name) || '<span style="color:var(--text-muted);font-style:italic;">Unknown Contact</span>'}</td>
+        <td style="padding:15px 20px;font-family:monospace;color:var(--text-light);">+${u.number}</td>
+        <td style="padding:15px 20px;font-size:0.8rem;color:var(--text-muted);">${dateStr}</td>
+        <td style="padding:15px 20px;">${voiceBadge}</td>
+        <td style="padding:15px 20px;">${muteBadge}</td>
+        <td style="padding:15px 20px;">${blockBadge}</td>
+        <td style="padding:15px 20px;text-align:right;">
+          <div style="display:inline-flex;gap:6px;">
+            <button class="btn btn-secondary btn-sm toggle-mute-user-btn" data-number="${u.number}" style="padding:5px 10px;font-size:0.75rem;white-space:nowrap;width:auto;">
+              <i data-lucide="${u.isMuted ? 'volume-2' : 'volume-x'}" style="width:12px;height:12px;margin-right:4px;"></i>
+              <span>${u.isMuted ? 'Unmute' : 'Mute'}</span>
+            </button>
+            <button class="btn btn-secondary btn-sm toggle-block-user-btn" data-number="${u.number}" style="padding:5px 10px;font-size:0.75rem;white-space:nowrap;width:auto;background:${u.isBlocked ? 'rgba(52,199,89,0.1)' : 'rgba(255,59,48,0.1)'};color:${u.isBlocked ? '#34c759' : '#ff3b30'};border-color:transparent;">
+              <i data-lucide="${u.isBlocked ? 'unlock' : 'ban'}" style="width:12px;height:12px;margin-right:4px;"></i>
+              <span>${u.isBlocked ? 'Unblock' : 'Block'}</span>
+            </button>
+            <button class="btn ${memoryBtnClass} btn-sm clear-user-memory-btn" data-number="${u.number}" ${memoryBtnDisabled} style="padding:5px 10px;font-size:0.75rem;white-space:nowrap;width:auto;">
+              <i data-lucide="trash-2" style="width:12px;height:12px;margin-right:4px;"></i>
+              <span>${memoryBtnText}</span>
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  
+  if (window.lucide) lucide.createIcons();
+  
+  // Attach event listeners
+  container.querySelectorAll('.toggle-mute-user-btn').forEach(btn => {
+    btn.addEventListener('click', () => toggleMuteUser(btn.dataset.number));
+  });
+  container.querySelectorAll('.toggle-block-user-btn').forEach(btn => {
+    btn.addEventListener('click', () => toggleBlockUser(btn.dataset.number));
+  });
+  container.querySelectorAll('.clear-user-memory-btn').forEach(btn => {
+    btn.addEventListener('click', () => clearUserMemory(btn.dataset.number));
+  });
+}
+
+async function toggleMuteUser(number) {
+  if (!number || !activeInstanceSlug) return;
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/users/${number}/toggle-mute`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message, 'success');
+      await fetchUsers();
+      // Also refresh target components in Responders tab if they exist
+      const mutedList = document.getElementById('auto-muted-users-list');
+      if (mutedList) loadAutoMutedUsers();
+    } else {
+      showToast(data.error || 'Failed to toggle mute state.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error while toggling mute state.', 'error');
+  }
+}
+
+async function toggleBlockUser(number) {
+  if (!number || !activeInstanceSlug) return;
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/users/${number}/toggle-block`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message, 'success');
+      await fetchUsers();
+      // Also refresh target components in Responders tab if they exist
+      const blockedList = document.getElementById('blocked-users-list');
+      if (blockedList) loadBlockedUsers();
+    } else {
+      showToast(data.error || 'Failed to toggle block state.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error while toggling block state.', 'error');
+  }
+}
+
+async function clearUserMemory(number) {
+  if (!number || !activeInstanceSlug) return;
+  if (!confirm(`Are you absolutely sure you want to clear the conversational memory for +${number}?`)) {
+    return;
+  }
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/users/${number}/memory`, {
+      method: 'DELETE'
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message, 'success');
+      await fetchUsers();
+    } else {
+      showToast(data.error || 'Failed to clear user memory.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error while clearing user memory.', 'error');
+  }
+}
+
+// Bind search input event listener
+const usersSearchInput = document.getElementById('users-search-input');
+if (usersSearchInput) {
+  usersSearchInput.addEventListener('input', () => {
+    renderUsersList();
+  });
 }

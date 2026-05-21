@@ -208,11 +208,21 @@ function loadSeenUsers(slug) {
   return seenUsersCache[slug];
 }
 
-function saveSeenUser(slug, number) {
+function saveSeenUser(slug, number, name = '') {
   const users = loadSeenUsers(slug);
-  const exists = users.some(u => u.number === number);
-  if (!exists) {
-    users.push({ number, firstSeen: Date.now() });
+  let userEntry = users.find(u => u.number === number);
+  let changed = false;
+  if (!userEntry) {
+    userEntry = { number, firstSeen: Date.now(), name };
+    users.push(userEntry);
+    changed = true;
+  } else {
+    if (name && userEntry.name !== name) {
+      userEntry.name = name;
+      changed = true;
+    }
+  }
+  if (changed) {
     try {
       const filePath = path.join(dataDir, `seen_users_${slug}.json`);
       fs.promises.writeFile(filePath, JSON.stringify(users, null, 2), 'utf8')
@@ -1983,6 +1993,13 @@ function initInstanceClient(slug) {
       const userEntry = users.find(u => u.number === senderNumber);
       if (userEntry) {
         isAlreadySeen = true;
+        
+        // Update user's name if we have a new/different notifyName
+        const senderName = msg._data.notifyName || '';
+        if (senderName && userEntry.name !== senderName) {
+          saveSeenUser(slug, senderNumber, senderName);
+        }
+        
         const thresholdHours = (instConfig && instConfig.autoMuteHours !== undefined) ? Number(instConfig.autoMuteHours) : 12;
         const cutoffMs = thresholdHours * 60 * 60 * 1000;
         if (instConfig && instConfig.autoMuteOlderThan12Hours && !userEntry.unmuted && (Date.now() - userEntry.firstSeen > cutoffMs)) {
@@ -2029,7 +2046,7 @@ function initInstanceClient(slug) {
             logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
           }
         }
-        saveSeenUser(slug, senderNumber);
+        saveSeenUser(slug, senderNumber, msg._data.notifyName || '');
         if (instConfig && instConfig.autoWelcomeMessage) {
           return; // Halt processing: skip all other rules or AI for this first message
         }
@@ -2815,6 +2832,146 @@ app.delete('/api/memory', authenticateToken, requireInstance, (req, res) => {
   
   logInstanceEvent(slug, 'system', `AI conversational memory cache cleared successfully (${deletedCount} contacts deleted).`);
   res.json({ message: 'Conversation memory cleared successfully.', deletedCount });
+});
+
+// GET all users (seen + blocked) for an instance
+app.get('/api/instances/:slug/all-users', authenticateToken, (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  try {
+    const seenUsers = loadSeenUsers(slug);
+    const ignoredList = loadIgnoredUsers();
+    const memory = loadMemory();
+    
+    const userMap = {};
+    for (const u of seenUsers) {
+      userMap[u.number] = {
+        number: u.number,
+        name: u.name || '',
+        firstSeen: u.firstSeen,
+        voiceName: u.voiceName || '',
+        demandedVoiceNote: !!u.demandedVoiceNote,
+        isMuted: !!u.isMuted,
+        isBlocked: ignoredList.includes(u.number),
+        hasMemory: !!memory[`${slug}:${u.number}`]
+      };
+    }
+    
+    // Also include any blocked users that might not be in seen users
+    for (const blockedNumber of ignoredList) {
+      if (!userMap[blockedNumber]) {
+        userMap[blockedNumber] = {
+          number: blockedNumber,
+          name: '',
+          firstSeen: null,
+          voiceName: '',
+          demandedVoiceNote: false,
+          isMuted: false,
+          isBlocked: true,
+          hasMemory: !!memory[`${slug}:${blockedNumber}`]
+        };
+      }
+    }
+    
+    res.json({ users: Object.values(userMap) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST toggle-mute status for a user
+app.post('/api/instances/:slug/users/:number/toggle-mute', authenticateToken, async (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const number = req.params.number.replace(/[^0-9]/g, '');
+  if (!number) return res.status(400).json({ error: 'number is required' });
+  
+  try {
+    const users = loadSeenUsers(slug);
+    let userEntry = users.find(u => u.number === number);
+    if (!userEntry) {
+      userEntry = { number, firstSeen: Date.now(), isMuted: false, unmuted: false };
+      users.push(userEntry);
+    }
+    
+    const willMute = !userEntry.isMuted;
+    userEntry.isMuted = willMute;
+    userEntry.unmuted = !willMute;
+    
+    // Save changes
+    const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+    
+    // Also update WhatsApp client
+    const client = activeClients[slug];
+    if (client && clientStates[slug] && clientStates[slug].status === 'ready') {
+      try {
+        const chat = await client.getChatById(`${number}@c.us`);
+        if (willMute) {
+          await chat.mute(new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000));
+          logInstanceEvent(slug, 'system', `🔇 Admin manually muted +${number} on WhatsApp`);
+        } else {
+          await chat.unmute();
+          logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${number} on WhatsApp`);
+        }
+      } catch (chatErr) {
+        logInstanceEvent(slug, 'error', `Admin mute/unmute succeeded in DB but failed on WhatsApp for +${number}: ${chatErr.message}`);
+      }
+    } else {
+      logInstanceEvent(slug, 'system', `🔇 Admin manually changed mute state for +${number} in DB to ${willMute} (WhatsApp client not ready)`);
+    }
+    
+    res.json({ success: true, isMuted: willMute, message: `User +${number} has been ${willMute ? 'muted' : 'unmuted'}.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST toggle-block status for a user
+app.post('/api/instances/:slug/users/:number/toggle-block', authenticateToken, (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const number = req.params.number.replace(/[^0-9]/g, '');
+  if (!number) return res.status(400).json({ error: 'number is required' });
+  
+  try {
+    const list = loadIgnoredUsers();
+    const isBlocked = list.includes(number);
+    const willBlock = !isBlocked;
+    
+    if (willBlock) {
+      saveIgnoredUser(number);
+      logInstanceEvent(slug, 'system', `🚫 Admin blocked user +${number} — added to ignore list.`);
+    } else {
+      removeIgnoredUser(number);
+      logInstanceEvent(slug, 'system', `🔓 Admin unblocked user +${number} — removed from ignore list.`);
+    }
+    
+    res.json({ success: true, isBlocked: willBlock, message: `User +${number} has been ${willBlock ? 'blocked' : 'unblocked'}.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE a specific user's conversational memory from memory.json
+app.delete('/api/instances/:slug/users/:number/memory', authenticateToken, (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const number = req.params.number.replace(/[^0-9]/g, '');
+  if (!number) return res.status(400).json({ error: 'number is required' });
+  
+  try {
+    const memory = loadMemory();
+    const key = `${slug}:${number}`;
+    const exists = !!memory[key];
+    
+    if (exists) {
+      delete memory[key];
+      saveMemory(memory);
+      logInstanceEvent(slug, 'system', `🗑️ Admin cleared conversational memory for +${number}.`);
+      res.json({ success: true, message: `Conversational memory for +${number} has been cleared.` });
+    } else {
+      res.json({ success: true, message: `No memory found for +${number}.` });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/send-message', authenticateToken, requireInstance, async (req, res) => {

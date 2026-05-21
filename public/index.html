@@ -93,6 +93,10 @@
           <span>System Logs</span>
           <span class="log-indicator" id="unread-logs">0</span>
         </a>
+        <a href="#" class="menu-item" data-tab="users" id="menu-item-users">
+          <i data-lucide="users"></i>
+          <span>Users</span>
+        </a>
         <a href="#" class="menu-item" data-tab="instances" id="menu-item-instances">
           <i data-lucide="cpu"></i>
           <span>Bot Instances</span>
@@ -742,6 +746,41 @@
             <div class="terminal-body full-height" id="full-terminal-logs">
               <!-- Logs stream dynamically -->
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: USERS -->
+      <section class="tab-pane" id="tab-users">
+        <div class="actions-bar">
+          <div class="search-box">
+            <i data-lucide="search"></i>
+            <input type="text" id="users-search-input" placeholder="Search users by name or phone...">
+          </div>
+        </div>
+
+        <!-- Users Table -->
+        <div class="glass-card full-width-card">
+          <div class="card-header">
+            <h3>Registered & Seen Users</h3>
+          </div>
+          <div class="table-container" style="overflow-x: auto; margin-top: 15px;">
+            <table class="sleek-table" style="width: 100%; border-collapse: collapse; text-align: left;">
+              <thead>
+                <tr style="border-bottom: 1px solid var(--panel-border); color: var(--text-muted); font-size: 0.85rem; font-weight: 600;">
+                  <th style="padding: 15px 20px;">Name</th>
+                  <th style="padding: 15px 20px;">Phone Number</th>
+                  <th style="padding: 15px 20px;">First Seen</th>
+                  <th style="padding: 15px 20px;">Voice Settings</th>
+                  <th style="padding: 15px 20px;">Mute Status</th>
+                  <th style="padding: 15px 20px;">Block Status</th>
+                  <th style="padding: 15px 20px; text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="users-list-container">
+                <!-- Dynamic users loaded via JS -->
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
