@@ -1448,15 +1448,14 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   const listConfig = loadInstances();
   const instConfig = listConfig.find(i => i.slug === slug);
 
-  // 0. If this contact has no conversation memory, welcome them before any trigger/rule handling.
+  // 0. First-Time Welcome Responder always wins before trigger/rule handling.
   if (msg.from.endsWith('@c.us') && instConfig && instConfig.autoWelcomeMessage) {
     const users = loadSeenUsers(slug);
     const userEntry = users.find(u => u.number === senderNumber);
     const alreadyWelcomed = userEntry && userEntry.welcomed;
-    const hasPastMemory = getConversationHistory(slug, senderNumber).length > 0;
 
-    if (!hasPastMemory || !alreadyWelcomed) {
-      logInstanceEvent(slug, 'system', `No previous conversation memory for +${senderNumber}. Sending Welcome Message before trigger/rule handling.`);
+    if (!alreadyWelcomed) {
+      logInstanceEvent(slug, 'system', `First-time welcome responder triggered for +${senderNumber} before auto-reply rules.`);
       try {
         await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
         addToMemory(slug, senderNumber, 'user', msg.body);
