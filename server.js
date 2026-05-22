@@ -1310,18 +1310,32 @@ async function processGlobalAIQueue() {
     // ── Order confirmation reply intercept (after [ASK_ORDER] was sent) ──────
     // If the user replies Yes/No to the order confirmation question, handle it directly
     const bodyLower = (msg.body || '').toLowerCase().trim();
-    const isYesReply = /^(yes|yep|yeah|yup|haan|ha|han|ji|done|ji ha|ji haan|hnji|confirmed|order ho gaya|order hua|placed|order place|order placed|ho gaya|ho gya|kar diya|kar di|kiya|laga diya|हाँ|हाँ, कर दिया)$/i.test(bodyLower);
-    const isNoReply  = /^(no|nope|nahi|nhi|na|nope|abhi nahi|baad mein|later|not yet|nope|नहीं|नहीं, अभी नहीं)$/i.test(bodyLower);
+    // Normalize input: strip common punctuation (including Devanagari danda \u0964) and excessive whitespace
+    const cleanBody = bodyLower.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?\u0964]/g, "").replace(/\s+/g, " ").trim();
+    
+    // Negation-first matching logic
+    const negationRegex = /\b(no|nope|not|never|later|nahi|nhi|na|nhi\s+kiya|nahi\s+kiya|nhi\s+hua|nahi\s+hua|abhi\s+nhi|abhi\s+nahi|baad\s+me|baad\s+mein)\b/i;
+    const hindiNegationRegex = /(नहीं|नही|नहीं\s+किया|नहीं\s+हुआ|अभी\s+नहीं)/;
+    const isNoReply = negationRegex.test(cleanBody) || hindiNegationRegex.test(cleanBody);
+    
+    // Confirmation matching logic (only if negation wasn't detected)
+    const confirmationRegex = /\b(yes|yep|yeah|yup|done|confirmed|placed|ordered|haan|ha|han|ji|hnji|kiya|gaya|gya|diya|di)\b/i;
+    const hindiConfirmationRegex = /(हाँ|हाँ\s+कर\s+दिया|हो\s+गया|कर\s+दिया|हाँ\s+जी|जी\s+हाँ)/;
+    const isYesReply = !isNoReply && (confirmationRegex.test(cleanBody) || hindiConfirmationRegex.test(cleanBody));
+
     if (isYesReply) {
-      // Check if recent chat history had an ASK_ORDER question (last bot message)
+      // Check if recent chat history had an ASK_ORDER question (in the last 3 assistant messages)
       const recentHistory = getConversationHistory(slug, senderNumber);
-      const lastBotMsg = [...recentHistory].reverse().find(m => m.role === 'assistant');
-      const lastBotText = (lastBotMsg && lastBotMsg.content) || '';
-      const isAskOrderQ = lastBotText.includes('Did you successfully place your iPhone order') ||
-                          lastBotText.includes('Kya aapne app par iPhone order') ||
-                          lastBotText.includes('क्या आपने ऐप पर iPhone ऑर्डर');
+      const assistantMessages = recentHistory.filter(m => m.role === 'assistant').slice(-3);
+      const isAskOrderQ = assistantMessages.some(m => {
+        const content = m.content || '';
+        return content.includes('Did you successfully place your iPhone order') ||
+               content.includes('Kya aapne app par iPhone order') ||
+               content.includes('क्या आपने ऐप पर iPhone ऑर्डर');
+      });
+      
       if (isAskOrderQ) {
-        logInstanceEvent(slug, 'system', `✅ User +${senderNumber} confirmed iPhone order via Yes reply. Adding to ignore list.`);
+        logInstanceEvent(slug, 'system', `✅ User +${senderNumber} confirmed iPhone order via Yes reply ("${msg.body}"). Adding to ignore list.`);
         saveIgnoredUser(senderNumber);
         try {
           const chat = await msg.getChat();
@@ -1345,13 +1359,16 @@ async function processGlobalAIQueue() {
       }
     } else if (isNoReply) {
       const recentHistory = getConversationHistory(slug, senderNumber);
-      const lastBotMsg = [...recentHistory].reverse().find(m => m.role === 'assistant');
-      const lastBotText = (lastBotMsg && lastBotMsg.content) || '';
-      const isAskOrderQ = lastBotText.includes('Did you successfully place your iPhone order') ||
-                          lastBotText.includes('Kya aapne app par iPhone order') ||
-                          lastBotText.includes('क्या आपने ऐप पर iPhone ऑर्डर');
+      const assistantMessages = recentHistory.filter(m => m.role === 'assistant').slice(-3);
+      const isAskOrderQ = assistantMessages.some(m => {
+        const content = m.content || '';
+        return content.includes('Did you successfully place your iPhone order') ||
+               content.includes('Kya aapne app par iPhone order') ||
+               content.includes('क्या आपने ऐप पर iPhone ऑर्डर');
+      });
+      
       if (isAskOrderQ) {
-        logInstanceEvent(slug, 'system', `ℹ️ User +${senderNumber} replied No to order confirmation. Continuing normal replies.`);
+        logInstanceEvent(slug, 'system', `ℹ️ User +${senderNumber} replied No to order confirmation ("${msg.body}"). Continuing normal replies.`);
         try {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
