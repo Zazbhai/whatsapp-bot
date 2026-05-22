@@ -1449,17 +1449,24 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   const instConfig = listConfig.find(i => i.slug === slug);
 
   // 0. First-Time Welcome Responder always wins before trigger/rule handling.
-  if (msg.from.endsWith('@c.us') && instConfig && instConfig.autoWelcomeMessage) {
+  if (msg.from.endsWith('@c.us')) {
     const users = loadSeenUsers(slug);
     const userEntry = users.find(u => u.number === senderNumber);
     const alreadyWelcomed = userEntry && userEntry.welcomed;
 
     if (!alreadyWelcomed) {
+      const welcomeMessage = instConfig && instConfig.autoWelcomeMessage ? instConfig.autoWelcomeMessage.trim() : '';
+      if (!welcomeMessage) {
+        logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}, but First-Time Welcome Responder is disabled because Welcome Message is blank.`);
+        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
+        return;
+      }
+
       logInstanceEvent(slug, 'system', `First-time welcome responder triggered for +${senderNumber} before auto-reply rules.`);
       try {
-        await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
+        await sendSmartReply(slug, msg, null, welcomeMessage, true);
         addToMemory(slug, senderNumber, 'user', msg.body);
-        addToMemory(slug, senderNumber, 'assistant', instConfig.autoWelcomeMessage);
+        addToMemory(slug, senderNumber, 'assistant', welcomeMessage);
 
         if (instConfig.autoWelcomeSendApk) {
           logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
