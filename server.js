@@ -1697,6 +1697,17 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
     return null;
   }
 
+  // Self-healing: if all keys are on cooldown, reset cooldowns to try again
+  const now = Date.now();
+  const activeKeysCount = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now).length;
+  if (activeKeysCount === 0 && totalKeysCount > 0) {
+    logInstanceEvent(slug, 'system', '⚠️ All API keys are on cooldown. Self-healing: resetting cooldowns to try again.');
+    Object.values(apiKeysRegistry).forEach(k => {
+      k.cooldownUntil = 0;
+    });
+    saveCooldowns({});
+  }
+
   return new Promise((resolve) => {
     const workerPath = path.join(__dirname, 'ai_worker.js');
     logInstanceEvent(slug, 'system', `Forking AI worker process for +${userMessage.substring(0, 15)}...`);

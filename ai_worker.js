@@ -26,6 +26,17 @@ process.on('message', async (data) => {
   const localRegistry = JSON.parse(JSON.stringify(apiKeysRegistry || {}));
   const cooldownKeys = [];
   const failoverErrors = [];
+
+  // Self-healing: if all keys are on cooldown, reset their cooldowns so we can try them
+  const now = Date.now();
+  const allKeysCount = Object.keys(localRegistry).length;
+  const activeKeysCount = Object.values(localRegistry).filter(k => k.cooldownUntil < now).length;
+  if (activeKeysCount === 0 && allKeysCount > 0) {
+    console.warn("[AI Worker] All keys on cooldown. Self-healing: resetting cooldowns.");
+    Object.keys(localRegistry).forEach(k => {
+      localRegistry[k].cooldownUntil = 0;
+    });
+  }
   
   function putKeyOnCooldown(keyString) {
     const cooldownUntil = Date.now() + 24 * 60 * 60 * 1000; // 24 hours cooldown
