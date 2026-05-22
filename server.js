@@ -1270,10 +1270,10 @@ function enqueueAIReply(slug, senderNumber, msg) {
     clearTimeout(pendingDebounces[userLockKey].timer);
   }
   
-  let delay = 3000;
+  let delay = 5000;
   if (isSpamCoolingDown(slug, senderNumber)) {
     const until = spamCooldowns[slug][senderNumber];
-    delay = Math.max(3000, until - Date.now());
+    delay = Math.max(5000, until - Date.now());
   }
   
   pendingDebounces[userLockKey].timer = setTimeout(() => {
