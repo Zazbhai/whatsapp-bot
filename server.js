@@ -1465,25 +1465,28 @@ async function processCombinedMessage(slug, senderNumber, msg) {
     const users = loadSeenUsers(slug);
     const userEntry = users.find(u => u.number === senderNumber);
     const alreadyWelcomed = userEntry && userEntry.welcomed;
+    const hasPastMemory = getConversationHistory(slug, senderNumber).length > 0;
+
+    if (instConfig && instConfig.autoWelcomeMessage && (!alreadyWelcomed || !hasPastMemory)) {
+      logInstanceEvent(slug, 'system', `No previous conversation memory for +${senderNumber}. Sending Welcome Message before auto-responder rules.`);
+      try {
+        await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
+        addToMemory(slug, senderNumber, 'user', msg.body);
+        addToMemory(slug, senderNumber, 'assistant', instConfig.autoWelcomeMessage);
+        
+        if (instConfig.autoWelcomeSendApk) {
+          logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
+          await sendCachedApkReply(slug, msg, senderNumber);
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
+      }
+      saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
+      return;
+    }
 
     if (!alreadyWelcomed) {
-      if (instConfig && instConfig.autoWelcomeMessage) {
-        logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
-        try {
-          await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
-          
-          if (instConfig.autoWelcomeSendApk) {
-            logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
-            await sendCachedApkReply(slug, msg, senderNumber);
-          }
-        } catch (err) {
-          logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
-        }
-        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
-        return;
-      } else {
-        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false, msg.from);
-      }
+      saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false, msg.from);
     }
   }
 
