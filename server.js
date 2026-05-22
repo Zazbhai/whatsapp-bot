@@ -538,6 +538,105 @@ function logInstanceEvent(slug, type, message) {
   io.to(`instance_${slug}`).emit('log', logEntry);
 }
 
+// Scan active chats for unreplied messages and queue them for reply
+async function detectAndQueueUnrepliedMessages(slug, client) {
+  try {
+    logInstanceEvent(slug, 'system', 'Scanning for unreplied messages on startup...');
+    const chats = await client.getChats();
+    logInstanceEvent(slug, 'system', `Found ${chats.length} chats. Filtering for unreplied messages...`);
+    
+    const unrepliedMessages = [];
+    const listConfig = loadInstances();
+    const instConfig = listConfig.find(i => i.slug === slug);
+    const ignoredList = loadIgnoredUsers();
+    
+    for (const chat of chats) {
+      // 1. Skip if natively muted on WhatsApp
+      if (chat.muteExpiration && (chat.muteExpiration === -1 || chat.muteExpiration * 1000 > Date.now())) {
+        continue;
+      }
+      
+      // 2. Skip if group chat and not whitelisted
+      if (chat.isGroup) {
+        const allowedGroupsEnv = process.env.ALLOWED_APK_GROUPS || '';
+        const allowedGroups = allowedGroupsEnv.split(',').map(g => g.trim().toLowerCase()).filter(Boolean);
+        if (allowedGroups.length > 0) {
+          const chatName = (chat.name || '').trim().toLowerCase();
+          if (!allowedGroups.includes(chatName)) {
+            continue;
+          }
+        }
+      }
+      
+      // 3. Skip if contact is blacklisted/ignored
+      const contactNumber = chat.id.user;
+      if (ignoredList.includes(contactNumber)) {
+        continue;
+      }
+      
+      // 4. Fetch the last message in the chat
+      const messages = await chat.fetchMessages({ limit: 1 });
+      if (messages && messages.length > 0) {
+        const lastMsg = messages[0];
+        
+        // If the last message is from the user (unreplied)
+        if (lastMsg && !lastMsg.fromMe) {
+          // Check if contact is expired/muted in bot configuration
+          let isMutedOrExpired = false;
+          if (chat.id.server === 'c.us') {
+            const users = loadSeenUsers(slug);
+            const userEntry = users.find(u => u.number === contactNumber);
+            if (userEntry) {
+              if (userEntry.isMuted) {
+                isMutedOrExpired = true;
+              } else {
+                const thresholdHours = (instConfig && instConfig.autoMuteHours !== undefined) ? Number(instConfig.autoMuteHours) : 12;
+                const cutoffMs = thresholdHours * 60 * 60 * 1000;
+                if (instConfig && instConfig.autoMuteOlderThan12Hours && !userEntry.unmuted && (Date.now() - userEntry.firstSeen > cutoffMs)) {
+                  isMutedOrExpired = true;
+                }
+              }
+            }
+          }
+          
+          if (!isMutedOrExpired) {
+            unrepliedMessages.push(lastMsg);
+          }
+        }
+      }
+    }
+    
+    logInstanceEvent(slug, 'system', `Found ${unrepliedMessages.length} unreplied messages to process.`);
+    
+    if (unrepliedMessages.length > 0) {
+      // Sort messages by timestamp chronologically (oldest first)
+      unrepliedMessages.sort((a, b) => a.timestamp - b.timestamp);
+      
+      for (let i = 0; i < unrepliedMessages.length; i++) {
+        const msg = unrepliedMessages[i];
+        const contactNumber = msg.from.split('@')[0];
+        
+        // Skip if message was somehow already processed or is currently processing
+        if (msg.id && msg.id._serialized && clientStates[slug].processedMessageIds.has(msg.id._serialized)) {
+          continue;
+        }
+        
+        logInstanceEvent(slug, 'system', `Queueing unreplied message [${i + 1}/${unrepliedMessages.length}] from +${contactNumber} for reply...`);
+        
+        // Emit the message event to process it using the standard pipeline
+        client.emit('message', msg);
+        
+        // Wait 3 seconds before queueing the next one to avoid rate limits
+        if (i < unrepliedMessages.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      }
+    }
+  } catch (err) {
+    logInstanceEvent(slug, 'error', `Failed to detect unreplied messages: ${err.message}`);
+  }
+}
+
 // Shared rules path for all instances
 const globalRulesFilePath = path.join(dataDir, 'rules.json');
 
@@ -1777,6 +1876,7 @@ function initInstanceClient(slug) {
       stats: { sent: 0, received: 0, replies: 0 }
     };
   }
+  clientStates[slug].processedMessageIds = new Set();
 
   const client = new Client({
     authStrategy: new LocalAuth({
@@ -1880,8 +1980,10 @@ function initInstanceClient(slug) {
     logInstanceEvent(slug, 'whatsapp', `Active & online! Logged in as: ${info.pushname} (${info.wid.user})`);
 
     // Run automatic mute check for users older than configured threshold (default 12 hours) on start/reconnect
-    checkAndAutoMuteUsers(slug).catch(err => {
-      logInstanceEvent(slug, 'error', `Startup mute check failed: ${err.message}`);
+    checkAndAutoMuteUsers(slug).then(async () => {
+      await detectAndQueueUnrepliedMessages(slug, client);
+    }).catch(err => {
+      logInstanceEvent(slug, 'error', `Startup checks failed: ${err.message}`);
     });
   });
 
@@ -1899,6 +2001,18 @@ function initInstanceClient(slug) {
 
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
+
+    // Prevent duplicate message processing (e.g., from startup scan vs live events)
+    if (msg.id && msg.id._serialized) {
+      if (clientStates[slug].processedMessageIds.has(msg.id._serialized)) {
+        return;
+      }
+      clientStates[slug].processedMessageIds.add(msg.id._serialized);
+      if (clientStates[slug].processedMessageIds.size > 2000) {
+        const firstKey = clientStates[slug].processedMessageIds.values().next().value;
+        clientStates[slug].processedMessageIds.delete(firstKey);
+      }
+    }
 
     // --- NEW GROUP WHITELIST LOGIC ---
     if (msg.from.endsWith('@g.us')) {
