@@ -1448,6 +1448,32 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   const listConfig = loadInstances();
   const instConfig = listConfig.find(i => i.slug === slug);
 
+  // 0. If this contact has no conversation memory, welcome them before any trigger/rule handling.
+  if (msg.from.endsWith('@c.us') && instConfig && instConfig.autoWelcomeMessage) {
+    const users = loadSeenUsers(slug);
+    const userEntry = users.find(u => u.number === senderNumber);
+    const alreadyWelcomed = userEntry && userEntry.welcomed;
+    const hasPastMemory = getConversationHistory(slug, senderNumber).length > 0;
+
+    if (!hasPastMemory || !alreadyWelcomed) {
+      logInstanceEvent(slug, 'system', `No previous conversation memory for +${senderNumber}. Sending Welcome Message before trigger/rule handling.`);
+      try {
+        await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
+        addToMemory(slug, senderNumber, 'user', msg.body);
+        addToMemory(slug, senderNumber, 'assistant', instConfig.autoWelcomeMessage);
+
+        if (instConfig.autoWelcomeSendApk) {
+          logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
+          await sendCachedApkReply(slug, msg, senderNumber);
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
+      }
+      saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
+      return;
+    }
+  }
+
   // 1. Auto-Ignore on block trigger text
   if (instConfig && instConfig.blockTriggerText && msg.body) {
     const triggerClean = instConfig.blockTriggerText.trim().toLowerCase();
@@ -1460,30 +1486,11 @@ async function processCombinedMessage(slug, senderNumber, msg) {
     }
   }
 
-  // 2. First-Time Auto Responder (Welcome Message)
+  // 2. Track first seen users when welcome is not configured.
   if (msg.from.endsWith('@c.us')) {
     const users = loadSeenUsers(slug);
     const userEntry = users.find(u => u.number === senderNumber);
     const alreadyWelcomed = userEntry && userEntry.welcomed;
-    const hasPastMemory = getConversationHistory(slug, senderNumber).length > 0;
-
-    if (instConfig && instConfig.autoWelcomeMessage && (!alreadyWelcomed || !hasPastMemory)) {
-      logInstanceEvent(slug, 'system', `No previous conversation memory for +${senderNumber}. Sending Welcome Message before auto-responder rules.`);
-      try {
-        await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
-        addToMemory(slug, senderNumber, 'user', msg.body);
-        addToMemory(slug, senderNumber, 'assistant', instConfig.autoWelcomeMessage);
-        
-        if (instConfig.autoWelcomeSendApk) {
-          logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
-          await sendCachedApkReply(slug, msg, senderNumber);
-        }
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
-      }
-      saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
-      return;
-    }
 
     if (!alreadyWelcomed) {
       saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false, msg.from);
