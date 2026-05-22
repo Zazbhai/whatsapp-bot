@@ -2016,10 +2016,12 @@ async function transcribeAudio(slug, media) {
       });
     });
 
-    logInstanceEvent(slug, 'system', `Executing Hugging Face ASR API fetch...`);
+    logInstanceEvent(slug, 'system', `Executing Hugging Face ASR via Inference SDK...`);
     
     const flacBuffer = fs.readFileSync(flacFile);
     const model = process.env.HF_STT_MODEL || 'openai/whisper-large-v3';
+    const provider = process.env.HF_STT_PROVIDER || 'fal-ai';
+    const { InferenceClient } = await import('@huggingface/inference');
     
     let finalTranscription = null;
     let success = false;
@@ -2031,41 +2033,35 @@ async function transcribeAudio(slug, media) {
       const maskedToken = token.substring(0, 8) + '...' + token.substring(token.length - 4);
       
       try {
-        logInstanceEvent(slug, 'system', `Querying HF model "${model}" with key ${maskedToken}...`);
+        logInstanceEvent(slug, 'system', `Querying HF model "${model}" via provider "${provider}" with key ${maskedToken}...`);
         
         let attempts = 0;
         const maxHfAttempts = 3;
+        const client = new InferenceClient(token);
         
         while (attempts < maxHfAttempts) {
           attempts++;
           
-          const res = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'audio/x-flac'
-            },
-            body: flacBuffer
-          });
-          
-          if (res.status === 200) {
-            const data = await res.json();
-            if (data && data.text) {
-              finalTranscription = data.text.trim();
+          try {
+            const output = await client.automaticSpeechRecognition({
+              data: flacBuffer,
+              model,
+              provider
+            });
+
+            const outputText = output && typeof output.text === 'string' ? output.text.trim() : '';
+            if (outputText) {
+              finalTranscription = outputText;
               success = true;
               break;
             } else {
-              throw new Error("Hugging Face API response did not contain text field: " + JSON.stringify(data));
+              throw new Error("Hugging Face Inference SDK response did not contain text field: " + JSON.stringify(output));
             }
-          } else if (res.status === 503) {
-            // Model is loading, wait and retry
-            const errData = await res.json().catch(() => ({}));
-            const waitTime = Math.min(errData.estimated_time || 5, 10);
-            logInstanceEvent(slug, 'system', `HF model is loading. Waiting ${waitTime} seconds before retrying (attempt ${attempts}/${maxHfAttempts})...`);
-            await new Promise(r => setTimeout(r, waitTime * 1000));
-          } else {
-            const errText = await res.text();
-            throw new Error(`HTTP ${res.status}: ${errText}`);
+          } catch (err) {
+            lastError = err;
+            if (attempts >= maxHfAttempts) throw err;
+            logInstanceEvent(slug, 'system', `HF ASR attempt ${attempts}/${maxHfAttempts} failed. Retrying in 3 seconds...`);
+            await new Promise(r => setTimeout(r, 3000));
           }
         }
         
@@ -2430,7 +2426,7 @@ function initInstanceClient(slug) {
     if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
       const senderNumber = msg.from.split('@')[0];
       try {
-        logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Commencing local offline auto-transcription...`);
+        logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Commencing Hugging Face auto-transcription...`);
         const media = await msg.downloadMedia();
         if (media && media.data) {
           transcribedText = await transcribeAudio(slug, media);
@@ -2438,7 +2434,7 @@ function initInstanceClient(slug) {
             msg.body = transcribedText;
             isVoiceNote = true;
           } else {
-            logInstanceEvent(slug, 'error', `Local offline transcription returned empty text for +${senderNumber}.`);
+            logInstanceEvent(slug, 'error', `Hugging Face transcription returned empty text for +${senderNumber}.`);
           }
         }
       } catch (err) {
