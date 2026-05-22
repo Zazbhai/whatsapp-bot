@@ -1286,26 +1286,13 @@ async function processAIUserQueue(userLockKey) {
 
     logInstanceEvent(slug, 'system', `No static keyword matched. Querying AI Core Agent...`);
 
-    let history = [];
-    try {
-      const chat = await msg.getChat();
-      const rawMessages = await chat.fetchMessages({ limit: 12 });
-      history = rawMessages
-        .filter(m => m.id._serialized !== msg.id._serialized && m.body)
-        .map(m => ({
-          role: m.fromMe ? 'assistant' : 'user',
-          content: m.body
-        }));
-      logInstanceEvent(slug, 'system', `Retrieved ${history.length} messages from actual WhatsApp chat history.`);
-    } catch (err) {
-      logInstanceEvent(slug, 'error', `Failed to fetch actual chat history: ${err.message}. Falling back to in-memory history.`);
-      history = getConversationHistory(slug, senderNumber)
-        .filter(m => m.role !== 'system')
-        .slice(-10)
-        .map(m => ({ role: m.role, content: m.content }));
-    }
+    // Use in-memory history ONLY — no Puppeteer calls here!
+    // This keeps the Puppeteer page free for other users' auto-responder rule replies.
+    const history = getConversationHistory(slug, senderNumber)
+      .filter(m => m.role !== 'system')
+      .slice(-10)
+      .map(m => ({ role: m.role, content: m.content }));
 
-    await acquireAISlot(slug);
     try {
       let aiResult = await generateAIResponse(slug, msg.body, history);
       let replyText = aiResult?.text || null;
@@ -1342,89 +1329,92 @@ async function processAIUserQueue(userLockKey) {
         replyText = preamble || null;
       }
 
+      // ── STEP 1: Send text reply (isolated try/catch — won't block APK) ────
       if (replyText) {
-        const chat = await msg.getChat();
-        await chat.sendStateTyping();
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        try {
+          await msg.reply(replyText);
+          logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${replyText.replace(/\n/g, ' ')}"`);
 
-        await sendSmartReply(slug, msg, chat, replyText);
-        logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${replyText.replace(/\n/g, ' ')}"`);
+          addToMemory(slug, senderNumber, 'user', msg.body);
+          addToMemory(slug, senderNumber, 'assistant', replyText);
 
-        addToMemory(slug, senderNumber, 'user', msg.body);
-        addToMemory(slug, senderNumber, 'assistant', replyText);
-
-        clientStates[slug].stats.replies++;
-        io.to(`instance_${slug}`).emit('stat_increment', 'replies');
-        recordUserResponse(slug, senderNumber);
+          clientStates[slug].stats.replies++;
+          io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+          recordUserResponse(slug, senderNumber);
+        } catch (replyErr) {
+          logInstanceEvent(slug, 'error', `Text reply failed for +${senderNumber}: ${replyErr.message}`);
+          // Still continue to APK send below!
+        }
       } else if (!shouldSendApk) {
         logInstanceEvent(slug, 'system', `AI Core returned an empty response. No reply dispatched.`);
       }
 
+      // ── STEP 2: Send APK file (independent — always attempted if needed) ──
       if (shouldSendApk) {
+        // 2-second break between text reply and APK
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
         if (finalSendApk) {
           logInstanceEvent(slug, 'system', `AI tagged [SEND_APK] — attaching app file for +${senderNumber}`);
         } else {
           logInstanceEvent(slug, 'system', `App intent detected — attaching APK for +${senderNumber}`);
         }
-        await sendCachedApkReply(slug, msg, senderNumber);
+
+        try {
+          const apk = latestApkCache[slug];
+          if (apk && apk.data) {
+            const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
+            // Try chat.sendMessage first (better for large files), fallback to msg.reply
+            try {
+              const chat = await Promise.race([
+                msg.getChat(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 10000))
+              ]);
+              await Promise.race([
+                chat.sendMessage(media),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 60000))
+              ]);
+            } catch (chatErr) {
+              logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), retrying with msg.reply...`);
+              await msg.reply(media);
+            }
+            logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
+            clientStates[slug].stats.replies++;
+            io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+            recordUserResponse(slug, senderNumber);
+          } else {
+            logInstanceEvent(slug, 'system', `Smart APK requested but cache is empty for +${senderNumber}`);
+          }
+        } catch (apkErr) {
+          logInstanceEvent(slug, 'error', `APK send completely failed for +${senderNumber}: ${apkErr.message}`);
+        }
       }
 
-      // ── Order completion detection ─────────────────────────────────────────
+      // ── STEP 3: Order completion detection ─────────────────────────────────
       if (finalOrderComplete) {
         logInstanceEvent(slug, 'system', `✅ [ORDER_COMPLETE] detected for +${senderNumber}. Auto-adding to ignore list.`);
         saveIgnoredUser(senderNumber);
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} successfully ordered — added to permanent ignore list.`);
       } else if (finalAskOrder) {
-        // AI is unsure — send a direct clarification question to the user
+        // 2-second break before asking order confirmation
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
         logInstanceEvent(slug, 'system', `❓ [ASK_ORDER] detected for +${senderNumber}. Sending order confirmation question.`);
         try {
           const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
           let textQuestion = `Did you successfully place your iPhone order on the app? 😊`;
-          let buttonsList = [
-            { id: 'btn_yes', body: 'Yes' },
-            { id: 'btn_no', body: 'No' }
-          ];
-          let selectOptionText = `Please select an option`;
           let fallbackText = `Did you successfully place your iPhone order on the app? Please reply *Yes* or *No* 😊`;
 
           if (userLang === 'hinglish') {
             textQuestion = `Kya aapne app par iPhone order successfully place kar diya hai? 😊`;
-            buttonsList = [
-              { id: 'btn_yes', body: 'Haan' },
-              { id: 'btn_no', body: 'Nahi' }
-            ];
-            selectOptionText = `Ek option select karein`;
             fallbackText = `Kya aapne app par iPhone order successfully place kar diya hai? Please *Haan* ya *Nahi* reply karein 😊`;
           } else if (userLang === 'hi') {
             textQuestion = `क्या आपने ऐप पर iPhone ऑर्डर सफलतापूर्वक प्लेस कर दिया है? 😊`;
-            buttonsList = [
-              { id: 'btn_yes', body: 'हाँ' },
-              { id: 'btn_no', body: 'नहीं' }
-            ];
-            selectOptionText = `कृपया एक विकल्प चुनें`;
             fallbackText = `क्या आपने ऐप पर iPhone ऑर्डर सफलतापूर्वक प्लेस कर दिया है? कृपया *हाँ* या *नहीं* लिखकर जवाब दें 😊`;
           }
 
-          const chat = await msg.getChat();
-          await chat.sendStateTyping();
-          await new Promise(resolve => setTimeout(resolve, 1200));
-          
-          try {
-            // Attempt to send as interactive buttons
-            const confirmationQ = new Buttons(
-              textQuestion,
-              buttonsList,
-              null,
-              selectOptionText
-            );
-            await msg.reply(confirmationQ);
-            logInstanceEvent(slug, 'send', `Order confirmation question (with buttons) sent to +${senderNumber} in language: ${userLang}`);
-          } catch (btnErr) {
-            // Fallback to sending standard text if buttons fail
-            logInstanceEvent(slug, 'system', `Failed to send buttons, falling back to text: ${btnErr.message}`);
-            await sendSmartReply(slug, msg, chat, fallbackText);
-            logInstanceEvent(slug, 'send', `Order confirmation question (text fallback) sent to +${senderNumber} in language: ${userLang}`);
-          }
+          await msg.reply(fallbackText);
+          logInstanceEvent(slug, 'send', `Order confirmation question sent to +${senderNumber} in language: ${userLang}`);
           
           // Add the confirmation question text to memory so the Yes/No intercept works
           addToMemory(slug, senderNumber, 'assistant', textQuestion);
@@ -1436,8 +1426,6 @@ async function processAIUserQueue(userLockKey) {
       // ──────────────────────────────────────────────────────────────────────
     } catch (err) {
       logInstanceEvent(slug, 'error', `AI Auto-responder routine failed: ${err.message}`);
-    } finally {
-      releaseAISlot(slug);
     }
   }
 
@@ -1475,9 +1463,9 @@ function saveCooldowns(cooldowns) {
   }
 }
 
-// Global registry of all keys: keyString -> { provider, key, busy, cooldownUntil }
+// Global registry of all keys: keyString -> { provider, key, cooldownUntil }
 let apiKeysRegistry = {};
-const pendingKeyRequests = [];
+let apiKeysRoundRobin = 0; // Round-robin counter for even distribution
 
 function initApiKeysRegistry() {
   const cooldowns = loadCooldowns();
@@ -1500,7 +1488,6 @@ function initApiKeysRegistry() {
     apiKeysRegistry[key] = {
       provider: 'huggingface',
       key,
-      busy: false,
       cooldownUntil: cooldowns[key] || 0
     };
   });
@@ -1513,10 +1500,15 @@ function initApiKeysRegistry() {
     apiKeysRegistry[key] = {
       provider,
       key,
-      busy: false,
       cooldownUntil: cooldowns[key] || 0
     };
   });
+  
+  // Log total keys loaded
+  const totalKeys = Object.keys(apiKeysRegistry).length;
+  const hfCount = Object.values(apiKeysRegistry).filter(k => k.provider === 'huggingface').length;
+  const otherCount = totalKeys - hfCount;
+  console.log(`[SYSTEM] API Key Registry initialized: ${otherCount} OpenRouter/Groq key(s), ${hfCount} HuggingFace key(s)`);
 }
 
 function initApiKeysRegistryIfEmpty() {
@@ -1528,29 +1520,6 @@ function initApiKeysRegistryIfEmpty() {
 // Initialize the API keys registry on startup
 initApiKeysRegistry();
 
-function flushKeyQueue() {
-  const now = Date.now();
-  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
-
-  let i = 0;
-  while (i < pendingKeyRequests.length) {
-    const req = pendingKeyRequests[i];
-    const nextKey = reserveApiKey(req.attemptedKeys);
-    if (nextKey) {
-      req.resolve(nextKey);
-      pendingKeyRequests.splice(i, 1);
-    } else {
-      const untriedKeys = activeKeys.filter(k => !req.attemptedKeys.has(k.key));
-      if (untriedKeys.length === 0) {
-        req.resolve(null);
-        pendingKeyRequests.splice(i, 1);
-      } else {
-        i++;
-      }
-    }
-  }
-}
-
 function putKeyOnCooldown(keyString) {
   const cooldowns = loadCooldowns();
   const cooldownUntil = Date.now() + 24 * 60 * 60 * 1000; // 24 hours cooldown
@@ -1560,103 +1529,50 @@ function putKeyOnCooldown(keyString) {
   if (apiKeysRegistry[keyString]) {
     apiKeysRegistry[keyString].cooldownUntil = cooldownUntil;
   }
-  
-  flushKeyQueue();
 }
 
-function reserveApiKey(attemptedKeys = new Set()) {
+// Pick a random key from the active pool, excluding already-attempted keys for this request.
+// Uses round-robin base offset + random jitter so different users get different keys even
+// when requests arrive at the same time.
+function pickRandomKey(attemptedKeys = new Set()) {
   const now = Date.now();
   initApiKeysRegistryIfEmpty();
   
-  // Filter active keys that have not been attempted in this request
+  // Get all non-cooldown, non-attempted keys
   const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now && !attemptedKeys.has(k.key));
-  
-  // Find non-busy available keys
-  let availableKeys = activeKeys.filter(k => !k.busy);
-  if (availableKeys.length === 0) {
+  if (activeKeys.length === 0) {
     return null;
   }
   
-  // Shuffle availableKeys to distribute load evenly across multiple keys
-  for (let i = availableKeys.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [availableKeys[i], availableKeys[j]] = [availableKeys[j], availableKeys[i]];
-  }
+  // Separate by provider priority
+  const otherKeys = activeKeys.filter(k => k.provider !== 'huggingface');
+  const hfKeys = activeKeys.filter(k => k.provider === 'huggingface');
   
-  // Priority 1: Other (OpenRouter, Groq)
-  const otherKey = availableKeys.find(k => k.provider !== 'huggingface');
-  if (otherKey) {
-    otherKey.busy = true;
-    return otherKey;
-  }
+  // Pick from OpenRouter/Groq first (priority), then HuggingFace
+  const pool = otherKeys.length > 0 ? otherKeys : hfKeys;
   
-  // Priority 2: Hugging Face (HF)
-  const hfKey = availableKeys.find(k => k.provider === 'huggingface');
-  if (hfKey) {
-    hfKey.busy = true;
-    return hfKey;
-  }
+  // Round-robin with random jitter: ensures different users hitting simultaneously get different keys
+  const offset = apiKeysRoundRobin + Math.floor(Math.random() * pool.length);
+  const index = offset % pool.length;
+  apiKeysRoundRobin = (apiKeysRoundRobin + 1) % 1000000; // Increment global counter, wrap to prevent overflow
   
-  return null;
+  return pool[index];
 }
 
-function acquireApiKey(attemptedKeys) {
-  const key = reserveApiKey(attemptedKeys);
-  if (key) {
-    return Promise.resolve(key);
-  }
-
-  const now = Date.now();
-  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
-  const untriedKeys = activeKeys.filter(k => !attemptedKeys.has(k.key));
-  
-  if (untriedKeys.length === 0) {
-    return Promise.resolve(null);
-  }
-
-  return new Promise(resolve => {
-    pendingKeyRequests.push({ resolve, attemptedKeys });
-  });
-}
-
+// No-op release — cloud APIs handle concurrent requests natively, no busy-flag needed
 function releaseApiKey(keyObj) {
-  if (keyObj) {
-    keyObj.busy = false;
-  }
-  flushKeyQueue();
+  // Intentionally empty: cloud API keys don't need exclusive locking
 }
 
-// Native LLM Requester with global concurrency key load balancing, Hugging Face priority, and 24-hr cooldown
+// Native LLM Requester with parallel model racing, random key rotation, and 24-hr cooldown run in a child process (multiprocessing)
 async function generateAIResponse(slug, userMessage, history = [], isRetry = false) {
+  const { fork } = require('child_process');
   const inst = getInstanceBySlug(slug);
   const systemPrompt = buildSystemPrompt(inst, isRetry);
   if (!systemPrompt) {
     logInstanceEvent(slug, 'error', 'AI enabled but persona is empty — set AI Persona in the dashboard.');
     return null;
   }
-
-  // Fallback model chains
-  const hfModels = [
-    process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V4-Flash:novita',
-    'deepseek-ai/DeepSeek-V4-Flash:novita',
-    'meta-llama/Llama-3.3-70B-Instruct',
-    'Qwen/Qwen2.5-72B-Instruct'
-  ];
-
-  const openrouterModels = [
-    process.env.LLM_MODEL || 'openai/gpt-oss-120b:free',
-    'openai/gpt-oss-120b:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-    'qwen/qwen3-next-80b-a3b-instruct:free',
-    'meta-llama/llama-3.3-70b-instruct:free',
-    'openrouter/free'
-  ];
-
-  const groqModels = [
-    process.env.LLM_MODEL || 'llama3-8b-8192',
-    'gemma2-9b-it',
-    'gemma-7b-it'
-  ];
 
   // Initialize registry if needed
   initApiKeysRegistryIfEmpty();
@@ -1667,124 +1583,82 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
     return null;
   }
 
-  let attempts = 0;
-  const maxAttempts = Math.max(totalKeysCount * 2, 10);
-  const attemptedKeys = new Set();
-
-  while (attempts < maxAttempts) {
-    attempts++;
+  return new Promise((resolve) => {
+    const workerPath = path.join(__dirname, 'ai_worker.js');
+    logInstanceEvent(slug, 'system', `Forking AI worker process for +${userMessage.substring(0, 15)}...`);
     
-    // Check if we have already attempted all active keys
-    const now = Date.now();
-    const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now);
-    const untriedKeys = activeKeys.filter(k => !attemptedKeys.has(k.key));
-    if (untriedKeys.length === 0) {
-      logInstanceEvent(slug, 'system', 'All available active LLM keys have been attempted and failed for this request.');
-      break;
-    }
+    const child = fork(workerPath, [], {
+      env: { ...process.env }
+    });
 
-    // Acquire key from pool (waits/queues if all are busy or cooldowned)
-    const keyObj = await acquireApiKey(attemptedKeys);
-    if (!keyObj) {
-      logInstanceEvent(slug, 'system', 'No available keys could be acquired (all attempted or cooldowned).');
-      break;
-    }
-    const activeApiKey = keyObj.key;
-    const provider = keyObj.provider;
-    const maskedKey = activeApiKey.substring(0, 8) + '...' + activeApiKey.substring(activeApiKey.length - 4);
-    
-    // Track that we are attempting this key in this request
-    attemptedKeys.add(activeApiKey);
-    
-    let models = [];
-    let url = '';
-    if (provider === 'huggingface') {
-      url = 'https://router.huggingface.co/v1/chat/completions';
-      models = hfModels;
-    } else if (provider === 'groq') {
-      url = 'https://api.groq.com/openai/v1/chat/completions';
-      models = groqModels;
-    } else {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      models = openrouterModels;
-    }
-    models = [...new Set(models)];
+    let resolved = false;
 
-    let success = false;
-    let content = null;
-
-    for (const model of models) {
-      try {
-        logInstanceEvent(slug, 'system', `AI query [${provider}] -> ${model} using key ${maskedKey}`);
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT);
-
-        const response = await fetch(url, {
-          signal: controller.signal,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${activeApiKey}`
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...history,
-              { role: 'user', content: userMessage }
-            ],
-            max_tokens: 300
-          })
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          const errText = await response.text();
-          logInstanceEvent(slug, 'error', `AI Query failed on [${provider}] (${response.status}) using ${model}: ${errText.substring(0, 120)}`);
-          
-          const isKeyError = response.status === 400 || response.status === 401 || response.status === 403 || response.status === 429 || response.status === 402;
-          const isQuotaMsg = /quota|limit|exhausted|insufficient|credit|balance/i.test(errText);
-          
-          if (isKeyError || isQuotaMsg) {
-            logInstanceEvent(slug, 'system', `Key ${maskedKey} has encountered a fatal key/quota error. Cooldown triggered for 24 hours.`);
-            putKeyOnCooldown(activeApiKey);
-            break; // Break model loop to switch to next key
-          }
-          continue; // Try next model on this key
-        }
-
-        const responseJson = await response.json();
-        content = responseJson?.choices?.[0]?.message?.content?.trim();
-        if (content) {
-          logInstanceEvent(slug, 'system', `AI replied via "${model}" [using ${provider}]`);
-          success = true;
-          break; // Exit model loop
-        }
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `AI query error on [${provider}] [${model}]: ${err.message}`);
-        continue;
+    // Safety watchdog: if the child worker gets stuck, terminate it after 35 seconds
+    const timeoutId = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        logInstanceEvent(slug, 'error', `AI worker process timed out (35s). Force terminating child process.`);
+        try {
+          child.kill('SIGKILL');
+        } catch (e) {}
+        resolve(null);
       }
-    }
+    }, 35000);
 
-    releaseApiKey(keyObj);
+    child.on('message', (message) => {
+      if (resolved) return;
+      
+      // Update key cooldowns in main process registry if worker flagged any key quota/auth issues
+      if (message.cooldownKeys && Array.isArray(message.cooldownKeys)) {
+        message.cooldownKeys.forEach(k => {
+          logInstanceEvent(slug, 'system', `Propagated key cooldown from child worker: ${k.substring(0, 8)}...`);
+          putKeyOnCooldown(k);
+        });
+      }
 
-    if (success && content) {
-      return parseAIResponse(content);
-    }
+      // Update global round robin state
+      if (typeof message.apiKeysRoundRobin === 'number') {
+        apiKeysRoundRobin = message.apiKeysRoundRobin;
+      }
 
-    // Check if we have any active non-cooldown keys remaining at all
-    const nowCheck = Date.now();
-    const activeKeysCount = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < nowCheck).length;
-    if (activeKeysCount === 0) {
-      logInstanceEvent(slug, 'error', 'All configured LLM keys are currently on a 24-hour cooldown. No active keys available.');
-      return null;
-    }
-  }
+      if (message.status === 'success') {
+        resolved = true;
+        clearTimeout(timeoutId);
+        resolve(parseAIResponse(message.content));
+      } else {
+        resolved = true;
+        clearTimeout(timeoutId);
+        logInstanceEvent(slug, 'error', `AI worker process failed: ${message.error}`);
+        resolve(null);
+      }
+    });
 
-  logInstanceEvent(slug, 'error', 'AI Query failed after maximum key failover attempts.');
-  return null;
+    child.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      logInstanceEvent(slug, 'error', `AI worker process encountered error: ${err.message}`);
+      resolve(null);
+    });
+
+    child.on('exit', (code, signal) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeoutId);
+        logInstanceEvent(slug, 'error', `AI worker process exited unexpectedly with code ${code} (signal: ${signal})`);
+        resolve(null);
+      }
+    });
+
+    // Send payload to start the worker
+    child.send({
+      systemPrompt,
+      userMessage,
+      history,
+      apiKeysRegistry,
+      apiKeysRoundRobin
+    });
+  });
 }
 
 // Voice Note Transcription engine — uses direct Google Speech API fetch
@@ -1912,6 +1786,7 @@ function initInstanceClient(slug) {
     puppeteer: {
       executablePath: findChrome(),
       headless: true,
+      protocolTimeout: 180000, // 3 minutes — prevents "Runtime.callFunctionOn timed out" CDP errors under heavy load
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -1930,7 +1805,7 @@ function initInstanceClient(slug) {
         '--js-flags=--max-old-space-size=128' // Crucial RAM tuner: Limits V8 engine memory heap in headless Chrome renderers (saves gigabytes of RAM on 8GB VPS!)
       ]
     },
-    puppeteerTimeout: 90000
+    puppeteerTimeout: 120000
   });
 
   client.on('qr', async (qr) => {
@@ -2248,10 +2123,19 @@ function initInstanceClient(slug) {
 
     const senderName = msg._data.notifyName || '';
     
-    // Always persist the sender's name so it shows correctly in the Users dashboard tab
-    // (previously this only ran for @c.us DMs, so group chat users showed as "Unknown Contact")
+    // Update name for users already in the seen list (works for both DMs and groups).
+    // IMPORTANT: Do NOT create new entries here for group messages — that would cause
+    // the welcome message to be skipped when they later send a DM (isAlreadySeen = true).
     if (senderName) {
-      saveSeenUser(slug, senderNumber, senderName);
+      const seenList = loadSeenUsers(slug);
+      const existingEntry = seenList.find(u => u.number === senderNumber);
+      if (existingEntry && existingEntry.name !== senderName) {
+        // User already seen via DM — just update their display name in the cache + disk
+        existingEntry.name = senderName;
+        const seenFilePath = path.join(dataDir, `seen_users_${slug}.json`);
+        fs.promises.writeFile(seenFilePath, JSON.stringify(seenList, null, 2), 'utf8')
+          .catch(err => console.error(`Async seen users name update failed for ${slug}:`, err));
+      }
     }
     
     clientStates[slug].stats.received++;
@@ -2357,73 +2241,75 @@ function initInstanceClient(slug) {
           for (let i = 0; i < textReplies.length; i++) {
             let replyText = textReplies[i];
             
-            // Re-simulate typing delay before each sequential message
-            try {
-              const chat = await msg.getChat();
-              await chat.sendStateTyping();
-            } catch {}
+            // Re-simulate typing delay in the background (non-blocking)
+            msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
             
-            // Small stagger delay between sequential text replies
+            // 2-second break between sequential replies
             if (i > 0) {
-              await new Promise(resolve => setTimeout(resolve, 1500));
+              await new Promise(resolve => setTimeout(resolve, 2000));
             }
 
-            if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
-              const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
-              await msg.reply(menuButtons);
-            } else {
-              await sendSmartReply(slug, msg, null, replyText);
-            }
+            try {
+              if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
+                const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
+                await msg.reply(menuButtons);
+              } else {
+                await sendSmartReply(slug, msg, null, replyText);
+              }
 
-            logInstanceEvent(slug, 'send', `Replied sequentially [${i + 1}/${textReplies.length}] to +${senderNumber}: "${replyText.substring(0, 80)}"`);
-            
-            clientStates[slug].stats.replies++;
-            io.to(`instance_${slug}`).emit('stat_increment', 'replies');
-            recordUserResponse(slug, senderNumber);
+              logInstanceEvent(slug, 'send', `Replied sequentially [${i + 1}/${textReplies.length}] to +${senderNumber}: "${replyText.substring(0, 80)}"`);
+              
+              clientStates[slug].stats.replies++;
+              io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+              recordUserResponse(slug, senderNumber);
+            } catch (replyErr) {
+              logInstanceEvent(slug, 'error', `Sequential text reply #${i + 1} failed: ${replyErr.message}`);
+            }
           }
 
           // If sendApk option is active, automatically send the cached APK file next!
           if (rule.sendApk) {
             const apk = latestApkCache[slug];
             if (apk && apk.data) {
-              try {
-                const chat = await msg.getChat();
-                await chat.sendStateTyping();
-              } catch {}
-              
-              // Wait 1.5s before attaching APK
-              await new Promise(resolve => setTimeout(resolve, 1500));
+              // Wait 2 seconds (2000ms break) before attaching APK
+              await new Promise(resolve => setTimeout(resolve, 2000));
+
+              // Trigger typing delay in the background (non-blocking)
+              msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
 
               logInstanceEvent(slug, 'system', `Auto-attaching APK file for rule "${rule.trigger}" to +${senderNumber}...`);
               const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-              await msg.reply(media);
-
-              logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
               
-              clientStates[slug].stats.replies++;
-              io.to(`instance_${slug}`).emit('stat_increment', 'replies');
-              recordUserResponse(slug, senderNumber);
+              try {
+                await msg.reply(media);
+                logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
+                
+                clientStates[slug].stats.replies++;
+                io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+                recordUserResponse(slug, senderNumber);
+              } catch (apkErr) {
+                logInstanceEvent(slug, 'error', `Rule APK send failed for rule "${rule.trigger}": ${apkErr.message}`);
+              }
             } else {
               logInstanceEvent(slug, 'system', `Rule triggered APK attachment, but no APK is cached for instance "${slug}"`);
             }
           }
         };
 
-        try {
-          const chat = await msg.getChat();
-          await chat.sendStateTyping();
+        // Fire auto-reply asynchronously in the background so it never blocks the main client message event handler
+        (async () => {
+          // Trigger typing state asynchronously in the background
+          msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
 
-          setTimeout(async () => {
-            try {
-              await sendReply();
-            } catch (replyErr) {
-              logInstanceEvent(slug, 'error', `Sequential auto-reply dispatch failed: ${replyErr.message}`);
-            }
-          }, delay);
-        } catch (chatErr) {
-          logInstanceEvent(slug, 'error', `Typing simulator failure: ${chatErr.message}`);
-          await sendReply().catch(err => logInstanceEvent(slug, 'error', `Backup sequential dispatch failed: ${err.message}`));
-        }
+          // Wait for the random human-reply stagger delay
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          try {
+            await sendReply();
+          } catch (replyErr) {
+            logInstanceEvent(slug, 'error', `Sequential auto-reply dispatch failed: ${replyErr.message}`);
+          }
+        })().catch(err => logInstanceEvent(slug, 'error', `Background auto-reply dispatch error: ${err.message}`));
         break;
       }
     }
