@@ -208,17 +208,21 @@ function loadSeenUsers(slug) {
   return seenUsersCache[slug];
 }
 
-function saveSeenUser(slug, number, name = '') {
+function saveSeenUser(slug, number, name = '', welcomed = false) {
   const users = loadSeenUsers(slug);
   let userEntry = users.find(u => u.number === number);
   let changed = false;
   if (!userEntry) {
-    userEntry = { number, firstSeen: Date.now(), name };
+    userEntry = { number, firstSeen: Date.now(), name, welcomed };
     users.push(userEntry);
     changed = true;
   } else {
     if (name && userEntry.name !== name) {
       userEntry.name = name;
+      changed = true;
+    }
+    if (welcomed && !userEntry.welcomed) {
+      userEntry.welcomed = true;
       changed = true;
     }
   }
@@ -2109,7 +2113,11 @@ function initInstanceClient(slug) {
 
     // First-Time Auto Responder (Welcome Message) for Direct Messages
     if (msg.from.endsWith('@c.us')) {
-      if (!isAlreadySeen) {
+      const users = loadSeenUsers(slug);
+      const userEntry = users.find(u => u.number === senderNumber);
+      const alreadyWelcomed = userEntry && userEntry.welcomed;
+
+      if (!alreadyWelcomed) {
         if (instConfig && instConfig.autoWelcomeMessage) {
           logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
           try {
@@ -2122,10 +2130,11 @@ function initInstanceClient(slug) {
           } catch (err) {
             logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
           }
-        }
-        saveSeenUser(slug, senderNumber, msg._data.notifyName || '');
-        if (instConfig && instConfig.autoWelcomeMessage) {
+          saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true);
           return; // Halt processing: skip all other rules or AI for this first message
+        } else {
+          // No welcome message configured, but we still mark them as seen (welcomed = false)
+          saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false);
         }
       }
     }
