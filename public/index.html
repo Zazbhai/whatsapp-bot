@@ -101,6 +101,10 @@
           <i data-lucide="cpu"></i>
           <span>Bot Instances</span>
         </a>
+        <a href="#" class="menu-item" data-tab="keys" id="menu-item-keys">
+          <i data-lucide="key"></i>
+          <span>API Keys</span>
+        </a>
       </nav>
 
       <div class="sidebar-footer">
@@ -817,6 +821,95 @@
                 <!-- Dynamic instances loaded via JS -->
               </tbody>
             </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: API KEYS MANAGEMENT -->
+      <section class="tab-pane" id="tab-keys">
+        <!-- Key Metrics Counts -->
+        <div class="dashboard-grid" style="grid-template-columns: repeat(2, 1fr); gap: 20px;">
+          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 20px; padding: 20px;">
+            <div class="stat-icon" style="background: rgba(124, 58, 237, 0.1); color: var(--primary); margin-bottom: 0; width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+              <i data-lucide="key" style="width: 24px; height: 24px;"></i>
+            </div>
+            <div>
+              <div class="stat-number" id="keys-or-count" style="font-size: 2rem; margin-bottom: 0; line-height: 1;">0</div>
+              <div class="stat-label" style="margin-top: 4px; font-weight: 600;">OpenRouter Key(s)</div>
+            </div>
+          </div>
+          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 20px; padding: 20px;">
+            <div class="stat-icon" style="background: rgba(34, 197, 94, 0.1); color: var(--whatsapp); margin-bottom: 0; width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+              <i data-lucide="key" style="width: 24px; height: 24px;"></i>
+            </div>
+            <div>
+              <div class="stat-number" id="keys-hf-count" style="font-size: 2rem; margin-bottom: 0; line-height: 1;">0</div>
+              <div class="stat-label" style="margin-top: 4px; font-weight: 600;">Hugging Face Token(s)</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid" style="grid-template-columns: 1fr 1.8fr; gap: 25px; align-items: start;">
+          <!-- Add Key Panel -->
+          <div class="glass-card">
+            <div class="card-header">
+              <h3>Add New API Key</h3>
+            </div>
+            <form id="add-key-form" class="sleek-form" style="margin-top: 15px;">
+              <div class="form-group" style="margin-bottom: 15px;">
+                <label for="key-provider" style="font-weight: 600;">API Provider</label>
+                <select id="key-provider" required style="width: 100%; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); outline: none;">
+                  <option value="openrouter">OpenRouter / Groq (sk-or-...)</option>
+                  <option value="huggingface">Hugging Face (hf_...)</option>
+                </select>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 20px;">
+                <label for="key-value" style="font-weight: 600;">Secret Key Value</label>
+                <div class="input-with-icon">
+                  <i data-lucide="lock"></i>
+                  <input type="password" id="key-value" placeholder="Enter raw API key/token..." required style="width: 100%; padding-left: 45px;">
+                </div>
+                <span class="input-tip" style="margin-top: 6px; display: block; font-size: 0.75rem; color: var(--text-muted);">
+                  The key will be saved securely in your local environment file.
+                </span>
+              </div>
+
+              <button type="submit" class="btn btn-primary btn-block" style="padding: 12px;">
+                <i data-lucide="plus"></i>
+                <span>Register API Key</span>
+              </button>
+            </form>
+          </div>
+
+          <!-- Active Keys Panel -->
+          <div class="glass-card">
+            <div class="card-header">
+              <h3>Active Credentials Registry</h3>
+            </div>
+            <div class="card-body" style="margin-top: 15px; display: flex; flex-direction: column; gap: 20px;">
+              <!-- OpenRouter List -->
+              <div>
+                <h4 style="margin-bottom: 10px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); display: flex; align-items: center; gap: 8px;">
+                  <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--primary);"></span>
+                  OpenRouter / Groq Keys
+                </h4>
+                <div id="or-keys-list" style="display: flex; flex-direction: column; gap: 8px;">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
+
+              <!-- Hugging Face List -->
+              <div>
+                <h4 style="margin-bottom: 10px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); display: flex; align-items: center; gap: 8px;">
+                  <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--whatsapp);"></span>
+                  Hugging Face Tokens
+                </h4>
+                <div id="hf-keys-list" style="display: flex; flex-direction: column; gap: 8px;">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>

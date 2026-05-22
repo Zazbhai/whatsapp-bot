@@ -1270,10 +1270,10 @@ function enqueueAIReply(slug, senderNumber, msg) {
     clearTimeout(pendingDebounces[userLockKey].timer);
   }
   
-  let delay = 2000;
+  let delay = 3000;
   if (isSpamCoolingDown(slug, senderNumber)) {
     const until = spamCooldowns[slug][senderNumber];
-    delay = Math.max(2000, until - Date.now());
+    delay = Math.max(3000, until - Date.now());
   }
   
   pendingDebounces[userLockKey].timer = setTimeout(() => {
@@ -1292,7 +1292,7 @@ function enqueueAIReply(slug, senderNumber, msg) {
     processGlobalAIQueue().catch(err => {
       logInstanceEvent(slug, 'error', `Global AI queue processor failed: ${err.message}`);
     });
-  }, 2000);
+  }, delay);
 }
 
 async function processGlobalAIQueue() {
@@ -1718,11 +1718,26 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
   });
 }
 
-// Voice Note Transcription engine — uses direct Google Speech API fetch
+// Retrieve and filter all Hugging Face tokens from environment config
+function getHuggingFaceTokens() {
+  const hfTokensRaw = process.env.HF_TOKENS || process.env.HF_TOKEN || '';
+  return hfTokensRaw.split(/[\s,;]+/)
+    .map(k => k.trim())
+    .filter(Boolean)
+    .filter(k => !k.includes('your_token_here'));
+}
+
+// Voice Note Transcription engine — uses Hugging Face speech-to-text inference API
 async function transcribeAudio(slug, media) {
   const { exec } = require('child_process');
   
-  // Direct Node.js Google Speech API Integration
+  // Extract and filter Hugging Face tokens
+  const tokens = getHuggingFaceTokens();
+  if (tokens.length === 0) {
+    logInstanceEvent(slug, 'error', `Hugging Face transcription failed: No valid HF tokens configured under HF_TOKENS in .env`);
+    return null;
+  }
+  
   let format = 'ogg';
   if (media.mimetype) {
     const mainMime = media.mimetype.split(';')[0].toLowerCase();
@@ -1743,10 +1758,10 @@ async function transcribeAudio(slug, media) {
     logInstanceEvent(slug, 'system', `Saving voice note buffer to temporary file...`);
     fs.writeFileSync(tempFile, Buffer.from(media.data, 'base64'));
 
-    logInstanceEvent(slug, 'system', `Converting audio to FLAC via FFmpeg for Google Speech API...`);
+    logInstanceEvent(slug, 'system', `Converting audio to FLAC via FFmpeg for Hugging Face API...`);
     
     await new Promise((resolve, reject) => {
-      // Use FFmpeg to convert input to mono 16kHz FLAC required by Google API
+      // Use FFmpeg to convert input to mono 16kHz FLAC
       const cmd = `ffmpeg -y -i "${tempFile}" -ac 1 -ar 16000 -f flac "${flacFile}"`;
       exec(cmd, (error, stdout, stderr) => {
         if (error) {
@@ -1756,54 +1771,80 @@ async function transcribeAudio(slug, media) {
       });
     });
 
-    logInstanceEvent(slug, 'system', `Executing direct Google Speech API fetch...`);
+    logInstanceEvent(slug, 'system', `Executing Hugging Face ASR API fetch...`);
     
     const flacBuffer = fs.readFileSync(flacFile);
-    const key = 'AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw';
-    const res = await fetch(`http://www.google.com/speech-api/v2/recognize?lang=en-US&client=chromium&key=${key}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'audio/x-flac; rate=16000',
-        'User-Agent': 'Mozilla/5.0'
-      },
-      body: flacBuffer
-    });
-
-    if (!res.ok) {
-       throw new Error(`Google Speech API returned status ${res.status}: ${await res.text()}`);
-    }
-
-    const textResponse = await res.text();
+    const model = process.env.HF_STT_MODEL || 'openai/whisper-large-v3';
+    
     let finalTranscription = null;
+    let success = false;
+    let lastError = null;
 
-    // Parse the multiple newline-separated JSON objects
-    const lines = textResponse.split('\n').filter(l => l.trim().length > 0);
-    for (const line of lines) {
+    // Failover cycle through available Hugging Face keys
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      const maskedToken = token.substring(0, 8) + '...' + token.substring(token.length - 4);
+      
       try {
-        const parsed = JSON.parse(line);
-        if (parsed.result && parsed.result.length > 0) {
-          const alt = parsed.result[0].alternative;
-          if (alt && alt.length > 0 && alt[0].transcript) {
-            finalTranscription = alt[0].transcript.trim();
+        logInstanceEvent(slug, 'system', `Querying HF model "${model}" with key ${maskedToken}...`);
+        
+        let attempts = 0;
+        const maxHfAttempts = 3;
+        
+        while (attempts < maxHfAttempts) {
+          attempts++;
+          
+          const res = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'audio/x-flac'
+            },
+            body: flacBuffer
+          });
+          
+          if (res.status === 200) {
+            const data = await res.json();
+            if (data && data.text) {
+              finalTranscription = data.text.trim();
+              success = true;
+              break;
+            } else {
+              throw new Error("Hugging Face API response did not contain text field: " + JSON.stringify(data));
+            }
+          } else if (res.status === 503) {
+            // Model is loading, wait and retry
+            const errData = await res.json().catch(() => ({}));
+            const waitTime = Math.min(errData.estimated_time || 5, 10);
+            logInstanceEvent(slug, 'system', `HF model is loading. Waiting ${waitTime} seconds before retrying (attempt ${attempts}/${maxHfAttempts})...`);
+            await new Promise(r => setTimeout(r, waitTime * 1000));
+          } else {
+            const errText = await res.text();
+            throw new Error(`HTTP ${res.status}: ${errText}`);
           }
         }
-      } catch (e) {
-        // ignore malformed lines
+        
+        if (success) {
+          break; // Break the key failover loop
+        }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `HF transcription attempt with key ${maskedToken} failed: ${err.message}`);
+        lastError = err;
       }
     }
 
     if (finalTranscription) {
-      logInstanceEvent(slug, 'system', `Direct Node.js Google transcription completed successfully!`);
+      logInstanceEvent(slug, 'system', `Hugging Face Speech-to-Text completed successfully: "${finalTranscription.substring(0, 60)}..."`);
       return finalTranscription;
     } else {
-      logInstanceEvent(slug, 'system', `Google Speech API returned empty text (audio might be silent or unclear).`);
+      logInstanceEvent(slug, 'error', `Hugging Face Speech-to-Text returned empty or failed. Last error: ${lastError ? lastError.message : 'Unknown'}`);
       return null;
     }
   } catch (err) {
-    logInstanceEvent(slug, 'error', `Direct Node.js transcription failed: ${err.message}`);
+    logInstanceEvent(slug, 'error', `Hugging Face transcription execution error: ${err.message}`);
     return null;
   } finally {
-    // Force cleanup of temporary files to prevent disk leakages
+    // Force cleanup of temporary files to prevent disk leaks
     if (fs.existsSync(tempFile)) {
       try { fs.unlinkSync(tempFile); } catch (e) {}
     }
@@ -3224,6 +3265,135 @@ app.post('/api/logout', authenticateToken, requireInstance, async (req, res) => 
   } catch (err) {
     logInstanceEvent(slug, 'error', `WhatsApp disconnect failed: ${err.message}`);
     res.status(500).json({ error: `WhatsApp disconnect failed: ${err.message}` });
+  }
+});
+
+// Helper to update environment variable and sync key registry
+function updateEnvKey(envVarName, newKeysArray) {
+  const envPath = path.join(__dirname, '.env');
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    content = fs.readFileSync(envPath, 'utf8');
+  }
+  
+  const newValue = newKeysArray.join(',');
+  const lineRegex = new RegExp(`^\\s*${envVarName}\\s*=.*$`, 'm');
+  
+  if (lineRegex.test(content)) {
+    content = content.replace(lineRegex, `${envVarName}=${newValue}`);
+  } else {
+    content = content.trim() + `\n${envVarName}=${newValue}\n`;
+  }
+
+  // Remove singular variable to keep .env clean and prevent duplication
+  const singularVar = envVarName === 'LLM_API_KEYS' ? 'LLM_API_KEY' : 'HF_TOKEN';
+  const singularRegex = new RegExp(`^\\s*${singularVar}\\s*=.*$`, 'm');
+  if (singularRegex.test(content)) {
+    content = content.replace(singularRegex, '');
+  }
+  
+  fs.writeFileSync(envPath, content, 'utf8');
+  process.env[envVarName] = newValue;
+  delete process.env[singularVar];
+  
+  // Reload registry
+  initApiKeysRegistry();
+}
+
+// API Keys Manager Endpoints
+app.get('/api/keys', authenticateToken, (req, res) => {
+  const hfKeysStr = process.env.HF_TOKENS || process.env.HF_TOKEN || '';
+  const hfKeys = hfKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+
+  const orKeysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
+  const orKeys = orKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+
+  const maskKey = (key) => {
+    if (key.length <= 12) return '***';
+    return key.substring(0, 8) + '...' + key.substring(key.length - 4);
+  };
+
+  const mapKeys = (keysList) => {
+    return keysList.map(key => ({
+      id: crypto.createHash('sha256').update(key).digest('hex'),
+      masked: maskKey(key)
+    }));
+  };
+
+  res.json({
+    openrouter: mapKeys(orKeys),
+    huggingface: mapKeys(hfKeys),
+    counts: {
+      openrouter: orKeys.length,
+      huggingface: hfKeys.length
+    }
+  });
+});
+
+app.post('/api/keys', authenticateToken, (req, res) => {
+  const { key, provider } = req.body;
+  if (!key || !provider) {
+    return res.status(400).json({ error: 'Key and provider are required.' });
+  }
+
+  const trimmedKey = key.trim();
+  if (!trimmedKey) {
+    return res.status(400).json({ error: 'Key cannot be empty.' });
+  }
+
+  const lowerProvider = provider.toLowerCase();
+  if (lowerProvider !== 'openrouter' && lowerProvider !== 'huggingface') {
+    return res.status(400).json({ error: 'Invalid provider. Must be "openrouter" or "huggingface".' });
+  }
+
+  const envVar = lowerProvider === 'openrouter' ? 'LLM_API_KEYS' : 'HF_TOKENS';
+  const currentStr = process.env[envVar] || '';
+  const currentKeys = currentStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+
+  if (currentKeys.includes(trimmedKey)) {
+    return res.status(409).json({ error: 'Key already exists.' });
+  }
+
+  currentKeys.push(trimmedKey);
+  
+  try {
+    updateEnvKey(envVar, currentKeys);
+    res.status(201).json({ message: 'Key added successfully.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save key: ' + error.message });
+  }
+});
+
+app.delete('/api/keys', authenticateToken, (req, res) => {
+  const { id, provider } = req.body;
+  if (!id || !provider) {
+    return res.status(400).json({ error: 'Key id and provider are required.' });
+  }
+
+  const lowerProvider = provider.toLowerCase();
+  if (lowerProvider !== 'openrouter' && lowerProvider !== 'huggingface') {
+    return res.status(400).json({ error: 'Invalid provider.' });
+  }
+
+  const envVar = lowerProvider === 'openrouter' ? 'LLM_API_KEYS' : 'HF_TOKENS';
+  const currentStr = process.env[envVar] || '';
+  const currentKeys = currentStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+
+  const targetIndex = currentKeys.findIndex(key => {
+    return crypto.createHash('sha256').update(key).digest('hex') === id;
+  });
+
+  if (targetIndex === -1) {
+    return res.status(404).json({ error: 'Key not found.' });
+  }
+
+  currentKeys.splice(targetIndex, 1);
+
+  try {
+    updateEnvKey(envVar, currentKeys);
+    res.json({ message: 'Key removed successfully.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to remove key: ' + error.message });
   }
 });
 

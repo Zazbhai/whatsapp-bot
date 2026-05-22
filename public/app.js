@@ -281,6 +281,11 @@ function switchTab(tabName) {
       pageSubtitle.textContent = 'Manage registered seen users, mute states, block states, and memory cache.';
       fetchUsers();
       break;
+    case 'keys':
+      pageTitle.textContent = 'API Keys Management';
+      pageSubtitle.textContent = 'Add, remove, and view API keys for Hugging Face and OpenRouter.';
+      fetchApiKeys();
+      break;
   }
 }
 
@@ -2049,3 +2054,135 @@ if (usersSearchInput) {
     renderUsersList();
   });
 }
+
+// ── API Keys Management Panel ───────────────────────────────────
+async function fetchApiKeys() {
+  const orCount = document.getElementById('keys-or-count');
+  const hfCount = document.getElementById('keys-hf-count');
+  const orList = document.getElementById('or-keys-list');
+  const hfList = document.getElementById('hf-keys-list');
+
+  if (!orList || !hfList) return;
+
+  orList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:12px;">Loading...</p>';
+  hfList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:12px;">Loading...</p>';
+
+  try {
+    const res = await apiFetch('/api/keys');
+    if (!res.ok) throw new Error('Failed to fetch keys');
+    const data = await res.json();
+
+    // Update counts
+    if (orCount) orCount.textContent = data.counts.openrouter;
+    if (hfCount) hfCount.textContent = data.counts.huggingface;
+
+    // Render OpenRouter List
+    if (data.openrouter.length === 0) {
+      orList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No OpenRouter keys configured.</p>';
+    } else {
+      orList.innerHTML = data.openrouter.map(k => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(124,58,237,0.05);border:1px solid rgba(124,58,237,0.15);border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <i data-lucide="key" style="width:14px;height:14px;color:var(--primary);"></i>
+            <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
+          </div>
+          <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="openrouter" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
+            <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    // Render Hugging Face List
+    if (data.huggingface.length === 0) {
+      hfList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No Hugging Face tokens configured.</p>';
+    } else {
+      hfList.innerHTML = data.huggingface.map(k => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(34,197,94,0.05);border:1px solid rgba(34,197,94,0.15);border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <i data-lucide="key" style="width:14px;height:14px;color:var(--whatsapp);"></i>
+            <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
+          </div>
+          <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="huggingface" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
+            <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    if (window.lucide) lucide.createIcons();
+
+    // Attach delete listeners
+    document.querySelectorAll('.delete-key-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        deleteApiKey(btn.dataset.id, btn.dataset.provider);
+      });
+    });
+
+  } catch (err) {
+    if (orList) orList.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;padding:12px;">Failed to load keys.</p>';
+    if (hfList) hfList.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;padding:12px;">Failed to load keys.</p>';
+  }
+}
+
+async function deleteApiKey(id, provider) {
+  if (!id || !provider) return;
+  if (!confirm(`Are you sure you want to delete this ${provider === 'openrouter' ? 'OpenRouter' : 'Hugging Face'} key?`)) {
+    return;
+  }
+
+  try {
+    const res = await apiFetch('/api/keys', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, provider })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || 'Key deleted successfully.', 'success');
+      await fetchApiKeys();
+    } else {
+      showToast(data.error || 'Failed to delete key.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error while deleting key.', 'error');
+  }
+}
+
+// Bind add key form submission
+const addKeyForm = document.getElementById('add-key-form');
+if (addKeyForm) {
+  addKeyForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const providerSelect = document.getElementById('key-provider');
+    const keyValueInput = document.getElementById('key-value');
+
+    const provider = providerSelect ? providerSelect.value : '';
+    const key = keyValueInput ? keyValueInput.value.trim() : '';
+
+    if (!provider || !key) {
+      showToast('Please select a provider and fill in the API key.', 'error');
+      return;
+    }
+
+    try {
+      const res = await apiFetch('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, provider })
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        showToast(data.message || 'Key added successfully.', 'success');
+        if (keyValueInput) keyValueInput.value = '';
+        await fetchApiKeys();
+      } else {
+        showToast(data.error || 'Failed to add key.', 'error');
+      }
+    } catch (err) {
+      showToast('Network error while adding key.', 'error');
+    }
+  });
+}
+
