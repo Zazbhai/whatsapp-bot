@@ -25,6 +25,7 @@ process.on('message', async (data) => {
   let localRoundRobin = apiKeysRoundRobin || 0;
   const localRegistry = JSON.parse(JSON.stringify(apiKeysRegistry || {}));
   const cooldownKeys = [];
+  const failoverErrors = [];
   
   function putKeyOnCooldown(keyString) {
     const cooldownUntil = Date.now() + 24 * 60 * 60 * 1000; // 24 hours cooldown
@@ -256,15 +257,21 @@ process.on('message', async (data) => {
         controllers.forEach(c => c.abort());
         
         const errMessages = (aggregateErr.errors || []).map(e => e.message || String(e)).join(' | ');
-        console.warn(`[AI Worker] Batch failed for key ${activeApiKey.substring(0, 8)}... Errors: ${errMessages}. Failing over to another key.`);
+        const failMsg = `Key ${activeApiKey.substring(0, 8)}... failed with errors: ${errMessages}`;
+        console.warn(`[AI Worker] ${failMsg}. Failing over to another key.`);
+        failoverErrors.push(failMsg);
         break;
       }
     }
   }
 
+  if (failoverErrors.length === 0) {
+    failoverErrors.push("No active, non-cooldown keys were available to try.");
+  }
+
   process.send({
     status: 'error',
-    error: 'AI Query failed after maximum key failover attempts.',
+    error: `AI Query failed after maximum key failover attempts. Details: ${failoverErrors.join(' || ')}`,
     cooldownKeys,
     apiKeysRoundRobin: localRoundRobin
   });
