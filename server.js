@@ -242,6 +242,30 @@ function saveSeenUser(slug, number, name = '', welcomed = false, chatId = '') {
   }
 }
 
+function markVoiceNoteTextPrompted(slug, number, name = '', chatId = '') {
+  const users = loadSeenUsers(slug);
+  let userEntry = users.find(u => u.number === number);
+  const wasPrompted = !!(userEntry && userEntry.voiceNoteTextPrompted);
+
+  if (!userEntry) {
+    userEntry = { number, firstSeen: Date.now(), name, welcomed: false };
+    users.push(userEntry);
+  }
+
+  if (name) userEntry.name = name;
+  if (chatId) userEntry.chatId = chatId;
+  userEntry.voiceNoteTextPrompted = true;
+
+  try {
+    const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+  } catch (err) {
+    console.error(`Failed to save voice note prompt state for ${slug}:`, err);
+  }
+
+  return !wasPrompted;
+}
+
 function detectUserLanguage(text) {
   if (!text) return 'en';
   const clean = text.toLowerCase().trim();
@@ -2508,6 +2532,21 @@ function initInstanceClient(slug) {
     if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
       const senderNumber = msg.from.split('@')[0];
       try {
+        if (msg.from.endsWith('@c.us')) {
+          const shouldPromptForText = markVoiceNoteTextPrompted(
+            slug,
+            senderNumber,
+            msg._data.notifyName || '',
+            msg.from
+          );
+
+          if (shouldPromptForText) {
+            await msg.reply("I can't listen to voice notes here. Please send your message in text.");
+            logInstanceEvent(slug, 'system', `Asked +${senderNumber} to send text instead of a first voice note.`);
+            return;
+          }
+        }
+
         logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Commencing Hugging Face auto-transcription...`);
         const media = await msg.downloadMedia();
         if (media && media.data) {
