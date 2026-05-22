@@ -1890,7 +1890,7 @@ function initInstanceClient(slug) {
     puppeteer: {
       executablePath: findChrome(),
       headless: true,
-      protocolTimeout: 180000, // 3 minutes — prevents "Runtime.callFunctionOn timed out" CDP errors under heavy load
+      protocolTimeout: 600000, // 10 minutes — prevents "Runtime.callFunctionOn timed out" CDP errors under heavy load
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -2140,7 +2140,7 @@ function initInstanceClient(slug) {
     }
 
     // Detect and Cache APK Uploads in Any Chat (Group or Direct Messages)
-    if (msg.hasMedia) {
+    if (msg.hasMedia && msg.type === 'document') {
       try {
         const media = await msg.downloadMedia();
         if (media) {

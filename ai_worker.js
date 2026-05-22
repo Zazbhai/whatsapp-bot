@@ -64,18 +64,19 @@ process.on('message', async (data) => {
   ];
 
   const openrouterModels = [
-    process.env.LLM_MODEL || 'openai/gpt-oss-120b:free',
-    'openai/gpt-oss-120b:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-    'qwen/qwen3-next-80b-a3b-instruct:free',
+    process.env.LLM_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
     'meta-llama/llama-3.3-70b-instruct:free',
+    'google/gemma-4-31b-it:free',
+    'qwen/qwen3-next-80b-a3b-instruct:free',
+    'deepseek/deepseek-v4-flash:free',
     'openrouter/free'
   ];
 
   const groqModels = [
-    process.env.LLM_MODEL || 'llama3-8b-8192',
-    'gemma2-9b-it',
-    'gemma-7b-it'
+    process.env.LLM_MODEL || 'llama-3.3-70b-versatile',
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'gemma2-9b-it'
   ];
 
   async function tryModel(url, apiKey, model, abortSignal) {
@@ -188,8 +189,8 @@ process.on('message', async (data) => {
             clearTimeout(timeouts[idx]);
             
             if (err.status) {
-              const isKeyError = [400, 401, 402, 403, 429].includes(err.status);
-              const isQuotaMsg = /quota|limit|exhausted|insufficient|credit|balance/i.test(err.responseText || '');
+              const isKeyError = [401, 402, 403].includes(err.status);
+              const isQuotaMsg = /quota|exhausted|insufficient|credit|balance|daily limit|monthly limit/i.test(err.responseText || '');
               if (isKeyError || isQuotaMsg) {
                 putKeyOnCooldown(activeApiKey);
                 keyExhausted = true;
