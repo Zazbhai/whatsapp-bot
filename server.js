@@ -1255,7 +1255,7 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
 
 const pendingDebounces = {};
 
-function enqueueAIReply(slug, senderNumber, msg) {
+function enqueueMessage(slug, senderNumber, msg) {
   const userLockKey = `${slug}:${senderNumber}`;
   
   if (!pendingDebounces[userLockKey]) {
@@ -1288,11 +1288,221 @@ function enqueueAIReply(slug, senderNumber, msg) {
       targetMsg.body = combinedBody;
     }
     
-    globalAIQueue.push({ slug, senderNumber, msg: targetMsg });
-    processGlobalAIQueue().catch(err => {
-      logInstanceEvent(slug, 'error', `Global AI queue processor failed: ${err.message}`);
+    processCombinedMessage(slug, senderNumber, targetMsg).catch(err => {
+      logInstanceEvent(slug, 'error', `Failed to process combined message: ${err.message}`);
     });
   }, delay);
+}
+
+async function processCombinedMessage(slug, senderNumber, msg) {
+  const listConfig = loadInstances();
+  const instConfig = listConfig.find(i => i.slug === slug);
+
+  // 1. Auto-Ignore on block trigger text
+  if (instConfig && instConfig.blockTriggerText && msg.body) {
+    const triggerClean = instConfig.blockTriggerText.trim().toLowerCase();
+    const incomingClean = msg.body.trim().toLowerCase();
+    if (triggerClean && incomingClean === triggerClean) {
+      logInstanceEvent(slug, 'system', `🚨 Trigger matched block phrase: "${msg.body}". Adding user +${senderNumber} to ignore list.`);
+      saveIgnoredUser(senderNumber);
+      logInstanceEvent(slug, 'system', `🚨 User +${senderNumber} added to ignore list. All future messages from this user will be silently ignored.`);
+      return;
+    }
+  }
+
+  // 2. First-Time Auto Responder (Welcome Message)
+  if (msg.from.endsWith('@c.us')) {
+    const users = loadSeenUsers(slug);
+    const userEntry = users.find(u => u.number === senderNumber);
+    const alreadyWelcomed = userEntry && userEntry.welcomed;
+
+    if (!alreadyWelcomed) {
+      if (instConfig && instConfig.autoWelcomeMessage) {
+        logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
+        try {
+          await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
+          
+          if (instConfig.autoWelcomeSendApk) {
+            logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
+            await sendCachedApkReply(slug, msg, senderNumber);
+          }
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
+        }
+        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true);
+        return;
+      } else {
+        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false);
+      }
+    }
+  }
+
+  const incomingText = msg.body.toLowerCase().trim();
+  const aiHandlesApk = instConfig && instConfig.aiEnabled && (process.env.LLM_API_KEYS || process.env.LLM_API_KEY || process.env.HF_TOKENS || process.env.HF_TOKEN);
+
+  // 3. Fast APK keyword path
+  const isApkKeyword = incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk';
+  if (isApkKeyword && !aiHandlesApk) {
+    logInstanceEvent(slug, 'system', `APK request keyword match from +${senderNumber}`);
+    try {
+      const apk = latestApkCache[slug];
+      if (apk && apk.data) {
+        const chat = await msg.getChat();
+        await chat.sendStateTyping();
+        
+        logInstanceEvent(slug, 'system', `Transmitting latest cached APK to +${senderNumber}: "${apk.filename}"...`);
+        const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
+        await msg.reply(media);
+        
+        logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" to +${senderNumber}`);
+        
+        clientStates[slug].stats.replies++;
+        io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+        recordUserResponse(slug, senderNumber);
+      } else {
+        await msg.reply("❌ *No APK File Available*\n\nNo APK has been uploaded to the WhatsApp group yet. Please upload the latest APK to the group first!");
+        logInstanceEvent(slug, 'send', `Replied to +${senderNumber} that no APK is available.`);
+      }
+    } catch (err) {
+      logInstanceEvent(slug, 'error', `Failed to send APK file to +${senderNumber}: ${err.message}`);
+    }
+    return;
+  }
+
+  // 4. Rules match
+  const rules = loadInstanceRules(slug);
+  let ruleMatched = false;
+
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+
+    let isMatch = false;
+    const triggerText = rule.trigger.toLowerCase().trim();
+
+    if (rule.matchType === 'exact' && incomingText === triggerText) {
+      isMatch = true;
+    } else if (rule.matchType === 'contains' && incomingText.includes(triggerText)) {
+      const isGreeting = triggerText === 'hi' || triggerText === 'hey' || triggerText === 'hello';
+      const isMultiLine = msg.body.includes('\n');
+      if (isGreeting && isMultiLine) {
+        isMatch = false;
+      } else {
+        isMatch = true;
+      }
+    } else if (rule.matchType === 'starts_with' && incomingText.startsWith(triggerText)) {
+      isMatch = true;
+    } else if (rule.matchType === 'regex') {
+      try {
+        const regex = new RegExp(rule.trigger, 'i');
+        isMatch = regex.test(msg.body);
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Invalid Regex pattern "${rule.trigger}": ${err.message}`);
+      }
+    }
+
+    if (isMatch) {
+      ruleMatched = true;
+
+      if (rule.skipReply) {
+        logInstanceEvent(slug, 'system', `Stop signal "${rule.trigger}" — skipping AI reply.`);
+        break;
+      }
+
+      logInstanceEvent(slug, 'system', `Rule match: "${rule.trigger}" -> Sending auto-reply...`);
+
+      const delay = Math.floor(Math.random() * 2000) + 1000;
+      
+      const sendReply = async () => {
+        let textReplies = [];
+        if (Array.isArray(rule.replies)) {
+          textReplies = rule.replies;
+        } else if (rule.reply) {
+          textReplies = rule.reply.split('|||').map(r => r.trim()).filter(Boolean);
+        } else {
+          textReplies = [];
+        }
+
+        if (rule.replyMode === 'random' && textReplies.length > 0) {
+          const originalLength = textReplies.length;
+          const randomIndex = Math.floor(Math.random() * originalLength);
+          const chosenText = textReplies[randomIndex];
+          textReplies = [chosenText];
+          logInstanceEvent(slug, 'system', `Shuffled Multi-Reply: Randomly selected reply #${randomIndex + 1} of ${originalLength}`);
+        }
+
+        for (let i = 0; i < textReplies.length; i++) {
+          let replyText = textReplies[i];
+          msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
+          
+          if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+
+          try {
+            if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
+              const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
+              await msg.reply(menuButtons);
+            } else {
+              await sendSmartReply(slug, msg, null, replyText);
+            }
+
+            logInstanceEvent(slug, 'send', `Replied sequentially [${i + 1}/${textReplies.length}] to +${senderNumber}: "${replyText.substring(0, 80)}"`);
+            
+            clientStates[slug].stats.replies++;
+            io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+            recordUserResponse(slug, senderNumber);
+          } catch (replyErr) {
+            logInstanceEvent(slug, 'error', `Sequential text reply #${i + 1} failed: ${replyErr.message}`);
+          }
+        }
+
+        if (rule.sendApk) {
+          const apk = latestApkCache[slug];
+          if (apk && apk.data) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
+
+            logInstanceEvent(slug, 'system', `Auto-attaching APK file for rule "${rule.trigger}" to +${senderNumber}...`);
+            const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
+            
+            try {
+              await msg.reply(media);
+              logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
+              
+              clientStates[slug].stats.replies++;
+              io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+              recordUserResponse(slug, senderNumber);
+            } catch (apkErr) {
+              logInstanceEvent(slug, 'error', `Rule APK send failed for rule "${rule.trigger}": ${apkErr.message}`);
+            }
+          } else {
+            logInstanceEvent(slug, 'system', `Rule triggered APK attachment, but no APK is cached for instance "${slug}"`);
+          }
+        }
+      };
+
+      (async () => {
+        msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, delay));
+        try {
+          await sendReply();
+        } catch (replyErr) {
+          logInstanceEvent(slug, 'error', `Sequential auto-reply dispatch failed: ${replyErr.message}`);
+        }
+      })().catch(err => logInstanceEvent(slug, 'error', `Background auto-reply dispatch error: ${err.message}`));
+      break;
+    }
+  }
+
+  // 5. Fallback to AI Smart Auto-Responder
+  if (!ruleMatched) {
+    if (aiHandlesApk) {
+      globalAIQueue.push({ slug, senderNumber, msg });
+      processGlobalAIQueue().catch(err => {
+        logInstanceEvent(slug, 'error', `Global AI queue processor failed: ${err.message}`);
+      });
+    }
+  }
 }
 
 async function processGlobalAIQueue() {
@@ -1665,74 +1875,92 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
     return null;
   }
 
-  return new Promise((resolve) => {
-    const workerPath = path.join(__dirname, 'ai_worker.js');
-    logInstanceEvent(slug, 'system', `Forking AI worker process for +${userMessage.substring(0, 15)}...`);
-    
-    const child = fork(workerPath, [], {
-      env: { ...process.env }
-    });
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const result = await new Promise((resolve) => {
+      const workerPath = path.join(__dirname, 'ai_worker.js');
+      logInstanceEvent(slug, 'system', `Forking AI worker process for +${userMessage.substring(0, 15)}... (Attempt ${attempt}/${maxAttempts})`);
+      
+      const child = fork(workerPath, [], {
+        env: { ...process.env }
+      });
 
-    let resolved = false;
+      let resolved = false;
 
-    // Safety watchdog: if the child worker gets stuck, terminate it after 35 seconds
-    const timeoutId = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        logInstanceEvent(slug, 'error', `AI worker process timed out (35s). Force terminating child process.`);
-        try {
-          child.kill('SIGKILL');
-        } catch (e) {}
-        resolve(null);
-      }
-    }, 35000);
+      // Safety watchdog: if the child worker gets stuck, terminate it after 35 seconds
+      const timeoutId = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          logInstanceEvent(slug, 'error', `AI worker process timed out (35s). Force terminating child process.`);
+          try {
+            child.kill('SIGKILL');
+          } catch (e) {}
+          resolve(null);
+        }
+      }, 35000);
 
-    child.on('message', (message) => {
-      if (resolved) return;
+      child.on('message', (message) => {
+        if (resolved) return;
 
-      // Update global round robin state
-      if (typeof message.apiKeysRoundRobin === 'number') {
-        apiKeysRoundRobin = message.apiKeysRoundRobin;
-      }
+        // Update global round robin state
+        if (typeof message.apiKeysRoundRobin === 'number') {
+          apiKeysRoundRobin = message.apiKeysRoundRobin;
+        }
 
-      if (message.status === 'success') {
-        resolved = true;
-        clearTimeout(timeoutId);
-        resolve(parseAIResponse(message.content));
-      } else {
-        resolved = true;
-        clearTimeout(timeoutId);
-        logInstanceEvent(slug, 'error', `AI worker process failed: ${message.error}`);
-        resolve(null);
-      }
-    });
+        if (message.status === 'success') {
+          resolved = true;
+          clearTimeout(timeoutId);
+          resolve(parseAIResponse(message.content));
+        } else {
+          resolved = true;
+          clearTimeout(timeoutId);
+          logInstanceEvent(slug, 'error', `AI worker process failed on attempt ${attempt}: ${message.error}`);
+          resolve(null);
+        }
+      });
 
-    child.on('error', (err) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeoutId);
-      logInstanceEvent(slug, 'error', `AI worker process encountered error: ${err.message}`);
-      resolve(null);
-    });
-
-    child.on('exit', (code, signal) => {
-      if (!resolved) {
+      child.on('error', (err) => {
+        if (resolved) return;
         resolved = true;
         clearTimeout(timeoutId);
-        logInstanceEvent(slug, 'error', `AI worker process exited unexpectedly with code ${code} (signal: ${signal})`);
+        logInstanceEvent(slug, 'error', `AI worker process encountered error on attempt ${attempt}: ${err.message}`);
         resolve(null);
-      }
+      });
+
+      child.on('exit', (code, signal) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeoutId);
+          logInstanceEvent(slug, 'error', `AI worker process exited unexpectedly on attempt ${attempt} with code ${code} (signal: ${signal})`);
+          resolve(null);
+        }
+      });
+
+      // Send payload to start the worker
+      child.send({
+        systemPrompt,
+        userMessage,
+        history,
+        apiKeysRegistry,
+        apiKeysRoundRobin
+      });
     });
 
-    // Send payload to start the worker
-    child.send({
-      systemPrompt,
-      userMessage,
-      history,
-      apiKeysRegistry,
-      apiKeysRoundRobin
-    });
-  });
+    if (result) {
+      return result;
+    }
+
+    // Force rotation of key index on failure to guarantee next attempt uses a different starting point
+    apiKeysRoundRobin = (apiKeysRoundRobin + 1) % 1000000;
+
+    if (attempt < maxAttempts) {
+      logInstanceEvent(slug, 'system', `⚠️ AI worker attempt ${attempt} failed. Retrying next attempt in 3 seconds...`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+
+  logInstanceEvent(slug, 'error', `❌ AI query completely failed after ${maxAttempts} attempts.`);
+  return null;
 }
 
 // Retrieve and filter all Hugging Face tokens from environment config
@@ -2071,20 +2299,8 @@ function initInstanceClient(slug) {
       // Do NOT return — auto-responders still run, only AI will be blocked below
     }
 
-    // Auto-Ignore and Delete User on Specific Trigger Text
     const listConfig = loadInstances();
     const instConfig = listConfig.find(i => i.slug === slug);
-    if (instConfig && instConfig.blockTriggerText && msg.body) {
-      const triggerClean = instConfig.blockTriggerText.trim().toLowerCase();
-      const incomingClean = msg.body.trim().toLowerCase();
-      if (triggerClean && incomingClean === triggerClean) {
-        const senderNumber = msg.from.split('@')[0];
-        logInstanceEvent(slug, 'system', `🚨 Trigger matched block phrase: "${msg.body}". Adding user +${senderNumber} to ignore list.`);
-        saveIgnoredUser(senderNumber);
-        logInstanceEvent(slug, 'system', `🚨 User +${senderNumber} added to ignore list. All future messages from this user will be silently ignored.`);
-        return; // Halted completely — no delete (causes infinite loop via message re-fire)
-      }
-    }
 
     // --- 12-HOUR AUTO-MUTE/IGNORE LOGIC FOR INDIVIDUAL CHATS ---
     let isAlreadySeen = false;
@@ -2129,34 +2345,6 @@ function initInstanceClient(slug) {
       const thresholdHours = (instConfig && instConfig.autoMuteHours !== undefined) ? Number(instConfig.autoMuteHours) : 12;
       logInstanceEvent(slug, 'system', `Ignored message from +${senderNumber} (interaction older than ${thresholdHours} hours)`);
       return; // Silently drop — no reply, no further processing
-    }
-
-    // First-Time Auto Responder (Welcome Message) for Direct Messages
-    if (msg.from.endsWith('@c.us')) {
-      const users = loadSeenUsers(slug);
-      const userEntry = users.find(u => u.number === senderNumber);
-      const alreadyWelcomed = userEntry && userEntry.welcomed;
-
-      if (!alreadyWelcomed) {
-        if (instConfig && instConfig.autoWelcomeMessage) {
-          logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}. Sending Welcome Message.`);
-          try {
-            await sendSmartReply(slug, msg, null, instConfig.autoWelcomeMessage, true);
-            
-            if (instConfig.autoWelcomeSendApk) {
-              logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
-              await sendCachedApkReply(slug, msg, senderNumber);
-            }
-          } catch (err) {
-            logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
-          }
-          saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true);
-          return; // Halt processing: skip all other rules or AI for this first message
-        } else {
-          // No welcome message configured, but we still mark them as seen (welcomed = false)
-          saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false);
-        }
-      }
     }
 
     // Detect and Cache APK Uploads in Any Chat (Group or Direct Messages)
@@ -2287,186 +2475,7 @@ function initInstanceClient(slug) {
     const logTag = isVoiceNote ? ' [🎙️ Voice Note]' : '';
     logInstanceEvent(slug, 'receive', `From "${senderName || 'Unknown Contact'}" (+${senderNumber})${logTag}: "${msg.body}"`);
 
-    const rules = loadInstanceRules(slug);
-    const incomingText = msg.body.toLowerCase().trim();
-    
-    const listForAi = loadInstances();
-    const instForAi = listForAi.find(i => i.slug === slug);
-    const aiHandlesApk = instForAi && instForAi.aiEnabled && (process.env.LLM_API_KEYS || process.env.LLM_API_KEY || process.env.HF_TOKENS || process.env.HF_TOKEN);
-
-    // Fast APK keyword path (skipped when AI is on — AI sends APK with persona reply)
-    const isApkKeyword = incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk';
-    if (isApkKeyword && !aiHandlesApk) {
-      logInstanceEvent(slug, 'system', `APK request keyword match from +${senderNumber}`);
-      try {
-        const apk = latestApkCache[slug];
-        if (apk && apk.data) {
-          const chat = await msg.getChat();
-          await chat.sendStateTyping();
-          
-          logInstanceEvent(slug, 'system', `Transmitting latest cached APK to +${senderNumber}: "${apk.filename}"...`);
-          const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-          await msg.reply(media);
-          
-          logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" to +${senderNumber}`);
-          
-          clientStates[slug].stats.replies++;
-          io.to(`instance_${slug}`).emit('stat_increment', 'replies');
-          recordUserResponse(slug, senderNumber);
-        } else {
-          await msg.reply("❌ *No APK File Available*\n\nNo APK has been uploaded to the WhatsApp group yet. Please upload the latest APK to the group first!");
-          logInstanceEvent(slug, 'send', `Replied to +${senderNumber} that no APK is available.`);
-        }
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to send APK file to +${senderNumber}: ${err.message}`);
-      }
-      return; // Stop execution to bypass auto-responders & AI fallback
-    }
-
-    let ruleMatched = false;
-
-    for (const rule of rules) {
-      if (!rule.enabled) continue;
-
-      let isMatch = false;
-      const triggerText = rule.trigger.toLowerCase().trim();
-
-      if (rule.matchType === 'exact' && incomingText === triggerText) {
-        isMatch = true;
-      } else if (rule.matchType === 'contains' && incomingText.includes(triggerText)) {
-        isMatch = true;
-      } else if (rule.matchType === 'starts_with' && incomingText.startsWith(triggerText)) {
-        isMatch = true;
-      } else if (rule.matchType === 'regex') {
-        try {
-          const regex = new RegExp(rule.trigger, 'i');
-          isMatch = regex.test(msg.body);
-        } catch (err) {
-          logInstanceEvent(slug, 'error', `Invalid Regex pattern "${rule.trigger}": ${err.message}`);
-        }
-      }
-
-      if (isMatch) {
-        ruleMatched = true;
-
-        // skipReply: conversation-ending signals — log and stop, no reply sent
-        if (rule.skipReply) {
-          logInstanceEvent(slug, 'system', `Stop signal "${rule.trigger}" — skipping AI reply.`);
-          break;
-        }
-
-        logInstanceEvent(slug, 'system', `Rule match: "${rule.trigger}" -> Sending auto-reply...`);
-
-        // Randomized human-reply typing delay
-        const delay = Math.floor(Math.random() * 2000) + 1000;
-        
-        const sendReply = async () => {
-          // Parse all text replies (supporting both array and string split by |||)
-          let textReplies = [];
-          if (Array.isArray(rule.replies)) {
-            textReplies = rule.replies;
-          } else if (rule.reply) {
-            textReplies = rule.reply.split('|||').map(r => r.trim()).filter(Boolean);
-          } else {
-            textReplies = [];
-          }
-
-          // Shuffled Mode (Random Selection): Select exactly ONE reply from the list!
-          if (rule.replyMode === 'random' && textReplies.length > 0) {
-            const originalLength = textReplies.length;
-            const randomIndex = Math.floor(Math.random() * originalLength);
-            const chosenText = textReplies[randomIndex];
-            textReplies = [chosenText]; // Override array to only send the chosen one!
-            logInstanceEvent(slug, 'system', `Shuffled Multi-Reply: Randomly selected reply #${randomIndex + 1} of ${originalLength}`);
-          }
-
-          // Send each text reply sequentially
-          for (let i = 0; i < textReplies.length; i++) {
-            let replyText = textReplies[i];
-            
-            // Re-simulate typing delay in the background (non-blocking)
-            msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
-            
-            // 2-second break between sequential replies
-            if (i > 0) {
-              await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-
-            try {
-              if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
-                const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
-                await msg.reply(menuButtons);
-              } else {
-                await sendSmartReply(slug, msg, null, replyText);
-              }
-
-              logInstanceEvent(slug, 'send', `Replied sequentially [${i + 1}/${textReplies.length}] to +${senderNumber}: "${replyText.substring(0, 80)}"`);
-              
-              clientStates[slug].stats.replies++;
-              io.to(`instance_${slug}`).emit('stat_increment', 'replies');
-              recordUserResponse(slug, senderNumber);
-            } catch (replyErr) {
-              logInstanceEvent(slug, 'error', `Sequential text reply #${i + 1} failed: ${replyErr.message}`);
-            }
-          }
-
-          // If sendApk option is active, automatically send the cached APK file next!
-          if (rule.sendApk) {
-            const apk = latestApkCache[slug];
-            if (apk && apk.data) {
-              // Wait 2 seconds (2000ms break) before attaching APK
-              await new Promise(resolve => setTimeout(resolve, 2000));
-
-              // Trigger typing delay in the background (non-blocking)
-              msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
-
-              logInstanceEvent(slug, 'system', `Auto-attaching APK file for rule "${rule.trigger}" to +${senderNumber}...`);
-              const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-              
-              try {
-                await msg.reply(media);
-                logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
-                
-                clientStates[slug].stats.replies++;
-                io.to(`instance_${slug}`).emit('stat_increment', 'replies');
-                recordUserResponse(slug, senderNumber);
-              } catch (apkErr) {
-                logInstanceEvent(slug, 'error', `Rule APK send failed for rule "${rule.trigger}": ${apkErr.message}`);
-              }
-            } else {
-              logInstanceEvent(slug, 'system', `Rule triggered APK attachment, but no APK is cached for instance "${slug}"`);
-            }
-          }
-        };
-
-        // Fire auto-reply asynchronously in the background so it never blocks the main client message event handler
-        (async () => {
-          // Trigger typing state asynchronously in the background
-          msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
-
-          // Wait for the random human-reply stagger delay
-          await new Promise(resolve => setTimeout(resolve, delay));
-          
-          try {
-            await sendReply();
-          } catch (replyErr) {
-            logInstanceEvent(slug, 'error', `Sequential auto-reply dispatch failed: ${replyErr.message}`);
-          }
-        })().catch(err => logInstanceEvent(slug, 'error', `Background auto-reply dispatch error: ${err.message}`));
-        break;
-      }
-    }
-
-    // AI Smart Auto-Responder Fallback (includes smart APK delivery)
-    // Delayed if user is currently in a spam mute cooldown
-    if (!ruleMatched) {
-      if (aiHandlesApk) {
-        if (isSpamCoolingDown(slug, senderNumber)) {
-          logInstanceEvent(slug, 'system', `⏳ AI reply delayed for +${senderNumber} — spam cooldown active. Queueing message...`);
-        }
-        enqueueAIReply(slug, senderNumber, msg);
-      }
-    }
+    enqueueMessage(slug, senderNumber, msg);
   });
 
   try {
