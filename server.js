@@ -465,7 +465,68 @@ async function handleVoiceTtsReply(slug, msg, text, voiceName) {
   }
 }
 
+const incomingProcessingQueues = {};
+const outgoingSendQueues = {};
+const INCOMING_PROCESSING_CONCURRENCY = Number(process.env.INCOMING_PROCESSING_CONCURRENCY || 3);
+const OUTGOING_SEND_GAP_MS = Number(process.env.OUTGOING_SEND_GAP_MS || 1200);
+
+function enqueueLimitedTask(queueMap, key, task, concurrency = 1) {
+  if (!queueMap[key]) {
+    queueMap[key] = { active: 0, items: [] };
+  }
+
+  return new Promise((resolve, reject) => {
+    queueMap[key].items.push({ task, resolve, reject });
+    drainLimitedQueue(queueMap, key, concurrency);
+  });
+}
+
+function drainLimitedQueue(queueMap, key, concurrency) {
+  const queue = queueMap[key];
+  if (!queue) return;
+
+  while (queue.active < concurrency && queue.items.length > 0) {
+    const item = queue.items.shift();
+    queue.active++;
+
+    Promise.resolve()
+      .then(item.task)
+      .then(item.resolve, item.reject)
+      .finally(() => {
+        queue.active--;
+        if (queue.items.length > 0) {
+          drainLimitedQueue(queueMap, key, concurrency);
+        } else if (queue.active === 0) {
+          delete queueMap[key];
+        }
+      });
+  }
+}
+
+function enqueueIncomingProcessing(slug, task) {
+  return enqueueLimitedTask(
+    incomingProcessingQueues,
+    slug,
+    task,
+    Math.max(1, INCOMING_PROCESSING_CONCURRENCY)
+  );
+}
+
+function enqueueWhatsAppSend(slug, task) {
+  return enqueueLimitedTask(outgoingSendQueues, slug, async () => {
+    const result = await task();
+    if (OUTGOING_SEND_GAP_MS > 0) {
+      await new Promise(resolve => setTimeout(resolve, OUTGOING_SEND_GAP_MS));
+    }
+    return result;
+  }, 1);
+}
+
 async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
+  return enqueueWhatsAppSend(slug, async () => sendSmartReplyNow(slug, msg, chat, replyText, isWelcome));
+}
+
+async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false) {
   if (!replyText) return;
   
   const senderNumber = msg.from.split('@')[0];
@@ -1321,14 +1382,16 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
   }
 
   try {
-    const chat = await msg.getChat();
-    await chat.sendStateTyping();
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-    await Promise.race([
-      chat.sendMessage(media),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending APK")), 45000))
-    ]);
+    await enqueueWhatsAppSend(slug, async () => {
+      const chat = await msg.getChat();
+      await chat.sendStateTyping();
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
+      await Promise.race([
+        chat.sendMessage(media),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending APK")), 45000))
+      ]);
+    });
     logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
     clientStates[slug].stats.replies++;
     io.to(`instance_${slug}`).emit('stat_increment', 'replies');
@@ -1375,7 +1438,7 @@ function enqueueMessage(slug, senderNumber, msg) {
       targetMsg.body = combinedBody;
     }
     
-    processCombinedMessage(slug, senderNumber, targetMsg).catch(err => {
+    enqueueIncomingProcessing(slug, () => processCombinedMessage(slug, senderNumber, targetMsg)).catch(err => {
       logInstanceEvent(slug, 'error', `Failed to process combined message: ${err.message}`);
     });
   }, delay);
@@ -1528,7 +1591,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
           try {
             if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
               const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
-              await msg.reply(menuButtons);
+              await enqueueWhatsAppSend(slug, () => msg.reply(menuButtons));
             } else {
               await sendSmartReply(slug, msg, null, replyText);
             }
@@ -1553,7 +1616,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
             const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
             
             try {
-              await msg.reply(media);
+              await enqueueWhatsAppSend(slug, () => msg.reply(media));
               logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
               
               clientStates[slug].stats.replies++;
@@ -1758,7 +1821,7 @@ async function processGlobalAIQueue() {
       // ── STEP 1: Send text reply (isolated try/catch — won't block APK) ────
       if (replyText) {
         try {
-          await msg.reply(replyText);
+          await sendSmartReply(slug, msg, null, replyText);
           logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${replyText.replace(/\n/g, ' ')}"`);
 
           addToMemory(slug, senderNumber, 'user', msg.body);
@@ -1796,13 +1859,13 @@ async function processGlobalAIQueue() {
                 msg.getChat(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 10000))
               ]);
-              await Promise.race([
+              await enqueueWhatsAppSend(slug, () => Promise.race([
                 chat.sendMessage(media),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 60000))
-              ]);
+              ]));
             } catch (chatErr) {
               logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), retrying with msg.reply...`);
-              await msg.reply(media);
+              await enqueueWhatsAppSend(slug, () => msg.reply(media));
             }
             logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
             clientStates[slug].stats.replies++;
@@ -1839,7 +1902,7 @@ async function processGlobalAIQueue() {
             fallbackText = `क्या आपने ऐप पर iPhone ऑर्डर सफलतापूर्वक प्लेस कर दिया है? कृपया *हाँ* या *नहीं* लिखकर जवाब दें 😊`;
           }
 
-          await msg.reply(fallbackText);
+          await enqueueWhatsAppSend(slug, () => msg.reply(fallbackText));
           logInstanceEvent(slug, 'send', `Order confirmation question sent to +${senderNumber} in language: ${userLang}`);
           
           // Add the confirmation question text to memory so the Yes/No intercept works
@@ -2541,7 +2604,7 @@ function initInstanceClient(slug) {
           );
 
           if (shouldPromptForText) {
-            await msg.reply("I can't listen to voice notes here. Please send your message in text.");
+            await enqueueWhatsAppSend(slug, () => msg.reply("I can't listen to voice notes here. Please send your message in text."));
             logInstanceEvent(slug, 'system', `Asked +${senderNumber} to send text instead of a first voice note.`);
             return;
           }
