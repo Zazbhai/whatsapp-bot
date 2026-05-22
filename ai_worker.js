@@ -168,7 +168,7 @@ process.on('message', async (data) => {
   }
 
   let attempts = 0;
-  const maxKeyAttempts = Math.min(totalKeysCount, 5);
+  const maxKeyAttempts = totalKeysCount;
   const attemptedKeys = new Set();
 
   while (attempts < maxKeyAttempts) {
@@ -254,9 +254,10 @@ process.on('message', async (data) => {
       } catch (aggregateErr) {
         timeouts.forEach(t => clearTimeout(t));
         controllers.forEach(c => c.abort());
-        if (keyExhausted) {
-          break;
-        }
+        
+        const errMessages = (aggregateErr.errors || []).map(e => e.message || String(e)).join(' | ');
+        console.warn(`[AI Worker] Batch failed for key ${activeApiKey.substring(0, 8)}... Errors: ${errMessages}. Failing over to another key.`);
+        break;
       }
     }
   }
