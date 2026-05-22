@@ -1060,7 +1060,8 @@ function addToMemory(slug, senderNumber, role, content) {
 const AI_MAX_CONCURRENT = parseInt(process.env.AI_MAX_CONCURRENT || '50'); // Highly scalable parallel limit (customizable via .env)
 const AI_REQUEST_TIMEOUT = 25000; // 25s per model attempt
 const aiSemaphores = {};
-const aiUserQueues = {}; // Per-contact FIFO queue so rapid messages each get a reply
+const globalAIQueue = [];
+let globalAIProcessing = false;
 
 function acquireAISlot(slug) {
   if (!aiSemaphores[slug]) aiSemaphores[slug] = { count: 0, queue: [] };
@@ -1287,25 +1288,22 @@ function enqueueAIReply(slug, senderNumber, msg) {
       targetMsg.body = combinedBody;
     }
     
-    if (!aiUserQueues[userLockKey]) {
-      aiUserQueues[userLockKey] = { processing: false, queue: [] };
-    }
-    aiUserQueues[userLockKey].queue.push(targetMsg);
-    processAIUserQueue(userLockKey).catch(err => {
-      logInstanceEvent(slug, 'error', `AI user queue processor failed: ${err.message}`);
+    globalAIQueue.push({ slug, senderNumber, msg: targetMsg });
+    processGlobalAIQueue().catch(err => {
+      logInstanceEvent(slug, 'error', `Global AI queue processor failed: ${err.message}`);
     });
   }, 2000);
 }
 
-async function processAIUserQueue(userLockKey) {
-  const q = aiUserQueues[userLockKey];
-  if (!q || q.processing || q.queue.length === 0) return;
+async function processGlobalAIQueue() {
+  if (globalAIProcessing || globalAIQueue.length === 0) return;
 
-  const [slug, senderNumber] = userLockKey.split(':');
-  q.processing = true;
+  globalAIProcessing = true;
 
-  while (q.queue.length > 0) {
-    const msg = q.queue.shift();
+  try {
+    while (globalAIQueue.length > 0) {
+      const task = globalAIQueue.shift();
+      const { slug, senderNumber, msg } = task;
     const inst = getInstanceBySlug(slug);
     const smartApkOn = !inst || inst.aiSmartApkEnabled !== false;
 
@@ -1541,15 +1539,14 @@ async function processAIUserQueue(userLockKey) {
     } catch (err) {
       logInstanceEvent(slug, 'error', `AI Auto-responder routine failed: ${err.message}`);
     }
-  }
-
-  q.processing = false;
-  if (q.queue.length === 0) {
-    delete aiUserQueues[userLockKey];
-  } else {
-    processAIUserQueue(userLockKey).catch(err => {
-      logInstanceEvent(slug, 'error', `AI user queue processor failed: ${err.message}`);
-    });
+    }
+  } finally {
+    globalAIProcessing = false;
+    if (globalAIQueue.length > 0) {
+      processGlobalAIQueue().catch(err => {
+        console.error('Failed to process global AI queue post-loop:', err);
+      });
+    }
   }
 }
 
