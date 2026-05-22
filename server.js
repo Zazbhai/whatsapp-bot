@@ -1556,43 +1556,11 @@ async function processAIUserQueue(userLockKey) {
 // =============================================================
 // CONCURRENT API KEY REGISTRY WITH FAILOVER & COOLDOWN (Hugging Face + OpenRouter + Groq)
 // =============================================================
-const cooldownsFilePath = path.join(dataDir, 'cooldowns.json');
-
-function loadCooldowns() {
-  try {
-    if (fs.existsSync(cooldownsFilePath)) {
-      return JSON.parse(fs.readFileSync(cooldownsFilePath, 'utf8'));
-    }
-  } catch (err) {
-    console.error('Failed to load cooldowns:', err);
-  }
-  return {};
-}
-
-function saveCooldowns(cooldowns) {
-  try {
-    fs.writeFileSync(cooldownsFilePath, JSON.stringify(cooldowns, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Failed to save cooldowns:', err);
-  }
-}
-
-// Global registry of all keys: keyString -> { provider, key, cooldownUntil }
+// Global registry of all keys: keyString -> { provider, key }
 let apiKeysRegistry = {};
 let apiKeysRoundRobin = 0; // Round-robin counter for even distribution
 
 function initApiKeysRegistry() {
-  const cooldowns = loadCooldowns();
-  const now = Date.now();
-  
-  // Clean up expired cooldowns
-  for (const k in cooldowns) {
-    if (cooldowns[k] < now) {
-      delete cooldowns[k];
-    }
-  }
-  saveCooldowns(cooldowns);
-
   apiKeysRegistry = {};
 
   // 1. Load HuggingFace keys
@@ -1601,8 +1569,7 @@ function initApiKeysRegistry() {
   hfKeys.forEach(key => {
     apiKeysRegistry[key] = {
       provider: 'huggingface',
-      key,
-      cooldownUntil: cooldowns[key] || 0
+      key
     };
   });
 
@@ -1613,8 +1580,7 @@ function initApiKeysRegistry() {
   orKeys.forEach(key => {
     apiKeysRegistry[key] = {
       provider,
-      key,
-      cooldownUntil: cooldowns[key] || 0
+      key
     };
   });
   
@@ -1634,26 +1600,14 @@ function initApiKeysRegistryIfEmpty() {
 // Initialize the API keys registry on startup
 initApiKeysRegistry();
 
-function putKeyOnCooldown(keyString) {
-  const cooldowns = loadCooldowns();
-  const cooldownUntil = Date.now() + 24 * 60 * 60 * 1000; // 24 hours cooldown
-  cooldowns[keyString] = cooldownUntil;
-  saveCooldowns(cooldowns);
-  
-  if (apiKeysRegistry[keyString]) {
-    apiKeysRegistry[keyString].cooldownUntil = cooldownUntil;
-  }
-}
-
 // Pick a random key from the active pool, excluding already-attempted keys for this request.
 // Uses round-robin base offset + random jitter so different users get different keys even
 // when requests arrive at the same time.
 function pickRandomKey(attemptedKeys = new Set()) {
-  const now = Date.now();
   initApiKeysRegistryIfEmpty();
   
-  // Get all non-cooldown, non-attempted keys
-  const activeKeys = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now && !attemptedKeys.has(k.key));
+  // Get all non-attempted keys
+  const activeKeys = Object.values(apiKeysRegistry).filter(k => !attemptedKeys.has(k.key));
   if (activeKeys.length === 0) {
     return null;
   }
@@ -1697,17 +1651,6 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
     return null;
   }
 
-  // Self-healing: if all keys are on cooldown, reset cooldowns to try again
-  const now = Date.now();
-  const activeKeysCount = Object.values(apiKeysRegistry).filter(k => k.cooldownUntil < now).length;
-  if (activeKeysCount === 0 && totalKeysCount > 0) {
-    logInstanceEvent(slug, 'system', '⚠️ All API keys are on cooldown. Self-healing: resetting cooldowns to try again.');
-    Object.values(apiKeysRegistry).forEach(k => {
-      k.cooldownUntil = 0;
-    });
-    saveCooldowns({});
-  }
-
   return new Promise((resolve) => {
     const workerPath = path.join(__dirname, 'ai_worker.js');
     logInstanceEvent(slug, 'system', `Forking AI worker process for +${userMessage.substring(0, 15)}...`);
@@ -1732,14 +1675,6 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
 
     child.on('message', (message) => {
       if (resolved) return;
-      
-      // Update key cooldowns in main process registry if worker flagged any key quota/auth issues
-      if (message.cooldownKeys && Array.isArray(message.cooldownKeys)) {
-        message.cooldownKeys.forEach(k => {
-          logInstanceEvent(slug, 'system', `Propagated key cooldown from child worker: ${k.substring(0, 8)}...`);
-          putKeyOnCooldown(k);
-        });
-      }
 
       // Update global round robin state
       if (typeof message.apiKeysRoundRobin === 'number') {

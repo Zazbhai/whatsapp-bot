@@ -24,31 +24,10 @@ process.on('message', async (data) => {
   // Local copies of state
   let localRoundRobin = apiKeysRoundRobin || 0;
   const localRegistry = JSON.parse(JSON.stringify(apiKeysRegistry || {}));
-  const cooldownKeys = [];
   const failoverErrors = [];
 
-  // Self-healing: if all keys are on cooldown, reset their cooldowns so we can try them
-  const now = Date.now();
-  const allKeysCount = Object.keys(localRegistry).length;
-  const activeKeysCount = Object.values(localRegistry).filter(k => k.cooldownUntil < now).length;
-  if (activeKeysCount === 0 && allKeysCount > 0) {
-    console.warn("[AI Worker] All keys on cooldown. Self-healing: resetting cooldowns.");
-    Object.keys(localRegistry).forEach(k => {
-      localRegistry[k].cooldownUntil = 0;
-    });
-  }
-  
-  function putKeyOnCooldown(keyString) {
-    const cooldownUntil = Date.now() + 24 * 60 * 60 * 1000; // 24 hours cooldown
-    if (localRegistry[keyString]) {
-      localRegistry[keyString].cooldownUntil = cooldownUntil;
-    }
-    cooldownKeys.push(keyString);
-  }
-
   function pickRandomKey(attemptedKeys = new Set()) {
-    const now = Date.now();
-    const activeKeys = Object.values(localRegistry).filter(k => k.cooldownUntil < now && !attemptedKeys.has(k.key));
+    const activeKeys = Object.values(localRegistry).filter(k => !attemptedKeys.has(k.key));
     if (activeKeys.length === 0) {
       return null;
     }
@@ -173,7 +152,6 @@ process.on('message', async (data) => {
     process.send({
       status: 'error',
       error: 'No API keys configured.',
-      cooldownKeys,
       apiKeysRoundRobin: localRoundRobin
     });
     process.exit(1);
@@ -186,8 +164,7 @@ process.on('message', async (data) => {
   while (attempts < maxKeyAttempts) {
     attempts++;
     
-    const now = Date.now();
-    const activeKeys = Object.values(localRegistry).filter(k => k.cooldownUntil < now);
+    const activeKeys = Object.values(localRegistry);
     const untriedKeys = activeKeys.filter(k => !attemptedKeys.has(k.key));
     if (untriedKeys.length === 0) {
       break;
@@ -242,7 +219,6 @@ process.on('message', async (data) => {
               const isKeyError = [401, 402, 403].includes(err.status);
               const isQuotaMsg = /quota|exhausted|insufficient|credit|balance|daily limit|monthly limit/i.test(err.responseText || '');
               if (isKeyError || isQuotaMsg) {
-                putKeyOnCooldown(activeApiKey);
                 keyExhausted = true;
                 controllers.forEach(c => c.abort());
                 timeouts.forEach(t => clearTimeout(t));
@@ -259,7 +235,6 @@ process.on('message', async (data) => {
           content: winner.content,
           model: winner.model,
           provider,
-          cooldownKeys,
           apiKeysRoundRobin: localRoundRobin
         });
         process.exit(0);
@@ -277,13 +252,12 @@ process.on('message', async (data) => {
   }
 
   if (failoverErrors.length === 0) {
-    failoverErrors.push("No active, non-cooldown keys were available to try.");
+    failoverErrors.push("No active keys were available to try.");
   }
 
   process.send({
     status: 'error',
     error: `AI Query failed after maximum key failover attempts. Details: ${failoverErrors.join(' || ')}`,
-    cooldownKeys,
     apiKeysRoundRobin: localRoundRobin
   });
   process.exit(0);
