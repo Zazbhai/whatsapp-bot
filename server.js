@@ -208,17 +208,22 @@ function loadSeenUsers(slug) {
   return seenUsersCache[slug];
 }
 
-function saveSeenUser(slug, number, name = '', welcomed = false) {
+function saveSeenUser(slug, number, name = '', welcomed = false, chatId = '') {
   const users = loadSeenUsers(slug);
   let userEntry = users.find(u => u.number === number);
   let changed = false;
   if (!userEntry) {
     userEntry = { number, firstSeen: Date.now(), name, welcomed };
+    if (chatId) userEntry.chatId = chatId;
     users.push(userEntry);
     changed = true;
   } else {
     if (name && userEntry.name !== name) {
       userEntry.name = name;
+      changed = true;
+    }
+    if (chatId && userEntry.chatId !== chatId) {
+      userEntry.chatId = chatId;
       changed = true;
     }
     if (welcomed && !userEntry.welcomed) {
@@ -477,6 +482,59 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
 
 
 // Automatically check and mute/ignore users older than configured threshold
+async function resolveMuteChatCandidates(client, number, preferredChatId = '') {
+  const candidates = [];
+  const addCandidate = (id) => {
+    if (typeof id === 'string' && id.includes('@') && !candidates.includes(id)) {
+      candidates.push(id);
+    }
+  };
+
+  addCandidate(preferredChatId);
+  if (number) addCandidate(`${number}@c.us`);
+
+  try {
+    const registeredId = number ? await client.getNumberId(number) : null;
+    addCandidate(registeredId && registeredId._serialized);
+  } catch {}
+
+  try {
+    const idsToResolve = candidates.length ? candidates : (number ? [`${number}@c.us`] : []);
+    const lidMappings = await client.getContactLidAndPhone(idsToResolve);
+    lidMappings.forEach(mapping => {
+      addCandidate(mapping && mapping.lid);
+      addCandidate(mapping && mapping.pn);
+    });
+  } catch {}
+
+  return candidates;
+}
+
+async function setNativeChatMute(client, { number, chatId = '', mute = true, until = null }) {
+  const candidates = await resolveMuteChatCandidates(client, number, chatId);
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    try {
+      const chat = await client.getChatById(candidate);
+      if (!chat) continue;
+      if (mute) {
+        await chat.mute(until || new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000));
+      } else {
+        await chat.unmute();
+      }
+      return { success: true, chatId: candidate };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  return {
+    success: false,
+    error: lastError || new Error(`No WhatsApp chat found for +${number}`)
+  };
+}
+
 async function checkAndAutoMuteUsers(slug) {
   try {
     const listConfig = loadInstances();
@@ -496,12 +554,17 @@ async function checkAndAutoMuteUsers(slug) {
 
     for (const user of users) {
       if (!user.unmuted && !user.isMuted && (now - user.firstSeen > cutoffMs)) {
-        try {
-          const chat = await client.getChatById(`${user.number}@c.us`);
-          await chat.mute(new Date(now + 100 * 365 * 24 * 3600 * 1000));
+        const muteResult = await setNativeChatMute(client, {
+          number: user.number,
+          chatId: user.chatId,
+          mute: true,
+          until: new Date(now + 100 * 365 * 24 * 3600 * 1000)
+        });
+        if (muteResult.success) {
+          user.chatId = muteResult.chatId;
           logInstanceEvent(slug, 'system', `Auto-muted chat with +${user.number} on WhatsApp (interaction older than ${thresholdHours} hours)`);
-        } catch (muteErr) {
-          logInstanceEvent(slug, 'error', `Failed to mute chat +${user.number} on WhatsApp: ${muteErr.message}`);
+        } else {
+          logInstanceEvent(slug, 'system', `Bot muted +${user.number} internally; WhatsApp native mute unavailable: ${muteResult.error.message}`);
         }
         user.isMuted = true;
         changed = true;
@@ -1329,10 +1392,10 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
         }
-        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true);
+        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
         return;
       } else {
-        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false);
+        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', false, msg.from);
       }
     }
   }
@@ -1997,17 +2060,17 @@ async function transcribeAudio(slug, media) {
   // Create unique temporary files in data directory
   const tempId = Math.random().toString(36).substring(7);
   const tempFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.${format}`);
-  const flacFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.flac`);
+  const wavFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.wav`);
   
   try {
     logInstanceEvent(slug, 'system', `Saving voice note buffer to temporary file...`);
     fs.writeFileSync(tempFile, Buffer.from(media.data, 'base64'));
 
-    logInstanceEvent(slug, 'system', `Converting audio to FLAC via FFmpeg for Hugging Face API...`);
+    logInstanceEvent(slug, 'system', `Converting audio to WAV via FFmpeg for Hugging Face API...`);
     
     await new Promise((resolve, reject) => {
-      // Use FFmpeg to convert input to mono 16kHz FLAC
-      const cmd = `ffmpeg -y -i "${tempFile}" -ac 1 -ar 16000 -f flac "${flacFile}"`;
+      // fal-ai ASR requires a Blob with a supported audio MIME type.
+      const cmd = `ffmpeg -y -i "${tempFile}" -ac 1 -ar 16000 -f wav "${wavFile}"`;
       exec(cmd, (error, stdout, stderr) => {
         if (error) {
           return reject(new Error(stderr.trim() || error.message));
@@ -2018,7 +2081,8 @@ async function transcribeAudio(slug, media) {
 
     logInstanceEvent(slug, 'system', `Executing Hugging Face ASR via Inference SDK...`);
     
-    const flacBuffer = fs.readFileSync(flacFile);
+    const wavBuffer = fs.readFileSync(wavFile);
+    const audioBlob = new Blob([wavBuffer], { type: 'audio/wav' });
     const model = process.env.HF_STT_MODEL || 'openai/whisper-large-v3';
     const provider = process.env.HF_STT_PROVIDER || 'fal-ai';
     const { InferenceClient } = await import('@huggingface/inference');
@@ -2044,7 +2108,7 @@ async function transcribeAudio(slug, media) {
           
           try {
             const output = await client.automaticSpeechRecognition({
-              data: flacBuffer,
+              data: audioBlob,
               model,
               provider
             });
@@ -2089,8 +2153,8 @@ async function transcribeAudio(slug, media) {
     if (fs.existsSync(tempFile)) {
       try { fs.unlinkSync(tempFile); } catch (e) {}
     }
-    if (fs.existsSync(flacFile)) {
-      try { fs.unlinkSync(flacFile); } catch (e) {}
+    if (fs.existsSync(wavFile)) {
+      try { fs.unlinkSync(wavFile); } catch (e) {}
     }
   }
 }
@@ -2310,7 +2374,7 @@ function initInstanceClient(slug) {
         // Update user's name if we have a new/different notifyName
         const senderName = msg._data.notifyName || '';
         if (senderName && userEntry.name !== senderName) {
-          saveSeenUser(slug, senderNumber, senderName);
+          saveSeenUser(slug, senderNumber, senderName, false, msg.from);
         }
         
         const thresholdHours = (instConfig && instConfig.autoMuteHours !== undefined) ? Number(instConfig.autoMuteHours) : 12;
@@ -2319,17 +2383,22 @@ function initInstanceClient(slug) {
           isExpired = true;
           if (!userEntry.isMuted) {
             userEntry.isMuted = true;
+            userEntry.chatId = msg.from;
             const filePath = path.join(dataDir, `seen_users_${slug}.json`);
             fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
             
             // Auto-mute on WhatsApp natively too
             (async () => {
-              try {
-                const chat = await msg.getChat();
-                await chat.mute(new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000));
+              const muteResult = await setNativeChatMute(client, {
+                number: senderNumber,
+                chatId: msg.from,
+                mute: true,
+                until: new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000)
+              });
+              if (muteResult.success) {
                 logInstanceEvent(slug, 'system', `Auto-muted chat with +${senderNumber} on WhatsApp (interaction older than ${thresholdHours} hours)`);
-              } catch (muteErr) {
-                logInstanceEvent(slug, 'error', `Failed to mute chat +${senderNumber} on WhatsApp: ${muteErr.message}`);
+              } else {
+                logInstanceEvent(slug, 'system', `Bot muted +${senderNumber} internally; WhatsApp native mute unavailable: ${muteResult.error.message}`);
               }
             })();
           }
@@ -2456,9 +2525,10 @@ function initInstanceClient(slug) {
     if (senderName) {
       const seenList = loadSeenUsers(slug);
       const existingEntry = seenList.find(u => u.number === senderNumber);
-      if (existingEntry && existingEntry.name !== senderName) {
+      if (existingEntry && (existingEntry.name !== senderName || (msg.from.endsWith('@c.us') && existingEntry.chatId !== msg.from))) {
         // User already seen via DM — just update their display name in the cache + disk
-        existingEntry.name = senderName;
+        if (existingEntry.name !== senderName) existingEntry.name = senderName;
+        if (msg.from.endsWith('@c.us')) existingEntry.chatId = msg.from;
         const seenFilePath = path.join(dataDir, `seen_users_${slug}.json`);
         fs.promises.writeFile(seenFilePath, JSON.stringify(seenList, null, 2), 'utf8')
           .catch(err => console.error(`Async seen users name update failed for ${slug}:`, err));
@@ -2836,12 +2906,17 @@ app.post('/api/instances/:slug/unmute-seen-user', authenticateToken, async (req,
     // Also attempt WhatsApp unmute if client is active/ready
     const client = activeClients[slug];
     if (client && clientStates[slug] && clientStates[slug].status === 'ready') {
-      try {
-        const chat = await client.getChatById(`${cleanNumber}@c.us`);
-        await chat.unmute();
+      const unmuteResult = await setNativeChatMute(client, {
+        number: cleanNumber,
+        chatId: userEntry.chatId,
+        mute: false
+      });
+      if (unmuteResult.success) {
+        userEntry.chatId = unmuteResult.chatId;
+        fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
         logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${cleanNumber} on WhatsApp`);
-      } catch (chatErr) {
-        logInstanceEvent(slug, 'error', `Admin unmute succeeded in DB but failed on WhatsApp for +${cleanNumber}: ${chatErr.message}`);
+      } else {
+        logInstanceEvent(slug, 'system', `Admin unmute succeeded in DB; WhatsApp native unmute unavailable for +${cleanNumber}: ${unmuteResult.error.message}`);
       }
     } else {
       logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${cleanNumber} in DB (WhatsApp client not ready)`);
@@ -3031,17 +3106,22 @@ app.post('/api/instances/:slug/users/:number/toggle-mute', authenticateToken, as
     // Also update WhatsApp client
     const client = activeClients[slug];
     if (client && clientStates[slug] && clientStates[slug].status === 'ready') {
-      try {
-        const chat = await client.getChatById(`${number}@c.us`);
+      const muteResult = await setNativeChatMute(client, {
+        number,
+        chatId: userEntry.chatId,
+        mute: willMute,
+        until: willMute ? new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000) : null
+      });
+      if (muteResult.success) {
+        userEntry.chatId = muteResult.chatId;
+        fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
         if (willMute) {
-          await chat.mute(new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000));
           logInstanceEvent(slug, 'system', `🔇 Admin manually muted +${number} on WhatsApp`);
         } else {
-          await chat.unmute();
           logInstanceEvent(slug, 'system', `🔓 Admin manually unmuted +${number} on WhatsApp`);
         }
-      } catch (chatErr) {
-        logInstanceEvent(slug, 'error', `Admin mute/unmute succeeded in DB but failed on WhatsApp for +${number}: ${chatErr.message}`);
+      } else {
+        logInstanceEvent(slug, 'system', `Admin mute state changed in DB; WhatsApp native mute unavailable for +${number}: ${muteResult.error.message}`);
       }
     } else {
       logInstanceEvent(slug, 'system', `🔇 Admin manually changed mute state for +${number} in DB to ${willMute} (WhatsApp client not ready)`);
