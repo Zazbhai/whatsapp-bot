@@ -2084,7 +2084,14 @@ async function transcribeAudio(slug, media) {
     const wavBuffer = fs.readFileSync(wavFile);
     const audioBlob = new Blob([wavBuffer], { type: 'audio/wav' });
     const model = process.env.HF_STT_MODEL || 'openai/whisper-large-v3';
-    const provider = process.env.HF_STT_PROVIDER || 'fal-ai';
+    const primaryProvider = process.env.HF_STT_PROVIDER || 'fal-ai';
+    const fallbackProviders = (process.env.HF_STT_FALLBACK_PROVIDERS || 'hf-inference')
+      .split(/[\s,;]+/)
+      .map(p => p.trim())
+      .filter(Boolean);
+    const providers = [primaryProvider, ...fallbackProviders].filter((providerName, index, list) => {
+      return providerName && list.indexOf(providerName) === index;
+    });
     const { InferenceClient } = await import('@huggingface/inference');
     
     let finalTranscription = null;
@@ -2096,45 +2103,51 @@ async function transcribeAudio(slug, media) {
       const token = tokens[i];
       const maskedToken = token.substring(0, 8) + '...' + token.substring(token.length - 4);
       
-      try {
-        logInstanceEvent(slug, 'system', `Querying HF model "${model}" via provider "${provider}" with key ${maskedToken}...`);
-        
-        let attempts = 0;
-        const maxHfAttempts = 3;
-        const client = new InferenceClient(token);
-        
-        while (attempts < maxHfAttempts) {
-          attempts++;
+      for (const provider of providers) {
+        try {
+          logInstanceEvent(slug, 'system', `Querying HF model "${model}" via provider "${provider}" with key ${maskedToken}...`);
           
-          try {
-            const output = await client.automaticSpeechRecognition({
-              data: audioBlob,
-              model,
-              provider
-            });
+          let attempts = 0;
+          const maxHfAttempts = 3;
+          const client = new InferenceClient(token);
+          
+          while (attempts < maxHfAttempts) {
+            attempts++;
+            
+            try {
+              const output = await client.automaticSpeechRecognition({
+                data: audioBlob,
+                model,
+                provider
+              });
 
-            const outputText = output && typeof output.text === 'string' ? output.text.trim() : '';
-            if (outputText) {
-              finalTranscription = outputText;
-              success = true;
-              break;
-            } else {
-              throw new Error("Hugging Face Inference SDK response did not contain text field: " + JSON.stringify(output));
+              const outputText = output && typeof output.text === 'string' ? output.text.trim() : '';
+              if (outputText) {
+                finalTranscription = outputText;
+                success = true;
+                break;
+              } else {
+                throw new Error("Hugging Face Inference SDK response did not contain text field: " + JSON.stringify(output));
+              }
+            } catch (err) {
+              lastError = err;
+              if (attempts >= maxHfAttempts) throw err;
+              logInstanceEvent(slug, 'system', `HF ASR attempt ${attempts}/${maxHfAttempts} via ${provider} failed. Retrying in 3 seconds...`);
+              await new Promise(r => setTimeout(r, 3000));
             }
-          } catch (err) {
-            lastError = err;
-            if (attempts >= maxHfAttempts) throw err;
-            logInstanceEvent(slug, 'system', `HF ASR attempt ${attempts}/${maxHfAttempts} failed. Retrying in 3 seconds...`);
-            await new Promise(r => setTimeout(r, 3000));
           }
+          
+          if (success) {
+            break; // Break the provider failover loop
+          }
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `HF transcription attempt with key ${maskedToken} via ${provider} failed: ${err.message}`);
+          lastError = err;
         }
-        
-        if (success) {
-          break; // Break the key failover loop
-        }
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `HF transcription attempt with key ${maskedToken} failed: ${err.message}`);
-        lastError = err;
+      }
+
+      if (success) {
+        break; // Break the key failover loop
       }
     }
 
