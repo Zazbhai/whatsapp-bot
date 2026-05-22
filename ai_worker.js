@@ -79,39 +79,77 @@ process.on('message', async (data) => {
     'gemma2-9b-it'
   ];
 
-  async function tryModel(url, apiKey, model, abortSignal) {
-    const response = await fetch(url, {
-      signal: abortSignal,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...history,
-          { role: 'user', content: userMessage }
-        ],
-        max_tokens: 300
-      })
-    });
+  const delay = (ms, signal) => new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort);
+  });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      const error = new Error(`HTTP ${response.status}: ${errText.substring(0, 120)}`);
-      error.status = response.status;
-      error.responseText = errText;
-      throw error;
-    }
+  async function tryModel(url, apiKey, model, abortSignal, attempt = 1) {
+    try {
+      const response = await fetch(url, {
+        signal: abortSignal,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...history,
+            { role: 'user', content: userMessage }
+          ],
+          max_tokens: 300
+        })
+      });
 
-    const responseJson = await response.json();
-    const content = responseJson?.choices?.[0]?.message?.content?.trim();
-    if (!content) {
-      throw new Error('Empty AI response content');
+      if (!response.ok) {
+        const errText = await response.text();
+        const error = new Error(`HTTP ${response.status}: ${errText.substring(0, 120)}`);
+        error.status = response.status;
+        error.responseText = errText;
+
+        const retryAfter = response.headers.get('retry-after');
+        if (retryAfter) {
+          const parsed = parseInt(retryAfter, 10);
+          if (!isNaN(parsed)) {
+            error.retryAfter = parsed;
+          }
+        }
+        throw error;
+      }
+
+      const responseJson = await response.json();
+      const content = responseJson?.choices?.[0]?.message?.content?.trim();
+      if (!content) {
+        throw new Error('Empty AI response content');
+      }
+      return { content, model };
+    } catch (err) {
+      const isTransient = err.status === 429 || [500, 502, 503, 504].includes(err.status);
+      const isAborted = abortSignal?.aborted || err.name === 'AbortError';
+
+      if (isTransient && !isAborted && attempt < 3) {
+        let waitTime = attempt * 2000;
+        if (err.retryAfter) {
+          waitTime = Math.min(err.retryAfter * 1000, 10000);
+        }
+        console.warn(`[AI Worker] Model ${model} encountered transient error (${err.status}). Retrying attempt ${attempt + 1}/3 after ${waitTime}ms...`);
+        
+        await delay(waitTime, abortSignal);
+        return tryModel(url, apiKey, model, abortSignal, attempt + 1);
+      }
+      throw err;
     }
-    return { content, model };
   }
 
   // Configuration for parallel racing

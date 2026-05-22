@@ -555,6 +555,11 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
     const ignoredList = loadIgnoredUsers();
     
     for (const chat of chats) {
+      // 0. Skip if chat has no unread messages (already seen/read)
+      if (chat.unreadCount === undefined || chat.unreadCount === null || chat.unreadCount <= 0) {
+        continue;
+      }
+
       // 1. Skip if natively muted on WhatsApp
       if (chat.muteExpiration && (chat.muteExpiration === -1 || chat.muteExpiration * 1000 > Date.now())) {
         continue;
@@ -585,6 +590,12 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
         
         // If the last message is from the user (unreplied)
         if (lastMsg && !lastMsg.fromMe) {
+          // Skip if the message is older than 12 hours to avoid spamming very old messages on restart
+          const maxAgeMs = 12 * 60 * 60 * 1000;
+          if (lastMsg.timestamp * 1000 < Date.now() - maxAgeMs) {
+            continue;
+          }
+
           // Check if contact is expired/muted in bot configuration
           let isMutedOrExpired = false;
           if (chat.id.server === 'c.us') {
@@ -2016,6 +2027,14 @@ function initInstanceClient(slug) {
         const firstKey = clientStates[slug].processedMessageIds.values().next().value;
         clientStates[slug].processedMessageIds.delete(firstKey);
       }
+    }
+
+    // Mark the chat as seen to clear the unread count immediately (prevents duplicate processing on restart)
+    try {
+      const chat = await msg.getChat();
+      await chat.sendSeen();
+    } catch (e) {
+      logInstanceEvent(slug, 'error', `Failed to send read receipt: ${e.message}`);
     }
 
     // --- NEW GROUP WHITELIST LOGIC ---
