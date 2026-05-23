@@ -3719,9 +3719,14 @@ setInterval(() => {
       
       // If sent more than 24 hours ago
       if (now - lastSent >= twentyFourHours) {
-        sendDailyReportToAdmin(inst.slug).catch(err => {
-          console.error(`[SYSTEM] Background daily report failed for ${inst.slug}:`, err.message);
-        });
+        const client = activeClients[inst.slug];
+        const status = clientStates[inst.slug]?.status;
+        // Only attempt to send if client is connected/ready to avoid spamming disconnected warnings
+        if (client && (status === 'ready' || status === 'connected')) {
+          sendDailyReportToAdmin(inst.slug).catch(err => {
+            console.error(`[SYSTEM] Background daily report failed for ${inst.slug}:`, err.message);
+          });
+        }
       }
     }
   });

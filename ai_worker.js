@@ -131,6 +131,10 @@ process.on('message', async (data) => {
 
       if (isTransient && !isAborted && attempt < 3) {
         let waitTime = attempt * 2000;
+        if (err.status === 429) {
+          // Extra backoff and random jitter for HTTP 429 Rate Limit to prevent synchronized retries
+          waitTime = attempt * 3000 + Math.floor(Math.random() * 2000);
+        }
         if (err.retryAfter) {
           waitTime = Math.min(err.retryAfter * 1000, 10000);
         }
@@ -201,10 +205,15 @@ process.on('message', async (data) => {
       const controllers = batch.map(() => new AbortController());
       const timeouts = [];
 
-      const racePromises = batch.map((model, idx) => {
+      const racePromises = batch.map(async (model, idx) => {
         const controller = controllers[idx];
         const timeoutId = setTimeout(() => controller.abort(), PER_MODEL_TIMEOUT);
         timeouts.push(timeoutId);
+
+        if (idx > 0) {
+          // Stagger the calls to avoid concurrent/rate limit 429 errors (especially on free tiers)
+          await delay(idx * 1000, controller.signal);
+        }
 
         return tryModel(url, activeApiKey, model, controller.signal)
           .then(result => {
