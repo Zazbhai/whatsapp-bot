@@ -1457,28 +1457,28 @@ async function processCombinedMessage(slug, senderNumber, msg) {
     if (!alreadyWelcomed) {
       const welcomeMessage = instConfig && instConfig.autoWelcomeMessage ? instConfig.autoWelcomeMessage.trim() : '';
       if (!welcomeMessage) {
-        logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}, but First-Time Welcome Responder is disabled because Welcome Message is blank.`);
+        logInstanceEvent(slug, 'system', `First-time message from +${senderNumber}, but First-Time Welcome Responder is disabled because Welcome Message is blank. Bypassing to rules/AI.`);
+        saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
+      } else {
+        logInstanceEvent(slug, 'system', `First-time welcome responder triggered for +${senderNumber} before auto-reply rules.`);
+        try {
+          await sendSmartReply(slug, msg, null, welcomeMessage, true);
+          addToMemory(slug, senderNumber, 'user', msg.body);
+          addToMemory(slug, senderNumber, 'assistant', welcomeMessage);
+
+          if (instConfig.autoWelcomeSendApk) {
+            logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
+            await sendCachedApkReply(slug, msg, senderNumber);
+          }
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
+        }
         saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
         return;
       }
-
-      logInstanceEvent(slug, 'system', `First-time welcome responder triggered for +${senderNumber} before auto-reply rules.`);
-      try {
-        await sendSmartReply(slug, msg, null, welcomeMessage, true);
-        addToMemory(slug, senderNumber, 'user', msg.body);
-        addToMemory(slug, senderNumber, 'assistant', welcomeMessage);
-
-        if (instConfig.autoWelcomeSendApk) {
-          logInstanceEvent(slug, 'system', `Welcome Message includes APK delivery for +${senderNumber}.`);
-          await sendCachedApkReply(slug, msg, senderNumber);
-        }
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `Failed to send welcome message to +${senderNumber}: ${err.message}`);
-      }
-      saveSeenUser(slug, senderNumber, msg._data.notifyName || '', true, msg.from);
-      return;
     }
   }
+
 
   // 1. Auto-Ignore on block trigger text
   if (instConfig && instConfig.blockTriggerText && msg.body) {
@@ -3304,10 +3304,20 @@ app.delete('/api/instances/:slug/users/:number/memory', authenticateToken, (req,
       delete memory[key];
       saveMemory(memory);
       logInstanceEvent(slug, 'system', `🗑️ Admin cleared conversational memory for +${number}.`);
-      res.json({ success: true, message: `Conversational memory for +${number} has been cleared.` });
-    } else {
-      res.json({ success: true, message: `No memory found for +${number}.` });
     }
+
+    // Also remove the user from the seen list so they can be welcomed again on next interaction
+    const users = loadSeenUsers(slug);
+    const index = users.findIndex(u => u.number === number);
+    if (index !== -1) {
+      users.splice(index, 1);
+      const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+      seenUsersCache[slug] = users;
+      logInstanceEvent(slug, 'system', `🗑️ Admin removed +${number} from first-seen welcomed users list.`);
+    }
+    
+    res.json({ success: true, message: `Conversational memory and welcome status for +${number} has been cleared.` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
