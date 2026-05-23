@@ -2066,6 +2066,14 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
       }, 35000);
 
       child.on('message', (message) => {
+        if (message.status === 'key_exhausted') {
+          if (apiKeysRegistry[message.key]) {
+            logInstanceEvent(slug, 'system', `Removing exhausted/invalid API key from active registry: ${message.key.substring(0, 8)}...`);
+            delete apiKeysRegistry[message.key];
+          }
+          return;
+        }
+
         if (resolved) return;
 
         // Update global round robin state

@@ -26,6 +26,22 @@ process.on('message', async (data) => {
   const localRegistry = JSON.parse(JSON.stringify(apiKeysRegistry || {}));
   const failoverErrors = [];
 
+  function safeExit(payload, exitCode = 0) {
+    if (typeof process.send === 'function') {
+      let exited = false;
+      const done = () => {
+        if (!exited) {
+          exited = true;
+          process.exit(exitCode);
+        }
+      };
+      process.send(payload, done);
+      setTimeout(done, 200);
+    } else {
+      process.exit(exitCode);
+    }
+  }
+
   function pickRandomKey(attemptedKeys = new Set()) {
     const activeKeys = Object.values(localRegistry).filter(k => !attemptedKeys.has(k.key));
     if (activeKeys.length === 0) {
@@ -153,12 +169,11 @@ process.on('message', async (data) => {
 
   const totalKeysCount = Object.keys(localRegistry).length;
   if (totalKeysCount === 0) {
-    process.send({
+    safeExit({
       status: 'error',
       error: 'No API keys configured.',
       apiKeysRoundRobin: localRoundRobin
-    });
-    process.exit(1);
+    }, 1);
   }
 
   let attempts = 0;
@@ -231,6 +246,12 @@ process.on('message', async (data) => {
                 keyExhausted = true;
                 controllers.forEach(c => c.abort());
                 timeouts.forEach(t => clearTimeout(t));
+                if (typeof process.send === 'function') {
+                  process.send({
+                    status: 'key_exhausted',
+                    key: activeApiKey
+                  });
+                }
               }
             }
             throw err;
@@ -239,14 +260,13 @@ process.on('message', async (data) => {
 
       try {
         const winner = await Promise.any(racePromises);
-        process.send({
+        safeExit({
           status: 'success',
           content: winner.content,
           model: winner.model,
           provider,
           apiKeysRoundRobin: localRoundRobin
-        });
-        process.exit(0);
+        }, 0);
       } catch (aggregateErr) {
         timeouts.forEach(t => clearTimeout(t));
         controllers.forEach(c => c.abort());
@@ -264,10 +284,9 @@ process.on('message', async (data) => {
     failoverErrors.push("No active keys were available to try.");
   }
 
-  process.send({
+  safeExit({
     status: 'error',
     error: `AI Query failed after maximum key failover attempts. Details: ${failoverErrors.join(' || ')}`,
     apiKeysRoundRobin: localRoundRobin
-  });
-  process.exit(0);
+  }, 0);
 });
