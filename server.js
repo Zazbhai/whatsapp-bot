@@ -2967,6 +2967,42 @@ app.post('/api/instances/:slug/send-report', authenticateToken, async (req, res)
   }
 });
 
+app.post('/api/instances/:slug/pairing-code', authenticateToken, async (req, res) => {
+  const slug = req.params.slug.trim().toLowerCase();
+  const { phoneNumber } = req.body;
+  if (!phoneNumber) {
+    return res.status(400).json({ error: 'Phone number is required.' });
+  }
+
+  // Clean phone number: remove all non-digit characters
+  const cleanNumber = phoneNumber.replace(/\D/g, '');
+  if (!cleanNumber) {
+    return res.status(400).json({ error: 'Invalid phone number format.' });
+  }
+
+  const client = activeClients[slug];
+  const state = clientStates[slug];
+
+  if (!client || !state) {
+    return res.status(400).json({ error: 'WhatsApp client is not initialized for this instance.' });
+  }
+
+  if (state.status === 'ready' || state.status === 'authenticated') {
+    return res.status(400).json({ error: 'WhatsApp client is already connected/authenticated.' });
+  }
+
+  try {
+    logInstanceEvent(slug, 'system', `Generating pairing code for +${cleanNumber}...`);
+    const code = await client.requestPairingCode(cleanNumber);
+    logInstanceEvent(slug, 'system', `Pairing code generated successfully: ${code}`);
+    res.json({ success: true, code });
+  } catch (err) {
+    logInstanceEvent(slug, 'error', `Failed to generate pairing code: ${err.message}`);
+    res.status(500).json({ error: `Failed to generate pairing code: ${err.message}` });
+  }
+});
+
+
 // List currently spam-muted users for this instance
 app.get('/api/instances/:slug/muted-users', authenticateToken, (req, res) => {
   const slug = req.params.slug.trim().toLowerCase();

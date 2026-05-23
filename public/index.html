@@ -166,6 +166,20 @@
             
             <!-- Connection Body: QR Code Scan -->
             <div class="portal-body" id="portal-body">
+              <!-- Linking Mode Options -->
+              <div id="linking-options" class="linking-options" style="display: none; width: 100%; margin-bottom: 20px;">
+                <div class="linking-tabs">
+                  <button class="linking-tab active" id="tab-btn-qr" onclick="switchLinkingMode('qr')" type="button">
+                    <i data-lucide="qr-code"></i>
+                    <span>QR Code</span>
+                  </button>
+                  <button class="linking-tab" id="tab-btn-phone" onclick="switchLinkingMode('phone')" type="button">
+                    <i data-lucide="phone"></i>
+                    <span>Phone Number</span>
+                  </button>
+                </div>
+              </div>
+
               <!-- QR Showcase -->
               <div id="qr-container" class="qr-container" style="display: none;">
                 <div class="qr-frame">
@@ -181,6 +195,51 @@
                   </ol>
                 </div>
               </div>
+
+              <!-- Phone Pairing Showcase -->
+              <div id="phone-container" class="phone-container" style="display: none;">
+                <div class="phone-link-form">
+                  <h4>Link with Phone Number</h4>
+                  <p class="description">Enter your phone number (including country code) to receive an 8-character pairing code.</p>
+                  
+                  <div class="form-group" style="margin-top: 10px; margin-bottom: 10px; width: 100%;">
+                    <label for="pairing-phone-number">Phone Number</label>
+                    <div class="input-with-icon">
+                      <i data-lucide="phone"></i>
+                      <input type="text" id="pairing-phone-number" placeholder="e.g. 919876543210 (no symbols)">
+                    </div>
+                  </div>
+                  
+                  <button type="button" class="btn btn-primary" id="get-pairing-code-btn" onclick="requestPairingCode()" style="width: 100%;">
+                    <span>Get Pairing Code</span>
+                    <i data-lucide="key"></i>
+                  </button>
+                  
+                  <!-- Pairing Code Display -->
+                  <div id="pairing-code-display" class="pairing-code-display" style="display: none;">
+                    <span class="label">Your Pairing Code:</span>
+                    <div class="code-box-wrapper">
+                      <div class="code-box" id="pairing-code-val">---- ----</div>
+                      <button class="copy-code-btn" onclick="copyPairingCode()" title="Copy Code" type="button">
+                        <i data-lucide="copy"></i>
+                      </button>
+                    </div>
+                    <p class="expiry-note">Enter this code on your phone when prompted.</p>
+                  </div>
+                </div>
+
+                <div class="phone-instructions">
+                  <h4>Pairing Steps</h4>
+                  <ol>
+                    <li>Open <strong>WhatsApp</strong> on your phone</li>
+                    <li>Tap <strong>Linked Devices</strong> in settings</li>
+                    <li>Tap <strong>Link a Device</strong></li>
+                    <li>Tap <strong>Link with phone number instead</strong> at the bottom</li>
+                    <li>Enter the code shown on this dashboard</li>
+                  </ol>
+                </div>
+              </div>
+
 
               <!-- Connecting State -->
               <div id="connecting-container" class="state-container" style="display: none;">

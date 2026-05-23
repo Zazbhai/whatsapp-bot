@@ -437,12 +437,128 @@ function updateStatusUI(data) {
   }
 }
 
+let currentLinkingMode = 'qr'; // 'qr' or 'phone'
+
+function switchLinkingMode(mode) {
+  currentLinkingMode = mode;
+  
+  const tabBtnQr = document.getElementById('tab-btn-qr');
+  const tabBtnPhone = document.getElementById('tab-btn-phone');
+  const qrContainer = document.getElementById('qr-container');
+  const phoneContainer = document.getElementById('phone-container');
+  
+  if (!tabBtnQr || !tabBtnPhone || !qrContainer || !phoneContainer) return;
+
+  if (mode === 'qr') {
+    tabBtnQr.classList.add('active');
+    tabBtnPhone.classList.remove('active');
+    qrContainer.style.display = 'flex';
+    phoneContainer.style.display = 'none';
+  } else {
+    tabBtnQr.classList.remove('active');
+    tabBtnPhone.classList.add('active');
+    qrContainer.style.display = 'none';
+    phoneContainer.style.display = 'flex';
+  }
+}
+
+async function requestPairingCode() {
+  const phoneInput = document.getElementById('pairing-phone-number');
+  if (!phoneInput) return;
+  const phoneNumber = phoneInput.value.trim();
+  if (!phoneNumber) {
+    showToast('Please enter a valid phone number.', 'error');
+    return;
+  }
+
+  const getBtn = document.getElementById('get-pairing-code-btn');
+  const codeDisplay = document.getElementById('pairing-code-display');
+  const codeVal = document.getElementById('pairing-code-val');
+  if (!getBtn || !codeDisplay || !codeVal) return;
+
+  try {
+    getBtn.disabled = true;
+    const btnSpan = getBtn.querySelector('span');
+    if (btnSpan) btnSpan.textContent = 'Generating...';
+    
+    showToast('Requesting pairing code from WhatsApp...', 'info');
+    
+    const response = await apiFetch(`/api/instances/${activeInstanceSlug}/pairing-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ phoneNumber })
+    });
+    
+    const data = await response.json();
+    if (data.success && data.code) {
+      let formattedCode = data.code;
+      if (formattedCode.length === 8) {
+        formattedCode = formattedCode.substring(0, 4) + '-' + formattedCode.substring(4);
+      }
+      codeVal.textContent = formattedCode;
+      codeDisplay.style.display = 'block';
+      showToast('Pairing code generated successfully!', 'success');
+    } else {
+      throw new Error(data.error || 'Failed to generate code.');
+    }
+  } catch (err) {
+    showToast(err.message || 'Failed to request pairing code.', 'error');
+    resetPairingCodeUI();
+  } finally {
+    getBtn.disabled = false;
+    const btnSpan = getBtn.querySelector('span');
+    if (btnSpan) btnSpan.textContent = 'Get Pairing Code';
+  }
+}
+
+function copyPairingCode() {
+  const codeVal = document.getElementById('pairing-code-val');
+  if (!codeVal) return;
+  const code = codeVal.textContent.replace('-', '');
+  navigator.clipboard.writeText(code).then(() => {
+    showToast('Pairing code copied to clipboard!', 'success');
+  }).catch(() => {
+    showToast('Failed to copy to clipboard.', 'error');
+  });
+}
+
+function resetPairingCodeUI() {
+  const phoneInput = document.getElementById('pairing-phone-number');
+  const codeDisplay = document.getElementById('pairing-code-display');
+  const codeVal = document.getElementById('pairing-code-val');
+  const getBtn = document.getElementById('get-pairing-code-btn');
+  
+  if (phoneInput) phoneInput.value = '';
+  if (codeDisplay) codeDisplay.style.display = 'none';
+  if (codeVal) codeVal.textContent = '---- ----';
+  if (getBtn) {
+    getBtn.disabled = false;
+    const btnSpan = getBtn.querySelector('span');
+    if (btnSpan) btnSpan.textContent = 'Get Pairing Code';
+  }
+}
+
 function showState(state) {
-  qrContainer.style.display = state === 'qr' ? 'flex' : 'none';
+  const linkingOptions = document.getElementById('linking-options');
+  const phoneContainer = document.getElementById('phone-container');
+  
+  if (state === 'qr') {
+    if (linkingOptions) linkingOptions.style.display = 'block';
+    switchLinkingMode(currentLinkingMode);
+  } else {
+    if (linkingOptions) linkingOptions.style.display = 'none';
+    qrContainer.style.display = 'none';
+    if (phoneContainer) phoneContainer.style.display = 'none';
+    resetPairingCodeUI();
+  }
+  
   connectingContainer.style.display = state === 'connecting' ? 'flex' : 'none';
   connectedContainer.style.display = state === 'connected' ? 'flex' : 'none';
   disconnectedContainer.style.display = state === 'disconnected' ? 'flex' : 'none';
 }
+
 
 function showProfile(info) {
   if (!info) return;
