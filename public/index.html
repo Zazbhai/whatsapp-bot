@@ -943,8 +943,12 @@
 
           <!-- Active Keys Panel -->
           <div class="glass-card">
-            <div class="card-header">
-              <h3>Active Credentials Registry</h3>
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 20px;">
+              <h3 style="margin: 0;">Active Credentials Registry</h3>
+              <button class="btn btn-secondary btn-sm" id="reset-exhausted-keys-btn" onclick="resetExhaustedKeys()" title="Restore all exhausted keys back to active pool" type="button" style="padding: 6px 12px; font-size: 0.8rem; background: rgba(255,149,0,0.1); border-color: rgba(255,149,0,0.25); color: #ff9500; width: auto; height: auto;">
+                <i data-lucide="refresh-cw" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                <span>Restore Exhausted Keys</span>
+              </button>
             </div>
             <div class="card-body" style="margin-top: 15px; display: flex; flex-direction: column; gap: 20px;">
               <!-- OpenRouter List -->

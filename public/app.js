@@ -2196,34 +2196,52 @@ async function fetchApiKeys() {
     if (data.openrouter.length === 0) {
       orList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No OpenRouter keys configured.</p>';
     } else {
-      orList.innerHTML = data.openrouter.map(k => `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(124,58,237,0.05);border:1px solid rgba(124,58,237,0.15);border-radius:8px;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <i data-lucide="key" style="width:14px;height:14px;color:var(--primary);"></i>
-            <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
+      orList.innerHTML = data.openrouter.map(k => {
+        const bg = k.isExhausted ? 'rgba(255,149,0,0.08)' : 'rgba(124,58,237,0.05)';
+        const border = k.isExhausted ? 'rgba(255,149,0,0.25)' : 'rgba(124,58,237,0.15)';
+        const iconColor = k.isExhausted ? '#ff9500' : 'var(--primary)';
+        const badgeHtml = k.isExhausted 
+          ? `<span class="badge" style="background:rgba(255,149,0,0.15);color:#ff9500;padding:2px 8px;border-radius:20px;font-size:0.7rem;margin-left:8px;font-weight:600;border:1px solid rgba(255,149,0,0.2);">Exhausted/Muted</span>`
+          : '';
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:${bg};border:1px solid ${border};border-radius:8px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <i data-lucide="${k.isExhausted ? 'alert-circle' : 'key'}" style="width:14px;height:14px;color:${iconColor};"></i>
+              <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
+              ${badgeHtml}
+            </div>
+            <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="openrouter" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
+              <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
+            </button>
           </div>
-          <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="openrouter" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
-            <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
-          </button>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
     // Render Hugging Face List
     if (data.huggingface.length === 0) {
       hfList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No Hugging Face tokens configured.</p>';
     } else {
-      hfList.innerHTML = data.huggingface.map(k => `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(34,197,94,0.05);border:1px solid rgba(34,197,94,0.15);border-radius:8px;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <i data-lucide="key" style="width:14px;height:14px;color:var(--whatsapp);"></i>
-            <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
+      hfList.innerHTML = data.huggingface.map(k => {
+        const bg = k.isExhausted ? 'rgba(255,149,0,0.08)' : 'rgba(34,197,94,0.05)';
+        const border = k.isExhausted ? 'rgba(255,149,0,0.25)' : 'rgba(34,197,94,0.15)';
+        const iconColor = k.isExhausted ? '#ff9500' : 'var(--whatsapp)';
+        const badgeHtml = k.isExhausted 
+          ? `<span class="badge" style="background:rgba(255,149,0,0.15);color:#ff9500;padding:2px 8px;border-radius:20px;font-size:0.7rem;margin-left:8px;font-weight:600;border:1px solid rgba(255,149,0,0.2);">Exhausted/Muted</span>`
+          : '';
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:${bg};border:1px solid ${border};border-radius:8px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <i data-lucide="${k.isExhausted ? 'alert-circle' : 'key'}" style="width:14px;height:14px;color:${iconColor};"></i>
+              <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
+              ${badgeHtml}
+            </div>
+            <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="huggingface" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
+              <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
+            </button>
           </div>
-          <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="huggingface" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
-            <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
-          </button>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
     if (window.lucide) lucide.createIcons();
@@ -2262,6 +2280,33 @@ async function deleteApiKey(id, provider) {
     }
   } catch (err) {
     showToast('Network error while deleting key.', 'error');
+  }
+}
+
+async function resetExhaustedKeys() {
+  const btn = document.getElementById('reset-exhausted-keys-btn');
+  if (!btn) return;
+  
+  btn.disabled = true;
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '<span>Restoring...</span>';
+  
+  try {
+    const res = await apiFetch('/api/keys/reset-exhausted', {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || 'Exhausted keys restored successfully.', 'success');
+      await fetchApiKeys();
+    } else {
+      showToast(data.error || 'Failed to restore exhausted keys.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error while restoring exhausted keys.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
   }
 }
 

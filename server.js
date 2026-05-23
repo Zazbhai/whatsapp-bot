@@ -1949,6 +1949,7 @@ async function processGlobalAIQueue() {
 // Global registry of all keys: keyString -> { provider, key }
 let apiKeysRegistry = {};
 let apiKeysRoundRobin = 0; // Round-robin counter for even distribution
+const exhaustedKeysRegistry = new Set();
 
 function initApiKeysRegistry() {
   apiKeysRegistry = {};
@@ -1956,29 +1957,44 @@ function initApiKeysRegistry() {
   // 1. Load HuggingFace keys
   const hfKeysStr = process.env.HF_TOKENS || process.env.HF_TOKEN || '';
   const hfKeys = hfKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
-  hfKeys.forEach(key => {
-    apiKeysRegistry[key] = {
-      provider: 'huggingface',
-      key
-    };
-  });
 
   // 2. Load OpenRouter/Groq keys
   const orKeysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
   const orKeys = orKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+
+  const allEnvKeys = new Set([...hfKeys, ...orKeys]);
+
+  // Clean up exhausted keys that are no longer in env
+  for (const key of exhaustedKeysRegistry) {
+    if (!allEnvKeys.has(key)) {
+      exhaustedKeysRegistry.delete(key);
+    }
+  }
+
+  hfKeys.forEach(key => {
+    if (!exhaustedKeysRegistry.has(key)) {
+      apiKeysRegistry[key] = {
+        provider: 'huggingface',
+        key
+      };
+    }
+  });
+
   const provider = process.env.LLM_PROVIDER || 'openrouter';
   orKeys.forEach(key => {
-    apiKeysRegistry[key] = {
-      provider,
-      key
-    };
+    if (!exhaustedKeysRegistry.has(key)) {
+      apiKeysRegistry[key] = {
+        provider,
+        key
+      };
+    }
   });
   
   // Log total keys loaded
   const totalKeys = Object.keys(apiKeysRegistry).length;
   const hfCount = Object.values(apiKeysRegistry).filter(k => k.provider === 'huggingface').length;
   const otherCount = totalKeys - hfCount;
-  console.log(`[SYSTEM] API Key Registry initialized: ${otherCount} OpenRouter/Groq key(s), ${hfCount} HuggingFace key(s)`);
+  console.log(`[SYSTEM] API Key Registry initialized: ${otherCount} OpenRouter/Groq key(s), ${hfCount} HuggingFace key(s) (Exhausted: ${exhaustedKeysRegistry.size})`);
 }
 
 function initApiKeysRegistryIfEmpty() {
@@ -2070,6 +2086,7 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
           if (apiKeysRegistry[message.key]) {
             logInstanceEvent(slug, 'system', `Removing exhausted/invalid API key from active registry: ${message.key.substring(0, 8)}...`);
             delete apiKeysRegistry[message.key];
+            exhaustedKeysRegistry.add(message.key);
           }
           return;
         }
@@ -3603,7 +3620,8 @@ app.get('/api/keys', authenticateToken, (req, res) => {
   const mapKeys = (keysList) => {
     return keysList.map(key => ({
       id: crypto.createHash('sha256').update(key).digest('hex'),
-      masked: maskKey(key)
+      masked: maskKey(key),
+      isExhausted: exhaustedKeysRegistry.has(key)
     }));
   };
 
@@ -3615,6 +3633,12 @@ app.get('/api/keys', authenticateToken, (req, res) => {
       huggingface: hfKeys.length
     }
   });
+});
+
+app.post('/api/keys/reset-exhausted', authenticateToken, (req, res) => {
+  exhaustedKeysRegistry.clear();
+  initApiKeysRegistry();
+  res.json({ success: true, message: 'All exhausted API keys have been reset and restored to active pool.' });
 });
 
 app.post('/api/keys', authenticateToken, (req, res) => {
