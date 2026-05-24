@@ -37,6 +37,46 @@ function findChrome() {
   return null;
 }
 
+// Singleton process lock using PID file to prevent dual process collisions
+function acquireProcessLock() {
+  const lockFilePath = path.join(__dirname, 'data', 'server.lock');
+  try {
+    if (fs.existsSync(lockFilePath)) {
+      const existingPidStr = fs.readFileSync(lockFilePath, 'utf8').trim();
+      const existingPid = parseInt(existingPidStr, 10);
+      if (!isNaN(existingPid)) {
+        try {
+          // Check if process is still running
+          process.kill(existingPid, 0);
+          console.error(`\n[CRITICAL] Another instance of WhatsApp Bot Hub is already running with PID ${existingPid}.`);
+          console.error(`[CRITICAL] Please stop the other process first to avoid database corruption and session conflicts.\n`);
+          process.exit(1);
+        } catch (e) {
+          // Process is not running, we can safely overwrite the lockfile
+          console.log(`[SYSTEM] Found stale lock file (PID ${existingPid} is not running). Overwriting lock...`);
+        }
+      }
+    }
+    fs.writeFileSync(lockFilePath, String(process.pid), 'utf8');
+    
+    // Register exit handler to clean up lock file on normal exit
+    const cleanLock = () => {
+      try {
+        if (fs.existsSync(lockFilePath)) {
+          const pid = fs.readFileSync(lockFilePath, 'utf8').trim();
+          if (parseInt(pid, 10) === process.pid) {
+            fs.unlinkSync(lockFilePath);
+          }
+        }
+      } catch (e) {}
+    };
+    
+    process.on('exit', cleanLock);
+  } catch (err) {
+    console.error('[SYSTEM] Failed to acquire process lock:', err.message);
+  }
+}
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -70,6 +110,7 @@ const dataDir = path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
+acquireProcessLock();
 
 // Multer storage configuration for manual file sending
 const storage = multer.diskStorage({
@@ -727,7 +768,7 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
     const unrepliedMessages = [];
     const listConfig = loadInstances();
     const instConfig = listConfig.find(i => i.slug === slug);
-    const ignoredList = loadIgnoredUsers();
+    const ignoredList = loadIgnoredUsers(slug);
     
     for (const chat of chats) {
       // 0. Skip if chat has no unread messages (already seen/read)
@@ -827,7 +868,7 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
   }
 }
 
-// Shared rules path for all instances
+// Shared rules path for backward compatibility
 const globalRulesFilePath = path.join(dataDir, 'rules.json');
 
 const defaultRulesTemplate = [
@@ -847,37 +888,56 @@ const defaultRulesTemplate = [
 // In-memory rules cache to eliminate blockings on every WhatsApp message received
 const rulesCache = {};
 
+function getInstanceRulesFilePath(slug) {
+  return path.join(dataDir, `rules_${slug}.json`);
+}
+
 function loadInstanceRules(slug) {
   if (rulesCache[slug]) {
     return rulesCache[slug];
   }
+  const filePath = getInstanceRulesFilePath(slug);
   try {
-    if (fs.existsSync(globalRulesFilePath)) {
-      const data = fs.readFileSync(globalRulesFilePath, 'utf8');
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
       const parsed = JSON.parse(data);
       rulesCache[slug] = parsed;
       return parsed;
     } else {
-      // Premium Migration Check: If rules_primary.json exists, copy it to rules.json to preserve user's data!
-      const legacyPath = path.join(dataDir, 'rules_primary.json');
+      // Check if global rules.json exists for backward compatibility/migration
+      if (fs.existsSync(globalRulesFilePath)) {
+        try {
+          const globalData = fs.readFileSync(globalRulesFilePath, 'utf8');
+          // Copy global rules to this instance rules file
+          fs.writeFileSync(filePath, globalData, 'utf8');
+          const parsed = JSON.parse(globalData);
+          rulesCache[slug] = parsed;
+          return parsed;
+        } catch (migErr) {
+          console.error(`Failed to migrate global rules for ${slug}:`, migErr);
+        }
+      }
+
+      // Premium Migration Check: If rules_primary.json exists, copy it to rules_primary.json/etc.
+      const legacyPath = path.join(dataDir, `rules_primary.json`);
       if (fs.existsSync(legacyPath)) {
         try {
           const legacyData = fs.readFileSync(legacyPath, 'utf8');
-          fs.writeFileSync(globalRulesFilePath, legacyData, 'utf8');
+          fs.writeFileSync(filePath, legacyData, 'utf8');
           const parsed = JSON.parse(legacyData);
           rulesCache[slug] = parsed;
           return parsed;
         } catch (migErr) {
-          console.error('Failed to migrate legacy rules:', migErr);
+          console.error(`Failed to migrate legacy rules for ${slug}:`, migErr);
         }
       }
       
-      fs.writeFileSync(globalRulesFilePath, JSON.stringify(defaultRulesTemplate, null, 2), 'utf8');
+      fs.writeFileSync(filePath, JSON.stringify(defaultRulesTemplate, null, 2), 'utf8');
       rulesCache[slug] = defaultRulesTemplate;
       return defaultRulesTemplate;
     }
   } catch (err) {
-    console.error(`Failed to load global rules:`, err.message);
+    console.error(`Failed to load rules for ${slug}:`, err.message);
   }
   return [];
 }
@@ -891,13 +951,14 @@ function saveInstanceRules(slug, rules) {
   }
   
   rulesCache[targetSlug] = targetRules;
+  const filePath = getInstanceRulesFilePath(targetSlug);
   try {
     // Write asynchronously to prevent blocking the event loop!
-    fs.promises.writeFile(globalRulesFilePath, JSON.stringify(targetRules, null, 2), 'utf8')
-      .catch(err => console.error(`[SYSTEM] Async rules write failed:`, err));
+    fs.promises.writeFile(filePath, JSON.stringify(targetRules, null, 2), 'utf8')
+      .catch(err => console.error(`[SYSTEM] Async rules write failed for ${targetSlug}:`, err));
     return true;
   } catch (err) {
-    console.error(`Failed to save global rules:`, err.message);
+    console.error(`Failed to save rules for ${targetSlug}:`, err.message);
     return false;
   }
 }
@@ -959,37 +1020,65 @@ function loadApkCache(slug) {
 // =============================================================
 // IGNORED USERS — Bot ignore list (replaces unstable WhatsApp blocking)
 // =============================================================
-const ignoredUsersFilePath = path.join(dataDir, 'ignored_users.json');
+const globalIgnoredUsersFilePath = path.join(dataDir, 'ignored_users.json');
 
-function loadIgnoredUsers() {
+function getIgnoredUsersFilePath(slug) {
+  return path.join(dataDir, `ignored_users_${slug}.json`);
+}
+
+function loadIgnoredUsers(slug = 'primary') {
+  const filePath = getIgnoredUsersFilePath(slug);
   try {
-    if (fs.existsSync(ignoredUsersFilePath)) {
-      return JSON.parse(fs.readFileSync(ignoredUsersFilePath, 'utf8'));
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } else {
+      // Check if global ignored_users.json exists for migration
+      if (fs.existsSync(globalIgnoredUsersFilePath)) {
+        try {
+          const globalData = fs.readFileSync(globalIgnoredUsersFilePath, 'utf8');
+          fs.writeFileSync(filePath, globalData, 'utf8');
+          return JSON.parse(globalData);
+        } catch (migErr) {
+          console.error(`Failed to migrate global ignored users for ${slug}:`, migErr);
+        }
+      }
     }
   } catch (err) {
-    console.error('Failed to load ignored users:', err);
+    console.error(`Failed to load ignored users for ${slug}:`, err);
   }
   return [];
 }
 
-function saveIgnoredUser(number) {
+function saveIgnoredUser(slug, number) {
+  let targetSlug = slug;
+  let targetNumber = number;
+  if (!number) {
+    targetNumber = slug;
+    targetSlug = 'primary';
+  }
   try {
-    const list = loadIgnoredUsers();
-    if (!list.includes(number)) {
-      list.push(number);
-      fs.writeFileSync(ignoredUsersFilePath, JSON.stringify(list, null, 2));
+    const list = loadIgnoredUsers(targetSlug);
+    if (!list.includes(targetNumber)) {
+      list.push(targetNumber);
+      fs.writeFileSync(getIgnoredUsersFilePath(targetSlug), JSON.stringify(list, null, 2));
     }
   } catch (err) {
-    console.error('Failed to save ignored user:', err);
+    console.error(`Failed to save ignored user for ${targetSlug}:`, err);
   }
 }
 
-function removeIgnoredUser(number) {
+function removeIgnoredUser(slug, number) {
+  let targetSlug = slug;
+  let targetNumber = number;
+  if (!number) {
+    targetNumber = slug;
+    targetSlug = 'primary';
+  }
   try {
-    const list = loadIgnoredUsers().filter(n => n !== number);
-    fs.writeFileSync(ignoredUsersFilePath, JSON.stringify(list, null, 2));
+    const list = loadIgnoredUsers(targetSlug).filter(n => n !== targetNumber);
+    fs.writeFileSync(getIgnoredUsersFilePath(targetSlug), JSON.stringify(list, null, 2));
   } catch (err) {
-    console.error('Failed to remove ignored user:', err);
+    console.error(`Failed to remove ignored user for ${targetSlug}:`, err);
   }
 }
 
@@ -1041,38 +1130,70 @@ function clearSpamCooldown(slug, number) {
 // =============================================================================
 // USER MEMORY — per-user conversation history per instance
 // =============================================================
-const memoryFilePath = path.join(dataDir, 'memory.json');
+// Shared memory path for backward compatibility
+const globalMemoryFilePath = path.join(dataDir, 'memory.json');
 
 // In-memory caching database + debounced non-blocking write throttle
-let conversationMemory = null;
-let pendingMemoryWriteTimeout = null;
+const conversationMemory = {};
+const pendingMemoryWriteTimeouts = {};
 
-function loadMemory() {
-  if (conversationMemory) {
-    return conversationMemory;
-  }
-  try {
-    if (fs.existsSync(memoryFilePath)) {
-      const data = fs.readFileSync(memoryFilePath, 'utf8');
-      conversationMemory = JSON.parse(data);
-      return conversationMemory;
-    }
-  } catch (err) {
-    console.error('Failed to load memory:', err);
-  }
-  conversationMemory = {};
-  return conversationMemory;
+function getMemoryFilePath(slug) {
+  return path.join(dataDir, `memory_${slug}.json`);
 }
 
-function saveMemory(memory) {
-  conversationMemory = memory;
-  if (pendingMemoryWriteTimeout) return;
+function loadMemory(slug = 'primary') {
+  if (conversationMemory[slug]) {
+    return conversationMemory[slug];
+  }
+  const filePath = getMemoryFilePath(slug);
+  try {
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
+      conversationMemory[slug] = JSON.parse(data);
+      return conversationMemory[slug];
+    } else {
+      // Check if global memory.json exists for migration
+      if (fs.existsSync(globalMemoryFilePath)) {
+        try {
+          const globalData = JSON.parse(fs.readFileSync(globalMemoryFilePath, 'utf8'));
+          const instanceMemory = {};
+          let hasEntries = false;
+          // Extract entries matching this slug
+          for (const [key, val] of Object.entries(globalData)) {
+            if (key.startsWith(`${slug}:`)) {
+              const senderNumber = key.split(':')[1];
+              if (senderNumber) {
+                instanceMemory[senderNumber] = val;
+                hasEntries = true;
+              }
+            }
+          }
+          if (hasEntries) {
+            fs.writeFileSync(filePath, JSON.stringify(instanceMemory, null, 2), 'utf8');
+          }
+          conversationMemory[slug] = instanceMemory;
+          return conversationMemory[slug];
+        } catch (migErr) {
+          console.error(`Failed to migrate global memory for ${slug}:`, migErr);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to load memory for ${slug}:`, err);
+  }
+  conversationMemory[slug] = {};
+  return conversationMemory[slug];
+}
+
+function saveMemory(slug, memory) {
+  conversationMemory[slug] = memory;
+  if (pendingMemoryWriteTimeouts[slug]) return;
   
-  // Throttle physical disk updates to once every 2 seconds under high-volume multi-user concurrency
-  pendingMemoryWriteTimeout = setTimeout(() => {
-    pendingMemoryWriteTimeout = null;
-    fs.promises.writeFile(memoryFilePath, JSON.stringify(conversationMemory, null, 2), 'utf8')
-      .catch(err => console.error('[SYSTEM] Async memory persist failed:', err));
+  pendingMemoryWriteTimeouts[slug] = setTimeout(() => {
+    delete pendingMemoryWriteTimeouts[slug];
+    const filePath = getMemoryFilePath(slug);
+    fs.promises.writeFile(filePath, JSON.stringify(conversationMemory[slug], null, 2), 'utf8')
+      .catch(err => console.error(`[SYSTEM] Async memory persist failed for ${slug}:`, err));
   }, 2000);
 }
 
@@ -1211,21 +1332,19 @@ async function sendDailyReportToAdmin(slug) {
 }
 
 function getConversationHistory(slug, senderNumber) {
-  const memory = loadMemory();
-  const key = `${slug}:${senderNumber}`;
-  return memory[key] || [];
+  const memory = loadMemory(slug);
+  return memory[senderNumber] || [];
 }
 
 function addToMemory(slug, senderNumber, role, content) {
-  const memory = loadMemory();
-  const key = `${slug}:${senderNumber}`;
-  if (!memory[key]) memory[key] = [];
-  memory[key].push({ role, content, timestamp: Date.now() });
+  const memory = loadMemory(slug);
+  if (!memory[senderNumber]) memory[senderNumber] = [];
+  memory[senderNumber].push({ role, content, timestamp: Date.now() });
   // Keep last 20 messages (10 exchanges) to limit context
-  if (memory[key].length > 20) {
-    memory[key] = memory[key].slice(-20);
+  if (memory[senderNumber].length > 20) {
+    memory[senderNumber] = memory[senderNumber].slice(-20);
   }
-  saveMemory(memory);
+  saveMemory(slug, memory);
 }
 
 // =============================================================
@@ -1513,7 +1632,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
     const incomingClean = msg.body.trim().toLowerCase();
     if (triggerClean && incomingClean === triggerClean) {
       logInstanceEvent(slug, 'system', `🚨 Trigger matched block phrase: "${msg.body}". Adding user +${senderNumber} to ignore list.`);
-      saveIgnoredUser(senderNumber);
+      saveIgnoredUser(slug, senderNumber);
       logInstanceEvent(slug, 'system', `🚨 User +${senderNumber} added to ignore list. All future messages from this user will be silently ignored.`);
       return;
     }
@@ -1733,7 +1852,7 @@ async function processSingleAITask(task) {
       
       if (isAskOrderQ) {
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} confirmed iPhone order via Yes reply ("${msg.body}"). Adding to ignore list.`);
-        saveIgnoredUser(senderNumber);
+        saveIgnoredUser(slug, senderNumber);
         try {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
@@ -1919,7 +2038,7 @@ async function processSingleAITask(task) {
       // ── STEP 3: Order completion detection ─────────────────────────────────
       if (finalOrderComplete) {
         logInstanceEvent(slug, 'system', `✅ [ORDER_COMPLETE] detected for +${senderNumber}. Auto-adding to ignore list.`);
-        saveIgnoredUser(senderNumber);
+        saveIgnoredUser(slug, senderNumber);
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} successfully ordered — added to permanent ignore list.`);
       } else if (finalAskOrder) {
         // 2-second break before asking order confirmation
@@ -2528,7 +2647,7 @@ function initInstanceClient(slug) {
 
     // Check if user is in the bot's ignore list — silently drop, no reply, no delete (delete triggers new events = infinite loop)
     const senderNumber = msg.from.split('@')[0];
-    const ignoredList = loadIgnoredUsers();
+    const ignoredList = loadIgnoredUsers(slug);
     if (ignoredList.includes(senderNumber)) {
       logInstanceEvent(slug, 'system', `Ignored message from blacklisted user: +${senderNumber}`);
       return; // Silent drop — no reply, no further processing
@@ -2751,9 +2870,21 @@ function initInstanceClient(slug) {
   return client;
 }
 
-// Start all provisioned browser clients on boot
-instancesList.forEach(inst => {
-  initInstanceClient(inst.slug);
+// Start all provisioned browser clients sequentially on boot
+async function startInstancesSequentially() {
+  const startupDelayMs = Number(process.env.INSTANCE_STARTUP_DELAY_MS || 15000);
+  for (let i = 0; i < instancesList.length; i++) {
+    const inst = instancesList[i];
+    console.log(`[SYSTEM] Starting bot instance "${inst.slug}" sequentially (${i + 1}/${instancesList.length})...`);
+    initInstanceClient(inst.slug);
+    if (i < instancesList.length - 1) {
+      console.log(`[SYSTEM] Waiting ${startupDelayMs}ms before booting the next instance to prevent CPU/memory conflicts...`);
+      await new Promise(resolve => setTimeout(resolve, startupDelayMs));
+    }
+  }
+}
+startInstancesSequentially().catch(err => {
+  console.error('[SYSTEM] Error in sequential instance startup:', err);
 });
 
 // Single-User Session Token Authenticator
@@ -3089,7 +3220,8 @@ app.post('/api/instances/:slug/unmute-user', authenticateToken, (req, res) => {
 
 // List all permanently blocked/ignored users
 app.get('/api/instances/:slug/ignored-users', authenticateToken, (req, res) => {
-  const list = loadIgnoredUsers();
+  const slug = req.params.slug.trim().toLowerCase();
+  const list = loadIgnoredUsers(slug);
   res.json({ ignored: list });
 });
 
@@ -3099,7 +3231,7 @@ app.post('/api/instances/:slug/unblock-user', authenticateToken, (req, res) => {
   const { number } = req.body;
   if (!number) return res.status(400).json({ error: 'number is required' });
   const clean = number.replace(/[^0-9]/g, '');
-  removeIgnoredUser(clean);
+  removeIgnoredUser(slug, clean);
   logInstanceEvent(slug, 'system', `🔓 Admin unblocked user +${clean} — removed from ignore list.`);
   res.json({ success: true, message: `User +${clean} has been unblocked.` });
 });
@@ -3252,18 +3384,11 @@ app.delete('/api/rules/:id', authenticateToken, requireInstance, (req, res) => {
 
 app.delete('/api/memory', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
-  const memory = loadMemory();
-  
-  let deletedCount = 0;
-  for (const key of Object.keys(memory)) {
-    if (key.startsWith(`${slug}:`)) {
-      delete memory[key];
-      deletedCount++;
-    }
-  }
+  const memory = loadMemory(slug);
+  const deletedCount = Object.keys(memory).length;
   
   if (deletedCount > 0) {
-    saveMemory(memory);
+    saveMemory(slug, {});
   }
   
   logInstanceEvent(slug, 'system', `AI conversational memory cache cleared successfully (${deletedCount} contacts deleted).`);
@@ -3275,8 +3400,8 @@ app.get('/api/instances/:slug/all-users', authenticateToken, (req, res) => {
   const slug = req.params.slug.trim().toLowerCase();
   try {
     const seenUsers = loadSeenUsers(slug);
-    const ignoredList = loadIgnoredUsers();
-    const memory = loadMemory();
+    const ignoredList = loadIgnoredUsers(slug);
+    const memory = loadMemory(slug);
     
     const userMap = {};
     for (const u of seenUsers) {
@@ -3288,7 +3413,7 @@ app.get('/api/instances/:slug/all-users', authenticateToken, (req, res) => {
         demandedVoiceNote: !!u.demandedVoiceNote,
         isMuted: !!u.isMuted,
         isBlocked: ignoredList.includes(u.number),
-        hasMemory: !!memory[`${slug}:${u.number}`]
+        hasMemory: !!memory[u.number]
       };
     }
     
@@ -3303,7 +3428,7 @@ app.get('/api/instances/:slug/all-users', authenticateToken, (req, res) => {
           demandedVoiceNote: false,
           isMuted: false,
           isBlocked: true,
-          hasMemory: !!memory[`${slug}:${blockedNumber}`]
+          hasMemory: !!memory[blockedNumber]
         };
       }
     }
@@ -3373,15 +3498,15 @@ app.post('/api/instances/:slug/users/:number/toggle-block', authenticateToken, (
   if (!number) return res.status(400).json({ error: 'number is required' });
   
   try {
-    const list = loadIgnoredUsers();
+    const list = loadIgnoredUsers(slug);
     const isBlocked = list.includes(number);
     const willBlock = !isBlocked;
     
     if (willBlock) {
-      saveIgnoredUser(number);
+      saveIgnoredUser(slug, number);
       logInstanceEvent(slug, 'system', `🚫 Admin blocked user +${number} — added to ignore list.`);
     } else {
-      removeIgnoredUser(number);
+      removeIgnoredUser(slug, number);
       logInstanceEvent(slug, 'system', `🔓 Admin unblocked user +${number} — removed from ignore list.`);
     }
     
@@ -3398,13 +3523,12 @@ app.delete('/api/instances/:slug/users/:number/memory', authenticateToken, (req,
   if (!number) return res.status(400).json({ error: 'number is required' });
   
   try {
-    const memory = loadMemory();
-    const key = `${slug}:${number}`;
-    const exists = !!memory[key];
+    const memory = loadMemory(slug);
+    const exists = !!memory[number];
     
     if (exists) {
-      delete memory[key];
-      saveMemory(memory);
+      delete memory[number];
+      saveMemory(slug, memory);
       logInstanceEvent(slug, 'system', `🗑️ Admin cleared conversational memory for +${number}.`);
     }
 
