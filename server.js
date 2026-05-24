@@ -507,14 +507,20 @@ function enqueueIncomingProcessing(slug, task) {
   return enqueueLimitedTask(
     incomingProcessingQueues,
     slug,
-    task,
+    () => Promise.race([
+      task(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Incoming processing task timeout exceeded")), 120000))
+    ]),
     Math.max(1, INCOMING_PROCESSING_CONCURRENCY)
   );
 }
 
 function enqueueWhatsAppSend(slug, task) {
   return enqueueLimitedTask(outgoingSendQueues, slug, async () => {
-    const result = await task();
+    const result = await Promise.race([
+      task(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("WhatsApp send task timeout exceeded")), 60000))
+    ]);
     if (OUTGOING_SEND_GAP_MS > 0) {
       await new Promise(resolve => setTimeout(resolve, OUTGOING_SEND_GAP_MS));
     }
@@ -639,20 +645,41 @@ async function checkAndAutoMuteUsers(slug) {
 
     for (const user of users) {
       if (!user.unmuted && !user.isMuted && (now - user.firstSeen > cutoffMs)) {
-        const muteResult = await setNativeChatMute(client, {
-          number: user.number,
-          chatId: user.chatId,
-          mute: true,
-          until: new Date(now + 100 * 365 * 24 * 3600 * 1000)
-        });
-        if (muteResult.success) {
-          user.chatId = muteResult.chatId;
-          logInstanceEvent(slug, 'system', `Auto-muted chat with +${user.number} on WhatsApp (interaction older than ${thresholdHours} hours)`);
+        if (!user.verificationPromptSent) {
+          logInstanceEvent(slug, 'system', `Sending order verification prompt to +${user.number} before auto-muting...`);
+          const textQuestion = `Did you successfully place your iPhone order on the app? 😊`;
+          const fallbackText = `Did you successfully place your iPhone order on the app? Please reply *Yes* or *No* 😊`;
+          
+          enqueueWhatsAppSend(slug, async () => {
+             try {
+               const chat = await client.getChatById(`${user.number}@c.us`);
+               if (chat) await chat.sendMessage(fallbackText);
+             } catch (e) {
+               console.error(`Failed to send verification to ${user.number}:`, e.message);
+             }
+          }).catch(() => {});
+          
+          addToMemory(slug, user.number, 'assistant', textQuestion);
+          
+          user.verificationPromptSent = true;
+          user.firstSeen = now; // Reset timer so they get more time to reply
+          changed = true;
         } else {
-          logInstanceEvent(slug, 'system', `Bot muted +${user.number} internally; WhatsApp native mute unavailable: ${muteResult.error.message}`);
+          const muteResult = await setNativeChatMute(client, {
+            number: user.number,
+            chatId: user.chatId,
+            mute: true,
+            until: new Date(now + 100 * 365 * 24 * 3600 * 1000)
+          });
+          if (muteResult.success) {
+            user.chatId = muteResult.chatId;
+            logInstanceEvent(slug, 'system', `Auto-muted chat with +${user.number} on WhatsApp (interaction older than ${thresholdHours} hours)`);
+          } else {
+            logInstanceEvent(slug, 'system', `Bot muted +${user.number} internally; WhatsApp native mute unavailable: ${muteResult.error.message}`);
+          }
+          user.isMuted = true;
+          changed = true;
         }
-        user.isMuted = true;
-        changed = true;
       }
     }
     if (changed) {
@@ -1671,15 +1698,9 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   }
 }
 
-async function processGlobalAIQueue() {
-  if (globalAIProcessing || globalAIQueue.length === 0) return;
-
-  globalAIProcessing = true;
-
+async function processSingleAITask(task) {
+  const { slug, senderNumber, msg } = task;
   try {
-    while (globalAIQueue.length > 0) {
-      const task = globalAIQueue.shift();
-      const { slug, senderNumber, msg } = task;
     const inst = getInstanceBySlug(slug);
     const smartApkOn = !inst || inst.aiSmartApkEnabled !== false;
 
@@ -1731,7 +1752,7 @@ async function processGlobalAIQueue() {
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmed message to +${senderNumber}: ${err.message}`);
         }
-        continue; // Skip AI, user is now ignored
+        return; // Skip AI, user is now ignored
       }
     } else if (isNoReply) {
       const recentHistory = getConversationHistory(slug, senderNumber);
@@ -1764,7 +1785,7 @@ async function processGlobalAIQueue() {
         } catch (err) {
           logInstanceEvent(slug, 'error', `Failed to send no-order reply to +${senderNumber}: ${err.message}`);
         }
-        continue; // Skip AI for this message
+        return; // Skip AI for this message
       }
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -1786,7 +1807,7 @@ async function processGlobalAIQueue() {
       } catch (err) {
         logInstanceEvent(slug, 'error', `Process reply failed for +${senderNumber}: ${err.message}`);
       }
-      continue;
+      return;
     }
 
     logInstanceEvent(slug, 'system', `No static keyword matched. Querying AI Core Agent...`);
@@ -1932,6 +1953,26 @@ async function processGlobalAIQueue() {
     } catch (err) {
       logInstanceEvent(slug, 'error', `AI Auto-responder routine failed: ${err.message}`);
     }
+  } catch (outerErr) {
+    logInstanceEvent(task.slug, 'error', `Global AI queue item failed: ${outerErr.message}`);
+  }
+}
+
+async function processGlobalAIQueue() {
+  if (globalAIProcessing || globalAIQueue.length === 0) return;
+
+  globalAIProcessing = true;
+
+  try {
+    while (globalAIQueue.length > 0) {
+      const task = globalAIQueue.shift();
+      acquireAISlot(task.slug).then(() => {
+        processSingleAITask(task).catch(err => {
+          console.error('Unhandled parallel AI task error:', err);
+        }).finally(() => {
+          releaseAISlot(task.slug);
+        });
+      });
     }
   } finally {
     globalAIProcessing = false;

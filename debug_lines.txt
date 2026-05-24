@@ -1,0 +1,40 @@
+    }
+  }
+}
+
+async function processGlobalAIQueue() {
+  if (globalAIProcessing || globalAIQueue.length === 0) return;
+
+  globalAIProcessing = true;
+
+  try {
+    while (globalAIQueue.length > 0) {
+      const task = globalAIQueue.shift();
+      const { slug, senderNumber, msg } = task;
+    const inst = getInstanceBySlug(slug);
+    const smartApkOn = !inst || inst.aiSmartApkEnabled !== false;
+          addToMemory(slug, senderNumber, 'assistant', textQuestion);
+          
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `Failed to send order confirmation question to +${senderNumber}: ${err.message}`);
+        }
+      }
+      // ──────────────────────────────────────────────────────────────────────
+    } catch (err) {
+      logInstanceEvent(slug, 'error', `AI Auto-responder routine failed: ${err.message}`);
+    }
+    }
+  } finally {
+    globalAIProcessing = false;
+    if (globalAIQueue.length > 0) {
+      processGlobalAIQueue().catch(err => {
+        console.error('Failed to process global AI queue post-loop:', err);
+      });
+    }
+  }
+}
+
+// =============================================================
+// CONCURRENT API KEY REGISTRY WITH FAILOVER & COOLDOWN (Hugging Face + OpenRouter + Groq)
+// =============================================================
+// Global registry of all keys: keyString -> { provider, key }
