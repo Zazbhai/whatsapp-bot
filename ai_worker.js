@@ -73,7 +73,7 @@ process.on('message', async (data) => {
   const openrouterModels = [
     process.env.LLM_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
     'meta-llama/llama-3.3-70b-instruct:free',
-    'google/gemma-4-31b-it:free',
+    'qwen/qwen-2.5-72b-instruct:free',
     'qwen/qwen3-next-80b-a3b-instruct:free',
     'deepseek/deepseek-v4-flash:free',
     'openrouter/free'
@@ -83,7 +83,7 @@ process.on('message', async (data) => {
     process.env.LLM_MODEL || 'llama-3.3-70b-versatile',
     'llama-3.3-70b-versatile',
     'llama-3.1-8b-instant',
-    'gemma2-9b-it'
+    'mixtral-8x7b-32768'
   ];
 
   const delay = (ms, signal) => new Promise((resolve, reject) => {
