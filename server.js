@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const crypto = require('crypto');
 
 // Load environment variables manually from .env (bulletproof, zero native dependency install risks)
 const envPath = path.join(__dirname, '.env');
@@ -12,7 +14,7 @@ if (fs.existsSync(envPath)) {
     if (delimiterIndex === -1) return;
     const key = trimmed.slice(0, delimiterIndex).trim();
     const val = trimmed.slice(delimiterIndex + 1).trim().replace(/(^"|"$|^'|'$)/g, '');
-    if (key) {
+    if (key && process.env[key] === undefined) {
       process.env[key] = val;
     }
   });
@@ -37,44 +39,37 @@ function findChrome() {
   return null;
 }
 
-// Singleton process lock using PID file to prevent dual process collisions
+// Singleton process lock using a local TCP socket to prevent dual process collisions
+let lockServer = null;
 function acquireProcessLock() {
-  const lockFilePath = path.join(__dirname, 'data', 'server.lock');
+  // Derive a unique lock port for this directory (range 15000-24999) to prevent multiple
+  // instances running from the same path, while allowing separate project folders to run on the same machine.
+  const dirHash = crypto.createHash('md5').update(__dirname).digest('hex');
+  const lockPort = 15000 + (parseInt(dirHash.substring(0, 4), 16) % 10000);
+  
+  // Clean up legacy lock file if it exists
+  const legacyLockFile = path.join(__dirname, 'data', 'server.lock');
   try {
-    if (fs.existsSync(lockFilePath)) {
-      const existingPidStr = fs.readFileSync(lockFilePath, 'utf8').trim();
-      const existingPid = parseInt(existingPidStr, 10);
-      if (!isNaN(existingPid)) {
-        try {
-          // Check if process is still running
-          process.kill(existingPid, 0);
-          console.error(`\n[CRITICAL] Another instance of WhatsApp Bot Hub is already running with PID ${existingPid}.`);
-          console.error(`[CRITICAL] Please stop the other process first to avoid database corruption and session conflicts.\n`);
-          process.exit(1);
-        } catch (e) {
-          // Process is not running, we can safely overwrite the lockfile
-          console.log(`[SYSTEM] Found stale lock file (PID ${existingPid} is not running). Overwriting lock...`);
-        }
-      }
+    if (fs.existsSync(legacyLockFile)) {
+      fs.unlinkSync(legacyLockFile);
+      console.log('[SYSTEM] Cleaned up legacy PID lock file.');
     }
-    fs.writeFileSync(lockFilePath, String(process.pid), 'utf8');
-    
-    // Register exit handler to clean up lock file on normal exit
-    const cleanLock = () => {
-      try {
-        if (fs.existsSync(lockFilePath)) {
-          const pid = fs.readFileSync(lockFilePath, 'utf8').trim();
-          if (parseInt(pid, 10) === process.pid) {
-            fs.unlinkSync(lockFilePath);
-          }
-        }
-      } catch (e) {}
-    };
-    
-    process.on('exit', cleanLock);
-  } catch (err) {
-    console.error('[SYSTEM] Failed to acquire process lock:', err.message);
-  }
+  } catch (e) {}
+
+  lockServer = net.createServer();
+  lockServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n[CRITICAL] Another instance of WhatsApp Bot Hub is already running from this directory.`);
+      console.error(`[CRITICAL] Please stop the other process first to avoid database corruption and session conflicts.\n`);
+      process.exit(1);
+    } else {
+      console.error('[SYSTEM] Process lock server error:', err.message);
+    }
+  });
+
+  lockServer.listen(lockPort, '127.0.0.1', () => {
+    console.log(`[SYSTEM] Process lock acquired on port ${lockPort}`);
+  });
 }
 
 const express = require('express');
@@ -84,7 +79,6 @@ const { Client, LocalAuth, MessageMedia, Buttons } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const qrcode = require('qrcode');
 const multer = require('multer');
-const crypto = require('crypto');
 
 // Server configuration
 const PORT = process.env.PORT || 3000;
@@ -93,6 +87,16 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: '*',
+  }
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n[CRITICAL] Port ${PORT} is already in use. Another server instance is likely running on this port.`);
+    console.error(`[CRITICAL] Please stop the other process or configure a different PORT.\n`);
+    process.exit(1);
+  } else {
+    console.error('[SYSTEM] Server error:', err.message);
   }
 });
 
