@@ -66,20 +66,16 @@ process.on('message', async (data) => {
   const hfModels = [
     process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V4-Flash:novita',
     'deepseek-ai/DeepSeek-V4-Flash:novita',
-    'meta-llama/Llama-3.3-70B-Instruct',
     'Qwen/Qwen2.5-72B-Instruct'
   ];
 
   const openrouterModels = [
-    process.env.LLM_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
-    'meta-llama/llama-3.3-70b-instruct:free',
+    process.env.LLM_MODEL || 'openrouter/free',
     'openrouter/free'
   ];
 
   const groqModels = [
-    process.env.LLM_MODEL || 'llama-3.3-70b-versatile',
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
+    process.env.LLM_MODEL || 'mixtral-8x7b-32768',
     'mixtral-8x7b-32768'
   ];
 
