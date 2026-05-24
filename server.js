@@ -287,6 +287,33 @@ function saveSeenUser(slug, number, name = '', welcomed = false, chatId = '') {
   }
 }
 
+function markUserAsOrdered(slug, number) {
+  const users = loadSeenUsers(slug);
+  let userEntry = users.find(u => u.number === number);
+  let changed = false;
+  
+  if (!userEntry) {
+    userEntry = { number, firstSeen: Date.now(), welcomed: true, ordered: true, orderedTime: Date.now() };
+    users.push(userEntry);
+    changed = true;
+  } else {
+    if (!userEntry.ordered) {
+      userEntry.ordered = true;
+      userEntry.orderedTime = Date.now();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    try {
+      const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+    } catch (err) {
+      console.error(`Failed to save ordered state for ${slug}:`, err);
+    }
+  }
+}
+
 function markVoiceNoteTextPrompted(slug, number, name = '', chatId = '') {
   const users = loadSeenUsers(slug);
   let userEntry = users.find(u => u.number === number);
@@ -1857,6 +1884,7 @@ async function processSingleAITask(task) {
       if (isAskOrderQ) {
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} confirmed iPhone order via Yes reply ("${msg.body}"). Adding to ignore list.`);
         saveIgnoredUser(slug, senderNumber);
+        markUserAsOrdered(slug, senderNumber);
         try {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
@@ -2043,6 +2071,7 @@ async function processSingleAITask(task) {
       if (finalOrderComplete) {
         logInstanceEvent(slug, 'system', `✅ [ORDER_COMPLETE] detected for +${senderNumber}. Auto-adding to ignore list.`);
         saveIgnoredUser(slug, senderNumber);
+        markUserAsOrdered(slug, senderNumber);
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} successfully ordered — added to permanent ignore list.`);
       } else if (finalAskOrder) {
         // 2-second break before asking order confirmation
@@ -3417,7 +3446,9 @@ app.get('/api/instances/:slug/all-users', authenticateToken, (req, res) => {
         demandedVoiceNote: !!u.demandedVoiceNote,
         isMuted: !!u.isMuted,
         isBlocked: ignoredList.includes(u.number),
-        hasMemory: !!memory[u.number]
+        hasMemory: !!memory[u.number],
+        ordered: !!u.ordered,
+        orderedTime: u.orderedTime || null
       };
     }
     
@@ -3432,7 +3463,9 @@ app.get('/api/instances/:slug/all-users', authenticateToken, (req, res) => {
           demandedVoiceNote: false,
           isMuted: false,
           isBlocked: true,
-          hasMemory: !!memory[blockedNumber]
+          hasMemory: !!memory[blockedNumber],
+          ordered: false,
+          orderedTime: null
         };
       }
     }

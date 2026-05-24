@@ -12,6 +12,7 @@ let stats = { sent: 0, received: 0, replies: 0 };
 let uptimeInterval = null;
 let secondsUptime = 0;
 let unreadLogsCount = 0;
+let dashboardUsersInterval = null;
 
 // UI Elements: Navigation & Tabs
 const menuItems = document.querySelectorAll('.menu-item');
@@ -1480,6 +1481,9 @@ async function syncActiveInstanceData() {
 
     // Refresh the APK Cache Manager Card UI
     updateApkCard();
+    
+    // Refresh the Successful Orders & Today's Users details
+    updateDashboardUsers();
   } catch (err) {
     if (err.message !== 'Unauthorized') {
       showToast('Failed to sync active instance data.', 'error');
@@ -1975,6 +1979,10 @@ async function init() {
     
     // 2. Synchronize selected engine details
     await syncActiveInstanceData();
+
+    // 3. Start dashboard stats auto-refresh polling loop
+    if (dashboardUsersInterval) clearInterval(dashboardUsersInterval);
+    dashboardUsersInterval = setInterval(updateDashboardUsers, 15000);
   } catch (err) {
     if (err.message !== 'Unauthorized') {
       showToast('System backend is currently unresponsive. Ensure Node server is running.', 'error');
@@ -2005,6 +2013,94 @@ function escapeHtml(str) {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
+}
+
+// ── Successful Orders & Today's Users Dash Rendering ──────────────────────────
+async function updateDashboardUsers() {
+  if (!activeInstanceSlug) return;
+  try {
+    const res = await apiFetch(`/api/instances/${activeInstanceSlug}/all-users`);
+    if (!res.ok) throw new Error('Failed to fetch');
+    const data = await res.json();
+    const users = data.users || [];
+    
+    // 1. Filter ordered users
+    const orderedUsers = users.filter(u => u.ordered);
+    const orderedCount = orderedUsers.length;
+    
+    // 2. Filter today's users
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const todaysUsers = users.filter(u => u.firstSeen && u.firstSeen >= startOfToday);
+    const todaysCount = todaysUsers.length;
+    
+    // Update count badges
+    const totalOrderedEl = document.getElementById('dashboard-total-ordered');
+    if (totalOrderedEl) totalOrderedEl.textContent = orderedCount;
+    
+    const todaysCountEl = document.getElementById('dashboard-todays-users-count');
+    if (todaysCountEl) todaysCountEl.textContent = todaysCount;
+    
+    // Render Ordered Users List
+    const orderedListEl = document.getElementById('ordered-users-list');
+    if (orderedListEl) {
+      if (orderedCount === 0) {
+        orderedListEl.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px 0;font-size:0.8rem;">No successful orders yet.</div>';
+      } else {
+        // Sort by orderedTime descending
+        orderedUsers.sort((a, b) => (b.orderedTime || 0) - (a.orderedTime || 0));
+        orderedListEl.innerHTML = orderedUsers.map(u => {
+          const timeStr = u.orderedTime ? new Date(u.orderedTime).toLocaleString() : 'N/A';
+          return `
+            <div style="background:rgba(255,255,255,0.02); border:1px solid var(--panel-border); border-radius:8px; padding:10px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <strong style="color:var(--text-main); font-size:0.85rem;">${escapeHtml(u.name || 'User')}</strong>
+                <div style="color:var(--text-muted); font-size:0.75rem; margin-top:2px;">+${u.number}</div>
+              </div>
+              <div style="text-align:right;">
+                <span class="badge" style="background:rgba(52, 199, 89, 0.15); color:#34c759; border:1px solid rgba(52, 199, 89, 0.2); font-size:0.65rem; padding:2px 8px; border-radius:4px; font-weight:600;">Ordered</span>
+                <div style="color:var(--text-muted); font-size:0.65rem; margin-top:4px;">${timeStr}</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+    
+    // Render Today's Users List
+    const todaysListEl = document.getElementById('todays-users-list');
+    if (todaysListEl) {
+      if (todaysCount === 0) {
+        todaysListEl.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px 0;font-size:0.8rem;">No new users today.</div>';
+      } else {
+        // Sort by firstSeen descending
+        todaysUsers.sort((a, b) => (b.firstSeen || 0) - (a.firstSeen || 0));
+        todaysListEl.innerHTML = todaysUsers.map(u => {
+          const timeStr = u.firstSeen ? new Date(u.firstSeen).toLocaleTimeString() : 'N/A';
+          const orderedBadge = u.ordered 
+            ? `<span class="badge" style="background:rgba(52, 199, 89, 0.15); color:#34c759; border:1px solid rgba(52, 199, 89, 0.2); font-size:0.65rem; padding:2px 8px; border-radius:4px; font-weight:600;">Ordered</span>`
+            : u.isBlocked 
+              ? `<span class="badge" style="background:rgba(239, 68, 68, 0.15); color:var(--danger); border:1px solid rgba(239, 68, 68, 0.2); font-size:0.65rem; padding:2px 8px; border-radius:4px; font-weight:600;">Blocked</span>`
+              : `<span class="badge" style="background:rgba(6, 182, 212, 0.15); color:var(--secondary); border:1px solid rgba(6, 182, 212, 0.2); font-size:0.65rem; padding:2px 8px; border-radius:4px; font-weight:600;">Active</span>`;
+          return `
+            <div style="background:rgba(255,255,255,0.02); border:1px solid var(--panel-border); border-radius:8px; padding:10px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <strong style="color:var(--text-main); font-size:0.85rem;">${escapeHtml(u.name || 'User')}</strong>
+                <div style="color:var(--text-muted); font-size:0.75rem; margin-top:2px;">+${u.number}</div>
+              </div>
+              <div style="text-align:right;">
+                ${orderedBadge}
+                <div style="color:var(--text-muted); font-size:0.65rem; margin-top:4px;">Seen: ${timeStr}</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+    if (window.lucide) lucide.createIcons();
+  } catch (err) {
+    console.error('Failed to update dashboard users data:', err);
+  }
 }
 
 async function fetchUsers() {
@@ -2058,9 +2154,14 @@ function renderUsersList() {
     const memoryBtnText = u.hasMemory ? 'Clear Memory' : 'No Memory';
     const memoryBtnDisabled = u.hasMemory ? '' : 'disabled';
     
+    const nameDisplay = escapeHtml(u.name) || '<span style="color:var(--text-muted);font-style:italic;">Unknown Contact</span>';
+    const orderTag = u.ordered 
+      ? `<span style="display:inline-block;margin-left:8px;background:rgba(52,199,89,0.15);color:#34c759;font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:4px;border:1px solid rgba(52,199,89,0.2);">ORDERED</span>`
+      : '';
+      
     return `
       <tr style="border-bottom:1px solid var(--panel-border);">
-        <td style="padding:15px 20px;font-weight:600;color:var(--text-light);">${escapeHtml(u.name) || '<span style="color:var(--text-muted);font-style:italic;">Unknown Contact</span>'}</td>
+        <td style="padding:15px 20px;font-weight:600;color:var(--text-light);">${nameDisplay}${orderTag}</td>
         <td style="padding:15px 20px;font-family:monospace;color:var(--text-light);">+${u.number}</td>
         <td style="padding:15px 20px;font-size:0.8rem;color:var(--text-muted);">${dateStr}</td>
         <td style="padding:15px 20px;">${voiceBadge}</td>
