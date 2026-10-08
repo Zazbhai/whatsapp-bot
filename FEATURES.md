@@ -43,3 +43,16 @@ Anyone can link a WhatsApp number to the bot from Telegram (private chat with yo
 Admins (TELEGRAM_ADMIN_IDS) also get a message every time a new code is issued.
 Codes are stored per bot in `instances.json` (`redeemCodes`) and are available at `GET /api/redeem-codes`.
 Optional `.env`: `TELEGRAM_SESSION_BOT=<bot slug>` — which bot new sessions are added to (default: the first bot).
+
+## Telegram button menus
+
+Send `/start` or `/menu` in a private chat to open the interactive menu:
+- **📱 Add session** — enter a number and approve our server as a linked device in WhatsApp.
+- **🎁 My redeem codes** — paginated personal codes, with a details button for each one.
+- **📊 My sessions** — see connection status and refresh it.
+- **❓ Help** — pairing explanation and your Telegram ID.
+- **👑 Admin panel** — admins get a separate menu with all/unused/used code filters, search, mark-used/unused buttons and APK upload instructions.
+
+The bot uses bold headings, copyable codes, status emojis and inline buttons. Telegram controls message and button colors; arbitrary text colors are not supported. Existing slash commands still work. Codes and admin actions are available only in private chats; users can only view their own codes.
+
+After updating, restart the bot and send `/start` to get a fresh menu. Run `node --test telegram-ui.test.js telegram-flow.test.js` to verify the Telegram access rules and button flows without live credentials.

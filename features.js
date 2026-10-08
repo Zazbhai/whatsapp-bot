@@ -9,6 +9,7 @@
 // =============================================================
 const fs = require('fs');
 const path = require('path');
+const tui = require('./telegram-ui');
 
 module.exports = function setupFeatures(ctx) {
   const {
@@ -521,7 +522,13 @@ module.exports = function setupFeatures(ctx) {
     if (!j.ok) throw new Error(j.description || `Telegram ${method} failed`);
     return j.result;
   }
-  const tgReply = (chatId, text) => tgCall('sendMessage', { chat_id: chatId, text }).catch(() => {});
+  const tgReply = (chatId, text, reply_markup) => tgCall('sendMessage', {
+    chat_id: chatId, text, parse_mode: 'HTML', ...(reply_markup ? { reply_markup } : {})
+  }).catch((e) => console.error('[TELEGRAM] Message delivery failed:', e.message));
+  const esc = tui.escapeHtml;
+  const replyHome = (m) => tgReply(m.chat.id,
+    `<b>💚 WA Bot Hub</b>\n\n👋 Hello, ${esc(m.from.first_name || 'there')}!\n\n📱 Add your WhatsApp number to our bot server.\n🎁 Receive a redeem code after the session connects.\n\n<b>🔐 Only link a number you own.</b> Linking authorizes our service to send messages from your number. You can revoke access in WhatsApp → Linked devices.`,
+    tui.homeKeyboard(tgAdmins().includes(String(m.from.id))));
 
   // ── Telegram: anyone can add a WhatsApp session, gets a redeem code ──
   const tgFlow = {}; // chatId -> { step, slug }
@@ -551,8 +558,8 @@ module.exports = function setupFeatures(ctx) {
     inst.redeemCodes = inst.redeemCodes.slice(0, 5000);
     persist();
     logInstanceEvent(slug, 'system', `Redeem code ${code} issued to ${s.tgOwner.name} for +${sess.phone}.`);
-    tgReply(s.tgOwner.chatId, `✅ Your WhatsApp +${sess.phone} is linked successfully!\n\n🎁 Your redeem code: ${code}\n\nKeep it safe.`);
-    tgAdmins().forEach((a) => tgReply(a, `🆕 New session added via Telegram\nUser: ${s.tgOwner.name} (${s.tgOwner.id})\nNumber: +${sess.phone}\nRedeem code: ${code}`));
+    tgReply(s.tgOwner.chatId, `<b>✅ Session connected!</b>\n\n📱 +${esc(sess.phone)} is now connected to our bot server.\n\n<b>🎁 Your redeem code</b>\n<code>${esc(code)}</code>\n\nKeep this code safe.`, tui.homeKeyboard(tgAdmins().includes(String(s.tgOwner.id))));
+    tgAdmins().forEach((a) => tgReply(a, `<b>🆕 New session connected</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(sess.phone)}\n🎁 <code>${esc(code)}</code>`, tui.keyboard([tui.button('🔎 View redeem code', `detail:${code}`)], [tui.button('👑 Admin panel', 'admin')])));
   };
   function allCodes() {
     return loadInstances().flatMap((i) => i.redeemCodes || []).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -567,30 +574,45 @@ module.exports = function setupFeatures(ctx) {
   }
   const fmtCode = (r) => `${r.used ? '☑️' : '🟢'} ${r.code} — +${r.phone} — ${r.tgName} (${r.tgUserId}) — ${r.createdAt.slice(0, 16).replace('T', ' ')}${r.used ? ' — used' : ''}`;
 
+  async function sendCodeList(m, admin, filter = 'all', page = 0) {
+    const records = allCodes().filter((r) => admin
+      ? (filter === 'unused' ? !r.used : filter === 'used' ? r.used : true)
+      : String(r.tgUserId) === String(m.from.id));
+    const view = tui.codePage(records, page, admin ? `codes:${filter}` : 'mine', admin);
+    return tgReply(m.chat.id, view.text, view.reply_markup);
+  }
+
+  async function showCode(m, code, admin) {
+    const r = allCodes().find((r) => r.code === code);
+    if (!tui.canViewCode(r, m.from.id, admin)) return tgReply(m.chat.id, '⛔ Code unavailable.', tui.backKeyboard());
+    const rows = admin ? [[tui.button(r.used ? '🟢 Mark unused' : '✅ Mark used', `${r.used ? 'unused' : 'used'}:${r.code}`)]] : [];
+    rows.push([tui.button(admin ? '👑 Admin panel' : '🎁 My codes', admin ? 'admin' : 'mine:0')]);
+    return tgReply(m.chat.id, `<b>🎁 Redeem code details</b>\n\n<code>${esc(r.code)}</code>\n📱 +${esc(r.phone)}\n${admin ? `👤 ${esc(r.tgName)} (${esc(r.tgUserId)})\n` : ''}📅 ${esc(r.createdAt)}\n${r.used ? '✅ Used' : '🟢 Unused'}`, tui.keyboard(...rows));
+  }
+
   async function handleSessionFlow(m, text) {
     const chatId = m.chat.id;
-    const fromId = String(m.from && m.from.id);
+    const fromId = String(m.from.id);
     const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || m.from.username || fromId;
     if (/^\/(addsession|login)\b/i.test(text)) {
       const slug = sessionBotSlug();
-      if (!slug) return tgReply(chatId, '⚠️ No bot is set up yet. Try again later.'), true;
+      if (!slug) { await tgReply(chatId, '⚠️ No bot is set up yet. Try again later.', tui.backKeyboard()); return true; }
       tgFlow[chatId] = { step: 'phone', slug };
-      return tgReply(chatId, '📱 Send your WhatsApp number with country code.\nExample: 919876543210\n\nSend /cancel to stop.'), true;
+      await tgReply(chatId, '<b>📱 Add a WhatsApp session</b>\n\nSend your number with country code, for example <code>919876543210</code>.\n\n🔐 You are approving a linked session on our server, not signing in on your phone. Our service will be able to send messages from your number. Only continue with a number you own.', tui.cancelKeyboard());
+      return true;
     }
-    if (/^\/cancel\b/i.test(text)) { delete tgFlow[chatId]; return tgReply(chatId, 'Cancelled.'), true; }
-    if (/^\/mycodes\b/i.test(text)) {
-      const mine = allCodes().filter((r) => r.tgUserId === fromId);
-      return tgReply(chatId, mine.length ? '🎁 Your redeem codes:\n' + mine.map((r) => `${r.code} — +${r.phone}${r.used ? ' (used)' : ''}`).join('\n') : 'You have no redeem codes yet. Send /addsession to get one.'), true;
-    }
+    if (/^\/cancel\b/i.test(text)) { delete tgFlow[chatId]; await tgReply(chatId, '✖️ Request cancelled.', tui.homeKeyboard(tgAdmins().includes(fromId))); return true; }
+    if (/^\/mycodes\b/i.test(text)) { delete tgFlow[chatId]; await sendCodeList(m, false); return true; }
     const f = tgFlow[chatId];
     if (!f || f.step !== 'phone' || !text || text.startsWith('/')) return false;
     const phone = digits(text);
-    if (phone.length < 10 || phone.length > 15) return tgReply(chatId, '❌ That doesn\'t look right. Send the full number with country code, e.g. 919876543210'), true;
+    if (phone.length < 10 || phone.length > 15) { await tgReply(chatId, '⚠️ Send the full number with country code, for example <code>919876543210</code>.', tui.cancelKeyboard()); return true; }
     const inst = getInst(f.slug);
+    if (!inst) { delete tgFlow[chatId]; await tgReply(chatId, '⚠️ This bot is no longer available.', tui.backKeyboard()); return true; }
     const existing = ensureSessions(inst).find((x) => x.phone === phone);
-    if (existing && existing.status === 'linked') { delete tgFlow[chatId]; return tgReply(chatId, '⚠️ This number is already linked.'), true; }
+    if (existing && existing.status === 'linked') { delete tgFlow[chatId]; await tgReply(chatId, '⚠️ This number is already linked.', tui.backKeyboard()); return true; }
     delete tgFlow[chatId];
-    tgReply(chatId, '⏳ Getting your login code from WhatsApp, please wait up to 1 minute...');
+    await tgReply(chatId, '<b>⏳ Preparing session…</b>\nRequesting a pairing code from WhatsApp. This may take up to a minute.');
     const s = addSession(f.slug, phone, `TG: ${name}`.slice(0, 60));
     s.tgOwner = { id: fromId, chatId, name };
     persist();
@@ -598,33 +620,57 @@ module.exports = function setupFeatures(ctx) {
       const wait = waitForCode(f.slug, s.id);
       await beginLinking(f.slug, s);
       const code = await wait;
-      await tgReply(chatId, `🔑 Your login code: ${code}\n\nOn your phone:\n1. Open WhatsApp → Settings → Linked devices\n2. Tap "Link a device"\n3. Tap "Link with phone number instead"\n4. Enter the code above\n\nThe code expires in a few minutes. You'll get your redeem code here once login succeeds.`);
+      await tgReply(chatId, `<b>🔑 Approve our bot session</b>\n\n📱 +${esc(phone)}\n<code>${esc(code)}</code>\n\nOn the phone where this number is already logged into WhatsApp:\n1️⃣ Open WhatsApp → Settings → Linked devices.\n2️⃣ Tap Link a device → Link with phone number instead.\n3️⃣ Enter the code above to authorize our bot server.\n\n⏱ The code expires shortly.\n🎁 Your redeem code arrives here only after the session connects.`, tui.keyboard([tui.button('🔄 Check my sessions', 'sessions')], [tui.button('🏠 Main menu', 'home')]));
     } catch (e) {
-      tgReply(chatId, `❌ ${e.message}\nSend /addsession to try again.`);
+      await tgReply(chatId, `❌ Could not connect: ${esc(e.message)}\nPlease try again.`, tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
     }
     return true;
   }
 
   async function handleAdminCodes(m, text, isAdmin) {
-    const chatId = m.chat.id;
     if (!/^\/(codes|used|unused|findcode)\b/i.test(text)) return false;
-    if (!isAdmin) return tgReply(chatId, '⛔ Admins only.'), true;
+    if (!isAdmin || m.chat.type !== 'private') { await tgReply(m.chat.id, '⛔ Open the admin panel in a private chat with this bot.'); return true; }
+    delete tgFlow[m.chat.id];
     const [cmd, arg] = text.split(/\s+/);
-    if (/^\/codes/i.test(cmd)) {
-      const list = allCodes();
-      const filter = (arg || '').toLowerCase();
-      const shown = list.filter((r) => filter === 'unused' ? !r.used : filter === 'used' ? r.used : true).slice(0, 40);
-      if (!shown.length) return tgReply(chatId, 'No redeem codes yet.'), true;
-      const unusedN = list.filter((r) => !r.used).length;
-      return tgReply(chatId, `🎁 Redeem codes (${list.length} total, ${unusedN} unused)\n\n${shown.map(fmtCode).join('\n')}\n\n/codes unused · /codes used · /findcode <code or number> · /used <code> · /unused <code>`), true;
-    }
+    if (/^\/codes/i.test(cmd)) { await sendCodeList(m, true, (arg || 'all').toLowerCase()); return true; }
     if (/^\/findcode/i.test(cmd)) {
-      const q = String(arg || '').toUpperCase();
-      const hits = allCodes().filter((r) => r.code === q || r.phone === digits(q) || r.tgUserId === q);
-      return tgReply(chatId, hits.length ? hits.map(fmtCode).join('\n') : 'Not found.'), true;
+      if (!arg) { tgFlow[m.chat.id] = { step: 'find' }; await tgReply(m.chat.id, '<b>🔎 Find a redeem code</b>\nSend a redeem code, full phone number or Telegram user ID.', tui.cancelKeyboard()); return true; }
+      const q = arg.toUpperCase();
+      const hits = allCodes().filter((r) => r.code === q || r.phone === digits(q) || String(r.tgUserId) === q);
+      const view = tui.codePage(hits, 0, 'codes:all', true);
+      await tgReply(m.chat.id, view.text, view.reply_markup);
+      return true;
     }
     const r = setCodeUsed(String(arg || '').toUpperCase(), /^\/used/i.test(cmd));
-    return tgReply(chatId, r ? `Updated: ${fmtCode(r)}` : 'Code not found.'), true;
+    if (r) await showCode(m, r.code, true);
+    else await tgReply(m.chat.id, '⚠️ Code not found.', tui.adminKeyboard());
+    return true;
+  }
+
+  async function handleTelegramCallback(q) {
+    const m = q.message && { ...q.message, from: q.from };
+    const data = String(q.data || '');
+    const admin = tgAdmins().includes(String(q.from.id));
+    await tgCall('answerCallbackQuery', { callback_query_id: q.id, ...(!m || m.chat.type !== 'private' ? { text: 'Open this bot in a private chat.', show_alert: true } : !tui.canUseCallback(data, admin) ? { text: 'Admins only.', show_alert: true } : {}) });
+    if (!m || m.chat.type !== 'private' || !tui.canUseCallback(data, admin)) return;
+    delete tgFlow[m.chat.id];
+    if (data === 'home') return replyHome(m);
+    if (data === 'add') return handleSessionFlow(m, '/addsession');
+    if (data === 'cancel') return handleSessionFlow(m, '/cancel');
+    if (data.startsWith('mine:')) return sendCodeList(m, false, 'all', data.split(':')[1]);
+    if (data === 'admin') return tgReply(m.chat.id, '<b>👑 Admin panel</b>\n\n🎁 Manage redeem codes\n📦 Publish APK updates', tui.adminKeyboard());
+    if (data.startsWith('codes:')) { const [, filter, page] = data.split(':'); return sendCodeList(m, true, filter, page); }
+    if (data === 'find') return handleAdminCodes(m, '/findcode', admin);
+    if (data.startsWith('detail:')) return showCode(m, data.slice(7), admin);
+    if (/^(used|unused):/.test(data)) { const [action, code] = data.split(':'); return handleAdminCodes(m, `/${action} ${code}`, admin); }
+    if (data === 'upload') return tgReply(m.chat.id, '<b>📦 Update the APK</b>\n\nSend an .apk document here (up to 20 MB).\nCaption: <code>v2.4 Bug fixes</code>\nFor one bot: <code>@bot-slug v2.4 Bug fixes</code>\n\n📤 The file becomes the latest version after upload.', tui.adminKeyboard());
+    if (data === 'sessions') {
+      const sessions = loadInstances().flatMap((i) => (i.sessions || []).filter((s) => s.tgOwner && String(s.tgOwner.id) === String(m.from.id)).map((s) => `📱 +${esc(s.phone)} · ${s.status === 'linked' ? '🟢 Connected' : s.status === 'logged_out' ? '🔴 Logged out' : '🟡 ' + esc(s.status)}`));
+      const shown = sessions.slice(0, 30);
+      return tgReply(m.chat.id, `<b>📊 Your sessions</b>\n\n${shown.join('\n') || 'No sessions yet.'}${sessions.length > 30 ? `\n… ${sessions.length - 30} more sessions` : ''}`, tui.keyboard([tui.button('🔄 Refresh', 'sessions'), tui.button('📱 Add session', 'add')], [tui.button('🏠 Main menu', 'home')]));
+    }
+    if (data === 'help') return tgReply(m.chat.id, '<b>❓ Session help</b>\n\n📱 Add session → send your number → approve the pairing code in WhatsApp Linked devices.\n🎁 Once connected, your redeem code appears here.\n🔐 Our server becomes a linked device; you stay logged in on your phone. Our service can send messages from your number. Revoke access anytime in WhatsApp → Linked devices.\n\n🆔 Your Telegram ID: <code>' + esc(m.from.id) + '</code>', tui.backKeyboard());
+    return tgReply(m.chat.id, '⚠️ This button is no longer available.', tui.backKeyboard());
   }
 
   // Dashboard API for redeem codes
@@ -639,13 +685,24 @@ module.exports = function setupFeatures(ctx) {
     const chatId = m.chat.id;
     const isAdmin = tgAdmins().includes(fromId);
     const text = (m.text || '').trim();
-    if (m.chat.type === 'private' && await handleSessionFlow(m, text)) return;
-    if (await handleAdminCodes(m, text, isAdmin)) return;
-    if (text.startsWith('/start') || text.startsWith('/id')) {
-      return tgReply(chatId, `👋 Welcome! Your Telegram ID is ${fromId}.\n\n/addsession — link your WhatsApp and get a redeem code\n/mycodes — see your redeem codes${isAdmin ? '\n\n👑 Admin:\n/codes — all redeem codes\n/findcode <code or number>\n/used <code> · /unused <code>\nSend an .apk file to update the app.' : ''}`);
+    if (m.chat.type !== 'private') {
+      if (text.startsWith('/')) return tgReply(chatId, '🔐 Open this bot in a private chat to use the menu.');
+      return;
     }
+    if (/^\/(start|menu|id|help)\b/i.test(text)) {
+      delete tgFlow[chatId];
+      if (/^\/id\b/i.test(text)) return tgReply(chatId, `🆔 Your Telegram ID: <code>${esc(fromId)}</code>`, tui.homeKeyboard(isAdmin));
+      if (/^\/help\b/i.test(text)) return tgReply(chatId, '❓ Use Add session to approve a linked session on our bot server; your phone stays logged in. Redeem codes appear only after connection.', tui.homeKeyboard(isAdmin));
+      return replyHome(m);
+    }
+    if (tgFlow[chatId] && tgFlow[chatId].step === 'find' && text && !text.startsWith('/') && isAdmin) {
+      return handleAdminCodes(m, `/findcode ${text}`, isAdmin);
+    }
+    if (!m.document && await handleSessionFlow(m, text)) return;
+    if (await handleAdminCodes(m, text, isAdmin)) return;
     const doc = m.document;
-    if (!doc) return;
+    if (!doc) return tgReply(chatId, '👇 Choose an option below.', tui.homeKeyboard(isAdmin));
+    delete tgFlow[chatId];
     if (!isAdmin) return tgReply(chatId, `⛔ You are not allowed to upload APKs. Your ID: ${fromId}`);
     const name = (doc.file_name || '').toLowerCase();
     if (!name.endsWith('.apk') && doc.mime_type !== 'application/vnd.android.package-archive') {
@@ -654,7 +711,7 @@ module.exports = function setupFeatures(ctx) {
     if (doc.file_size && doc.file_size > 20 * 1024 * 1024) {
       return tgReply(chatId, '⚠️ Telegram bots can only download files up to 20 MB. Upload this APK from the dashboard instead (APK & Store page).');
     }
-    await tgReply(chatId, '⏳ Downloading APK...');
+    await tgReply(chatId, '<b>⏳ APK update in progress…</b>\nDownloading and preparing your file.');
     const file = await tgCall('getFile', { file_id: doc.file_id });
     const r = await fetch(`https://api.telegram.org/file/bot${tgToken()}/${file.file_path}`);
     if (!r.ok) throw new Error(`Download failed (${r.status})`);
@@ -672,7 +729,7 @@ module.exports = function setupFeatures(ctx) {
     if (!targets.length) return tgReply(chatId, 'No matching bot found for this APK.');
     targets.forEach((slug) => storeApk(slug, base64, meta));
     tg.lastUpload = { at: now(), version: meta.version, by: meta.uploadedBy };
-    await tgReply(chatId, `✅ APK ${meta.version} is now live for: ${targets.join(', ')}\nStore page: ${storeLink(targets[0])}`);
+    await tgReply(chatId, `<b>✅ APK published!</b>\n\n📦 Version: ${esc(meta.version || 'Latest')}\n🤖 Bots: ${esc(targets.join(', '))}\n🔗 ${esc(storeLink(targets[0]))}`, tui.adminKeyboard());
   }
 
   async function telegramLoop() {
@@ -686,14 +743,17 @@ module.exports = function setupFeatures(ctx) {
     let offset = 0;
     for (;;) {
       try {
-        const updates = await tgCall('getUpdates', { offset, timeout: 50, allowed_updates: ['message'] });
+        const updates = await tgCall('getUpdates', { offset, timeout: 50, allowed_updates: ['message', 'callback_query'] });
         tg.error = '';
         for (const u of updates) {
           offset = u.update_id + 1;
+          if (u.callback_query) {
+            handleTelegramCallback(u.callback_query).catch((e) => console.error('[TELEGRAM] Button failed:', e.message));
+          }
           if (u.message) {
             handleTelegramMessage(u.message).catch((e) => {
               console.error('[TELEGRAM]', e.message);
-              tgReply(u.message.chat.id, `❌ Failed: ${e.message}`);
+              tgReply(u.message.chat.id, `❌ Failed: ${esc(e.message)}`);
             });
           }
         }
