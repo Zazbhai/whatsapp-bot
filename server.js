@@ -76,6 +76,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 require('./whatsapp-compat').installWhatsAppCompatibility();
+const { monitorSession } = require('./session-health');
 const { Client, LocalAuth, MessageMedia, Buttons } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const qrcode = require('qrcode');
@@ -589,11 +590,17 @@ function enqueueIncomingProcessing(slug, task) {
 }
 
 function enqueueWhatsAppSend(slug, task) {
+  const originatingClient = activeClients[slug];
   return enqueueLimitedTask(outgoingSendQueues, slug, async () => {
-    const result = await Promise.race([
+    if (!originatingClient || activeClients[slug] !== originatingClient) throw new Error('Session changed before sending; message was not replayed.');
+    let result;
+    try { result = await Promise.race([
       task(),
       new Promise((_, reject) => setTimeout(() => reject(new Error("WhatsApp send task timeout exceeded")), 60000))
-    ]);
+    ]); } catch (error) {
+      features.reportSessionError(slug, originatingClient, error).catch(() => {});
+      throw error;
+    }
     if (OUTGOING_SEND_GAP_MS > 0) {
       await new Promise(resolve => setTimeout(resolve, OUTGOING_SEND_GAP_MS));
     }
@@ -2562,12 +2569,14 @@ function initInstanceClient(slug, forcedSessionId) {
   });
 
   client.on('code', (code) => {
+    if (activeClients[slug] !== client) return;
     clientStates[slug].status = 'pairing';
     io.to(`instance_${slug}`).emit('status', { status: 'pairing', stats: clientStates[slug].stats });
     features.emitCode(slug, session, code);
   });
 
   client.on('qr', async (qr) => {
+    if (activeClients[slug] !== client) return;
     // Phone-number login is used instead of QR codes
     if (session.phone) return;
     clientStates[slug].status = 'qr_ready';
@@ -2593,6 +2602,7 @@ function initInstanceClient(slug, forcedSessionId) {
   });
 
   client.on('loading_screen', (percent, message) => {
+    if (activeClients[slug] !== client) return;
     clientStates[slug].status = 'connecting';
     io.to(`instance_${slug}`).emit('status', { 
       status: clientStates[slug].status, 
@@ -2604,6 +2614,7 @@ function initInstanceClient(slug, forcedSessionId) {
   });
 
   client.on('authenticated', () => {
+    if (activeClients[slug] !== client) return;
     clientStates[slug].status = 'authenticated';
     clientStates[slug].qrCodeData = null;
     io.to(`instance_${slug}`).emit('status', { 
@@ -2614,6 +2625,7 @@ function initInstanceClient(slug, forcedSessionId) {
   });
 
   client.on('auth_failure', (msg) => {
+    if (activeClients[slug] !== client) return;
     clientStates[slug].status = 'disconnected';
     io.to(`instance_${slug}`).emit('status', { 
       status: clientStates[slug].status, 
@@ -2621,10 +2633,11 @@ function initInstanceClient(slug, forcedSessionId) {
       stats: clientStates[slug].stats
     });
     logInstanceEvent(slug, 'error', `Authentication failed: ${msg}`);
-    features.handleSessionLoss(slug, session, 'AUTH_FAILURE', client);
+    features.handleSessionLoss(slug, session, 'AUTH_FAILURE', client).catch(err => logInstanceEvent(slug, 'error', `Recovery failed: ${err.message}`));
   });
 
   client.on('ready', async () => {
+    if (activeClients[slug] !== client) return;
     clientStates[slug].status = 'ready';
     const info = client.info;
     
@@ -2651,6 +2664,7 @@ function initInstanceClient(slug, forcedSessionId) {
   });
 
   client.on('disconnected', (reason) => {
+    if (activeClients[slug] !== client) return;
     clientStates[slug].status = 'disconnected';
     clientStates[slug].info = null;
     io.to(`instance_${slug}`).emit('status', { 
@@ -2660,10 +2674,11 @@ function initInstanceClient(slug, forcedSessionId) {
     logInstanceEvent(slug, 'whatsapp', `Session closed. Reason: ${reason}`);
     
     // Auto-switch to the next linked number (or reconnect) — see features.js
-    features.handleSessionLoss(slug, session, reason, client);
+    features.handleSessionLoss(slug, session, reason, client).catch(err => logInstanceEvent(slug, 'error', `Recovery failed: ${err.message}`));
   });
 
   client.on('message', async (msg) => {
+    if (activeClients[slug] !== client) return;
     if (msg.fromMe) return;
     try {
 
@@ -2921,16 +2936,28 @@ function initInstanceClient(slug, forcedSessionId) {
     } catch (err) {
       if (msg.id?._serialized) clientStates[slug]?.processedMessageIds?.delete(msg.id._serialized);
       logInstanceEvent(slug, 'error', `Incoming message handling failed: ${err.stack || err.message || String(err)}`);
+      features.reportSessionError(slug, client, err).catch(() => {});
     }
   });
 
   try {
     activeClients[slug] = client;
+    const health = monitorSession(client, {
+      isCurrent: () => activeClients[slug] === client,
+      isReady: () => clientStates[slug]?.status === 'ready',
+      onFailure: error => features.reportSessionError(slug, client, error),
+      startupMs: session.status === 'linked' ? 180000 : 600000
+    });
+    client.on('disconnected', health.stop);
+    client.on('auth_failure', health.stop);
     client.initialize().catch(err => {
       logInstanceEvent(slug, 'error', `Engine bootstrap failed: ${err.stack || err.message || String(err)}`);
+      health.stop();
+      features.handleSessionLoss(slug, session, `Engine bootstrap: ${err.message || String(err)}`, client).catch(() => {});
     });
   } catch (err) {
     logInstanceEvent(slug, 'error', `Engine bootstrap failed: ${err.message}`);
+    features.handleSessionLoss(slug, session, `Engine bootstrap: ${err.message}`, client).catch(() => {});
   }
 
   return client;
@@ -3161,6 +3188,8 @@ app.delete('/api/instances/:slug', authenticateToken, async (req, res) => {
   // 1. Destroy dynamic puppeteer container
   const client = activeClients[slug];
   if (client) {
+    if (clientStates[slug]) clientStates[slug].manualStop = true;
+    delete activeClients[slug];
     try {
       await client.destroy();
     } catch (err) {

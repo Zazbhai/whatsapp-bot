@@ -1,0 +1,5 @@
+- [x] Apply targeted WhatsApp ID compatibility fixes and isolate optional chat operations.
+- [x] Run automatic-reply regression tests and existing Telegram tests.
+- [x] Commit and verify the automatic-reply fixes on GitHub main.
+- [x] Add automatic session rotation for logout and connection/browser failures, with regression tests.
+- [ ] Commit and verify the session rotation changes on GitHub main.

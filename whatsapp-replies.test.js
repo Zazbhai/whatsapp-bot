@@ -69,11 +69,12 @@ test('a never-finishing read receipt cannot hold up a new incoming reply', async
   const context = { console, Date, Set, slug: 'main',
     client: { on: (event, callback) => { handler = callback; }, sendSeen: () => new Promise(() => {}) },
     clientStates: { main: { processedMessageIds: new Set(), stats: { received: 0 } } },
-    io: { to: () => ({ emit() {} }) }, features: { checkWatchWords() {} },
+    io: { to: () => ({ emit() {} }) }, features: { checkWatchWords() {}, reportSessionError: async () => {} },
     loadIgnoredUsers: () => [], loadSeenUsers: () => [], loadInstances: () => [],
     recordSpamMessage: () => false, checkAndSetVoiceNoteDemand() {}, logInstanceEvent() {},
     enqueueMessage: (slug, number, msg) => queued.push(msg), process: { env: {} }
   };
+  context.activeClients = { main: context.client };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context);
   const msg = { from: '123@c.us', id: { _serialized: 'live-1' }, body: 'hi', _data: {},

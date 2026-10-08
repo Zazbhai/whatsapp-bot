@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const tui = require('./telegram-ui');
+const { pickNextSession, isSessionFailure, closeSession } = require('./session-health');
 
 module.exports = function setupFeatures(ctx) {
   const {
@@ -75,7 +76,7 @@ module.exports = function setupFeatures(ctx) {
     persist();
   }
 
-  const usable = (s) => s && (s.status === 'linked' || (s.phone && s.status !== 'logged_out'));
+  const usable = (s) => s && !(s.retryAfter > Date.now()) && (s.status === 'linked' || (s.phone && s.status !== 'logged_out'));
 
   // Which session should the main WhatsApp engine of this bot run?
   function resolveSession(slug, forcedId) {
@@ -85,7 +86,7 @@ module.exports = function setupFeatures(ctx) {
     if (forcedId) return list.find((s) => s.id === forcedId) || null;
     const active = list.find((s) => s.id === inst.activeSessionId);
     if (usable(active)) return active;
-    const pick = list.find((s) => s.status === 'linked') || list.find((s) => s.phone && s.status !== 'logged_out');
+    const pick = list.find((s) => s.status === 'linked' && usable(s)) || list.find(usable);
     if (pick) setActive(slug, pick.id);
     return pick || null;
   }
@@ -93,12 +94,7 @@ module.exports = function setupFeatures(ctx) {
   function nextLinked(slug, currentId) {
     const inst = getInst(slug);
     const list = ensureSessions(inst);
-    const idx = list.findIndex((s) => s.id === currentId);
-    for (let k = 1; k <= list.length; k++) {
-      const s = list[(idx + k) % list.length];
-      if (s.id !== currentId && s.status === 'linked') return s;
-    }
-    return null;
+    return pickNextSession(list, currentId);
   }
 
   function publicSessions(slug) {
@@ -110,7 +106,7 @@ module.exports = function setupFeatures(ctx) {
       active: inst.activeSessionId === s.id && !!activeClients[slug],
       online: inst.activeSessionId === s.id && st.status === 'ready',
       linking: !!linkers[`${slug}:${s.id}`],
-      addedAt: s.addedAt
+      addedAt: s.addedAt, lastError: s.lastError || null, retryAfter: s.retryAfter || null
     }));
   }
   function emitSessions(slug) {
@@ -148,38 +144,57 @@ module.exports = function setupFeatures(ctx) {
 
   function onSessionReady(slug, s, client) {
     const wid = client && client.info && client.info.wid ? client.info.wid.user : '';
-    markSession(slug, s.id, { status: 'linked', pairingCode: null, phone: s.phone || wid });
+    markSession(slug, s.id, { status: 'linked', pairingCode: null, phone: s.phone || wid, lastError: null, retryAfter: 0 });
     setActive(slug, s.id);
     emitSessions(slug);
     ctx.onSessionLinked && ctx.onSessionLinked(slug, s);
   }
 
+  const recovering = new WeakSet();
+  async function reportSessionError(slug, client, error) {
+    if (!client || activeClients[slug] !== client || !isSessionFailure(error)) return;
+    const inst = getInst(slug);
+    const session = inst && ensureSessions(inst).find(s => s.id === clientStates[slug]?.sessionId);
+    if (session) await handleSessionLoss(slug, session, error.message || String(error), client);
+  }
   async function handleSessionLoss(slug, s, reason, client) {
+    if (!client || activeClients[slug] !== client || recovering.has(client)) return;
+    recovering.add(client);
     const st = clientStates[slug];
-    if (activeClients[slug] === client) delete activeClients[slug];
-    try { await client.destroy(); } catch (_) {}
-
-    if (st && st.manualStop) { st.manualStop = false; emitSessions(slug); return; }
-
+    const manuallyStopped = !!st?.manualStop;
+    delete activeClients[slug];
+    if (st) { st.status = manuallyStopped ? 'disconnected' : 'recovering'; st.info = null; st.qrCodeData = null; }
+    const destroyed = await closeSession(client);
+    if (manuallyStopped) { emitSessions(slug); return; }
+    if (activeClients[slug] || st?.manualStop || !getInst(slug)) return;
     const hard = /LOGOUT|UNPAIRED|CONFLICT|AUTH_FAILURE|TOS_BLOCK|BANNED/i.test(String(reason));
-    if (hard) {
-      markSession(slug, s.id, { status: 'logged_out', pairingCode: null });
-      setTimeout(() => { try { fs.rmSync(authDirFor(slug, s), { recursive: true, force: true }); } catch (_) {} }, 3000);
-      logInstanceEvent(slug, 'whatsapp', `Number ${s.phone ? '+' + s.phone : s.label} was logged out (${reason}).`);
-      const next = nextLinked(slug, s.id);
-      if (next) {
-        setActive(slug, next.id);
-        logInstanceEvent(slug, 'system', `Auto-switched to backup number ${next.phone ? '+' + next.phone : next.label}.`);
-        io.to(room(slug)).emit('session_switched', { from: s.id, to: next.id, phone: next.phone });
-        setTimeout(() => { if (!activeClients[slug]) initClient(slug, next.id); }, 4000);
+    markSession(slug, s.id, { status: hard ? 'logged_out' : s.status, pairingCode: null,
+      lastError: String(reason), retryAfter: hard ? 0 : Date.now() + 60000 });
+    if (hard && destroyed) { try { fs.rmSync(authDirFor(slug, s), { recursive: true, force: true }); } catch (_) {} }
+    const next = nextLinked(slug, s.id);
+    if (next) {
+      setActive(slug, next.id);
+      logInstanceEvent(slug, 'system', `Session issue (${reason}). Auto-switched to backup number ${next.phone ? '+' + next.phone : next.label}.`);
+      io.to(room(slug)).emit('session_switched', { from: s.id, to: next.id, phone: next.phone, reason: String(reason) });
+      setTimeout(() => {
+        const current = getInst(slug);
+        if (!activeClients[slug] && !clientStates[slug]?.manualStop && current?.activeSessionId === next.id && current.sessions.some(x => x.id === next.id && x.status === 'linked')) initClient(slug, next.id);
+      }, 4000);
+    } else {
+      const inst = getInst(slug);
+      const retry = inst && ensureSessions(inst).filter(x => x.status === 'linked').sort((a, b) => (a.retryAfter || 0) - (b.retryAfter || 0))[0];
+      if (retry) {
+        logInstanceEvent(slug, 'system', 'No healthy backup available. Waiting for a linked session to recover.');
+        setTimeout(() => {
+          const current = getInst(slug);
+          if (!activeClients[slug] && !clientStates[slug]?.manualStop && current?.sessions.some(x => x.id === retry.id && x.status === 'linked')) initClient(slug, retry.id);
+        }, Math.max(10000, (retry.retryAfter || 0) - Date.now()));
       } else {
         logInstanceEvent(slug, 'error', 'No linked backup numbers left. Add a number on the Sessions page.');
-        if (st) { st.status = 'needs_number'; io.to(room(slug)).emit('status', { status: 'needs_number', stats: st.stats }); }
+        if (st) st.status = 'needs_number';
       }
-    } else {
-      logInstanceEvent(slug, 'system', `Connection dropped (${reason}). Reconnecting the same number in 10s...`);
-      setTimeout(() => { if (!activeClients[slug]) initClient(slug, s.id); }, 10000);
     }
+    if (st) io.to(room(slug)).emit('status', { status: st.status, stats: st.stats });
     emitSessions(slug);
   }
 
@@ -833,6 +848,6 @@ module.exports = function setupFeatures(ctx) {
   return {
     resolveSession, clientOptionsFor, onSessionReady, handleSessionLoss, emitCode,
     emitSessions, requestCodeForNumber, apkCaption, storeLink, checkWatchWords,
-    authDirFor, markSession
+    authDirFor, markSession, reportSessionError
   };
 };

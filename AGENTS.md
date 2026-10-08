@@ -4,3 +4,4 @@
 - Keep Telegram presentation helpers in telegram-ui.js, separate from network/session operations, so ownership and admin callback guards can be tested without live credentials.
 - Apply WhatsApp ID compatibility in whatsapp-compat.js before loading Client; keep upstream fixes centralized without modifying installed dependencies.
 - Keep read receipts outside incoming-message processing and isolate unread-chat scan failures so optional chat operations cannot stop automatic replies.
+- Centralize health checks and backup selection in session-health.js; rotate only connection/session failures, avoid duplicate/stale recovery, and preserve authentication on transient errors.
