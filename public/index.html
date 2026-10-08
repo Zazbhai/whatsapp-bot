@@ -11,6 +11,7 @@
   <!-- Lucide Icons for clean sleek dashboard iconography -->
   <script src="https://unpkg.com/lucide@latest"></script>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="light-theme.css">
 </head>
 <body>
   <!-- Ambient background blobs -->
@@ -87,6 +88,19 @@
         <a href="#" class="menu-item" data-tab="messenger">
           <i data-lucide="send"></i>
           <span>Manual Messenger</span>
+        </a>
+        <a href="#" class="menu-item" data-tab="sessions">
+          <i data-lucide="smartphone"></i>
+          <span>Sessions</span>
+        </a>
+        <a href="#" class="menu-item" data-tab="apkstore">
+          <i data-lucide="package"></i>
+          <span>APK &amp; Store</span>
+        </a>
+        <a href="#" class="menu-item" data-tab="flagged">
+          <i data-lucide="flag"></i>
+          <span>Flagged Chats</span>
+          <span class="log-indicator" id="unread-flags" style="display:none;">0</span>
         </a>
         <a href="#" class="menu-item" data-tab="logs">
           <i data-lucide="terminal"></i>
@@ -169,11 +183,11 @@
               <!-- Linking Mode Options -->
               <div id="linking-options" class="linking-options" style="display: none; width: 100%; margin-bottom: 20px;">
                 <div class="linking-tabs">
-                  <button class="linking-tab active" id="tab-btn-qr" onclick="switchLinkingMode('qr')" type="button">
+                  <button class="linking-tab" id="tab-btn-qr" onclick="switchLinkingMode('qr')" type="button" style="display:none;">
                     <i data-lucide="qr-code"></i>
                     <span>QR Code</span>
                   </button>
-                  <button class="linking-tab" id="tab-btn-phone" onclick="switchLinkingMode('phone')" type="button">
+                  <button class="linking-tab active" id="tab-btn-phone" onclick="switchLinkingMode('phone')" type="button">
                     <i data-lucide="phone"></i>
                     <span>Phone Number</span>
                   </button>
@@ -836,6 +850,111 @@
       </section>
 
       <!-- TAB: SYSTEM LOGS -->
+      <!-- SESSIONS: many numbers, auto failover -->
+      <section class="tab-pane" id="tab-sessions">
+        <div class="glass-card feat-card">
+          <div class="card-header"><h3>Add a WhatsApp number</h3></div>
+          <p class="feat-muted">Log in with a phone number instead of a QR code. Add as many numbers as you want. If the active number logs out, the bot switches to the next linked number automatically.</p>
+          <form id="feat-add-session" class="sleek-form feat-row">
+            <input type="text" id="feat-session-phone" placeholder="Number with country code, e.g. 919876543210" required>
+            <input type="text" id="feat-session-label" placeholder="Label (optional)">
+            <button class="btn btn-primary" type="submit" id="feat-add-session-btn"><i data-lucide="plus"></i><span>Add &amp; get code</span></button>
+          </form>
+          <div id="feat-code-box" class="feat-code" style="display:none;">
+            <div>Pairing code for <strong id="feat-code-phone"></strong></div>
+            <div class="feat-code-val" id="feat-code-val">---- ----</div>
+            <ol class="feat-muted">
+              <li>Open WhatsApp on that phone &rarr; <strong>Linked devices</strong> &rarr; <strong>Link a device</strong></li>
+              <li>Tap <strong>Link with phone number instead</strong> and type the code above</li>
+            </ol>
+          </div>
+        </div>
+        <div class="glass-card feat-card">
+          <div class="card-header"><h3>Numbers (in failover order)</h3><span class="badge" id="feat-session-count">0</span></div>
+          <div id="feat-sessions-list" class="feat-list"></div>
+        </div>
+      </section>
+
+      <!-- APK & STORE -->
+      <section class="tab-pane" id="tab-apkstore">
+        <div class="feat-grid">
+          <div class="glass-card feat-card">
+            <div class="card-header"><h3>Telegram bot</h3><span class="badge" id="feat-tg-badge">Checking...</span></div>
+            <p class="feat-muted" id="feat-tg-text"></p>
+            <p class="feat-muted">Send an <strong>.apk</strong> file to your Telegram bot with a caption like <code>v2.4 Bug fixes</code>. It goes live straight away. Send <code>/id</code> to the bot to see your Telegram ID.</p>
+          </div>
+          <div class="glass-card feat-card">
+            <div class="card-header"><h3>Current APK</h3></div>
+            <div id="feat-apk-info" class="feat-muted">No APK yet.</div>
+            <form id="feat-apk-upload" class="sleek-form feat-row" style="margin-top:12px;">
+              <input type="file" id="feat-apk-file" accept=".apk" required>
+              <input type="text" id="feat-apk-version" placeholder="Version, e.g. v2.4">
+              <button class="btn btn-secondary" type="submit"><i data-lucide="upload"></i><span>Upload</span></button>
+            </form>
+            <p class="feat-muted" style="margin-top:6px;">Use this for APKs larger than 20 MB (Telegram's limit).</p>
+          </div>
+        </div>
+        <div class="glass-card feat-card">
+          <div class="card-header"><h3>Message sent with the APK</h3></div>
+          <form id="feat-linkmsg-form" class="sleek-form">
+            <textarea id="feat-linkmsg" rows="3"></textarea>
+            <p class="feat-muted">This text goes with every APK the bot sends on WhatsApp. <code>{link}</code> is replaced with your store page link.</p>
+            <button class="btn btn-primary" type="submit">Save message</button>
+          </form>
+        </div>
+        <div class="glass-card feat-card">
+          <div class="card-header"><h3>Play Store page</h3><a class="btn btn-secondary btn-sm" id="feat-store-open" target="_blank" href="#"><i data-lucide="external-link"></i><span>Open page</span></a></div>
+          <p class="feat-muted">Public link: <code id="feat-store-link"></code></p>
+          <form id="feat-store-form" class="sleek-form feat-form-grid">
+            <label>App name<input name="appName"></label>
+            <label>Developer<input name="developer"></label>
+            <label>Category<input name="category"></label>
+            <label>Rating (0-5)<input name="rating" type="number" step="0.1" min="0" max="5"></label>
+            <label>Reviews<input name="reviews"></label>
+            <label>Downloads<input name="downloads"></label>
+            <label>Age rating<input name="ageRating"></label>
+            <label>Public website address<input name="publicUrl" placeholder="https://your-domain.com"></label>
+            <label class="feat-span">Short description<input name="shortDescription"></label>
+            <label class="feat-span">About this app<textarea name="description" rows="4"></textarea></label>
+            <div class="feat-span"><button class="btn btn-primary" type="submit">Save store page</button></div>
+          </form>
+          <div class="feat-media">
+            <div><h4>Icon</h4><div id="feat-icon" class="feat-thumbs"></div><input type="file" accept="image/*" id="feat-icon-file"></div>
+            <div><h4>Screenshots</h4><div id="feat-shots" class="feat-thumbs"></div><input type="file" accept="image/*" id="feat-shot-file"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FLAGGED CHATS -->
+      <section class="tab-pane" id="tab-flagged">
+        <div class="glass-card feat-card">
+          <div class="card-header"><h3>Watch words</h3></div>
+          <p class="feat-muted">When a user's message contains one of these words, the chat is saved here with a screenshot.</p>
+          <form id="feat-words-form" class="sleek-form feat-row">
+            <input type="text" id="feat-word-input" placeholder="Add a word and press Enter">
+            <button class="btn btn-secondary" type="submit">Add</button>
+          </form>
+          <div id="feat-words" class="feat-chips"></div>
+        </div>
+        <div class="glass-card feat-card">
+          <div class="card-header"><h3>Flagged messages</h3>
+            <div class="feat-row" style="margin:0;">
+              <input type="text" id="feat-flag-search" class="feat-input" placeholder="Search">
+              <button class="btn btn-secondary btn-sm" id="feat-flag-export">Export CSV</button>
+              <button class="btn btn-danger btn-sm" id="feat-flag-clear">Clear all</button>
+            </div>
+          </div>
+          <div id="feat-flags" class="feat-list"></div>
+        </div>
+      </section>
+
+      <div class="modal-overlay" id="feat-shot-modal">
+        <div class="glass-card feat-shot-modal">
+          <div class="card-header"><h3 id="feat-shot-title">Screenshot</h3><button class="modal-close" type="button" onclick="document.getElementById('feat-shot-modal').classList.remove('active')"><i data-lucide="x"></i></button></div>
+          <img id="feat-shot-img" alt="Chat screenshot">
+        </div>
+      </div>
+
       <section class="tab-pane" id="tab-logs">
         <div class="logs-container">
           <div class="glass-card console-card">
@@ -1141,5 +1260,6 @@
   <!-- Socket.io and custom application script -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="app.js"></script>
+  <script src="features.js"></script>
 </body>
 </html>

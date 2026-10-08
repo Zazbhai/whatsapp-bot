@@ -1565,7 +1565,7 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
       await new Promise(resolve => setTimeout(resolve, 1500));
       const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
       await Promise.race([
-        chat.sendMessage(media),
+        chat.sendMessage(media, { caption: features.apkCaption(slug) }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending APK")), 45000))
       ]);
     });
@@ -1695,7 +1695,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         
         logInstanceEvent(slug, 'system', `Transmitting latest cached APK to +${senderNumber}: "${apk.filename}"...`);
         const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-        await msg.reply(media);
+        await msg.reply(media, undefined, { caption: features.apkCaption(slug) });
         
         logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" to +${senderNumber}`);
         
@@ -1703,7 +1703,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         io.to(`instance_${slug}`).emit('stat_increment', 'replies');
         recordUserResponse(slug, senderNumber);
       } else {
-        await msg.reply("❌ *No APK File Available*\n\nNo APK has been uploaded to the WhatsApp group yet. Please upload the latest APK to the group first!");
+        await msg.reply("❌ *No APK File Available*\n\nNo APK has been uploaded yet. Please send the latest APK to the Telegram bot first!");
         logInstanceEvent(slug, 'send', `Replied to +${senderNumber} that no APK is available.`);
       }
     } catch (err) {
@@ -1809,7 +1809,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
             const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
             
             try {
-              await enqueueWhatsAppSend(slug, () => msg.reply(media));
+              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: features.apkCaption(slug) }));
               logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
               
               clientStates[slug].stats.replies++;
@@ -2048,12 +2048,12 @@ async function processSingleAITask(task) {
                 new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 10000))
               ]);
               await enqueueWhatsAppSend(slug, () => Promise.race([
-                chat.sendMessage(media),
+                chat.sendMessage(media, { caption: features.apkCaption(slug) }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 60000))
               ]));
             } catch (chatErr) {
               logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), retrying with msg.reply...`);
-              await enqueueWhatsAppSend(slug, () => msg.reply(media));
+              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: features.apkCaption(slug) }));
             }
             logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
             clientStates[slug].stats.replies++;
@@ -2494,10 +2494,13 @@ async function transcribeAudio(slug, media) {
 }
 
 // Initialize active WhatsApp Client for a Bot Instance
-function initInstanceClient(slug) {
+function initInstanceClient(slug, forcedSessionId) {
   if (activeClients[slug]) {
     return activeClients[slug];
   }
+
+  // Pick which phone number (session) this bot should run on
+  const session = features.resolveSession(slug, forcedSessionId);
 
   // Load cached APK from disk to memory
   loadApkCache(slug);
@@ -2516,11 +2519,18 @@ function initInstanceClient(slug) {
   }
   clientStates[slug].processedMessageIds = new Set();
 
+  if (!session) {
+    clientStates[slug].status = 'needs_number';
+    io.to(`instance_${slug}`).emit('status', { status: 'needs_number', stats: clientStates[slug].stats });
+    logInstanceEvent(slug, 'system', 'No WhatsApp number linked yet. Add a number on the Sessions page.');
+    return null;
+  }
+  clientStates[slug].sessionId = session.id;
+  clientStates[slug].manualStop = false;
+  logInstanceEvent(slug, 'system', `Starting WhatsApp for ${session.phone ? '+' + session.phone : session.label}...`);
+
   const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: `session_${slug}`,
-      dataPath: path.join(__dirname, '.wwebjs_auth')
-    }),
+    ...features.clientOptionsFor(slug, session),
     puppeteer: {
       executablePath: findChrome(),
       headless: true,
@@ -2546,7 +2556,15 @@ function initInstanceClient(slug) {
     puppeteerTimeout: 120000
   });
 
+  client.on('code', (code) => {
+    clientStates[slug].status = 'pairing';
+    io.to(`instance_${slug}`).emit('status', { status: 'pairing', stats: clientStates[slug].stats });
+    features.emitCode(slug, session, code);
+  });
+
   client.on('qr', async (qr) => {
+    // Phone-number login is used instead of QR codes
+    if (session.phone) return;
     clientStates[slug].status = 'qr_ready';
     clientStates[slug].qrCodeData = qr;
     
@@ -2598,6 +2616,7 @@ function initInstanceClient(slug) {
       stats: clientStates[slug].stats
     });
     logInstanceEvent(slug, 'error', `Authentication failed: ${msg}`);
+    features.handleSessionLoss(slug, session, 'AUTH_FAILURE', client);
   });
 
   client.on('ready', async () => {
@@ -2616,6 +2635,7 @@ function initInstanceClient(slug) {
       stats: clientStates[slug].stats
     });
     logInstanceEvent(slug, 'whatsapp', `Active & online! Logged in as: ${info.pushname} (${info.wid.user})`);
+    features.onSessionReady(slug, session, client);
 
     // Run automatic mute check for users older than configured threshold (default 12 hours) on start/reconnect
     checkAndAutoMuteUsers(slug).then(async () => {
@@ -2634,7 +2654,8 @@ function initInstanceClient(slug) {
     });
     logInstanceEvent(slug, 'whatsapp', `Session closed. Reason: ${reason}`);
     
-    delete activeClients[slug];
+    // Auto-switch to the next linked number (or reconnect) — see features.js
+    features.handleSessionLoss(slug, session, reason, client);
   });
 
   client.on('message', async (msg) => {
@@ -2747,7 +2768,8 @@ function initInstanceClient(slug) {
     }
 
     // Detect and Cache APK Uploads in Any Chat (Group or Direct Messages)
-    if (msg.hasMedia && msg.type === 'document') {
+    // APK updates now come from the Telegram bot. Set ALLOW_WHATSAPP_APK_UPLOAD=true to re-enable.
+    if (process.env.ALLOW_WHATSAPP_APK_UPLOAD === 'true' && msg.hasMedia && msg.type === 'document') {
       try {
         const media = await msg.downloadMedia();
         if (media) {
@@ -2866,6 +2888,9 @@ function initInstanceClient(slug) {
     // Return early if message contains no text content (e.g. captionless images/documents)
     if (!msg.body) return;
 
+    // Watch words: log chat + screenshot (runs in background)
+    features.checkWatchWords(slug, client, msg, senderNumber);
+
     const senderName = msg._data.notifyName || '';
     
     // Update name for users already in the seen list (works for both DMs and groups).
@@ -2902,6 +2927,15 @@ function initInstanceClient(slug) {
 
   return client;
 }
+
+// Extra features (sessions/failover, Telegram APK, store page, watch words)
+const features = require('./features')({
+  app, io, Client, LocalAuth, findChrome, authenticateToken, upload,
+  loadInstances, saveInstances, latestApkCache, persistApkCache,
+  logInstanceEvent, activeClients, clientStates, dataDir,
+  rootDir: __dirname, port: PORT,
+  initInstanceClient: () => initInstanceClient
+});
 
 // Start all provisioned browser clients sequentially on boot
 async function startInstancesSequentially() {
@@ -3195,28 +3229,9 @@ app.post('/api/instances/:slug/pairing-code', authenticateToken, async (req, res
   if (!phoneNumber) {
     return res.status(400).json({ error: 'Phone number is required.' });
   }
-
-  // Clean phone number: remove all non-digit characters
-  const cleanNumber = phoneNumber.replace(/\D/g, '');
-  if (!cleanNumber) {
-    return res.status(400).json({ error: 'Invalid phone number format.' });
-  }
-
-  const client = activeClients[slug];
-  const state = clientStates[slug];
-
-  if (!client || !state) {
-    return res.status(400).json({ error: 'WhatsApp client is not initialized for this instance.' });
-  }
-
-  if (state.status === 'ready' || state.status === 'authenticated') {
-    return res.status(400).json({ error: 'WhatsApp client is already connected/authenticated.' });
-  }
-
   try {
-    logInstanceEvent(slug, 'system', `Generating pairing code for +${cleanNumber}...`);
-    const code = await client.requestPairingCode(cleanNumber);
-    logInstanceEvent(slug, 'system', `Pairing code generated successfully: ${code}`);
+    // Adds the number as a session (or reuses it) and returns WhatsApp's pairing code
+    const code = await features.requestCodeForNumber(slug, phoneNumber);
     res.json({ success: true, code });
   } catch (err) {
     logInstanceEvent(slug, 'error', `Failed to generate pairing code: ${err.message}`);
@@ -3739,11 +3754,15 @@ app.post('/api/logout', authenticateToken, requireInstance, async (req, res) => 
 
   try {
     const client = activeClients[slug];
+    // Manual logout: do not auto-switch to a backup number
+    if (clientStates[slug]) clientStates[slug].manualStop = true;
     if (client && clientStates[slug].status !== 'disconnected') {
       await client.logout();
     }
     
-    const authPath = path.join(__dirname, '.wwebjs_auth', `session-session_${slug}`);
+    const loggedOutSession = features.resolveSession(slug, clientStates[slug] && clientStates[slug].sessionId);
+    if (loggedOutSession) features.markSession(slug, loggedOutSession.id, { status: 'logged_out', pairingCode: null });
+    const authPath = loggedOutSession ? features.authDirFor(slug, loggedOutSession) : path.join(__dirname, '.wwebjs_auth', `session-session_${slug}`);
     if (fs.existsSync(authPath)) {
       setTimeout(() => {
         try {
@@ -3969,6 +3988,7 @@ io.on('connection', (socket) => {
     }
 
     socket.emit('logs_history', clientStates[slug].systemLogs);
+    features.emitSessions(slug);
   });
 
   socket.on('disconnect', () => {
