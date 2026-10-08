@@ -14,7 +14,12 @@ function pickNextSession(sessions, currentId, now = Date.now()) {
 function pickAutoSession(sessions, activeId, now = Date.now()) {
   const ok = (s) => s && s.status === 'linked' && !(s.retryAfter > now);
   const active = sessions.find(s => s.id === activeId);
-  return ok(active) ? active : (sessions.find(ok) || null);
+  if (ok(active)) return active;
+  const ready = sessions.find(ok);
+  if (ready) return ready;
+  // Every linked number is cooling down after a soft error: use one anyway rather than sit idle.
+  const linked = (s) => s && s.status === 'linked';
+  return linked(active) ? active : (sessions.find(linked) || null);
 }
 
 // Decide what the watchdog should do for one bot. Returns { start: id } or { switchTo: id } or null.

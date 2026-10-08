@@ -184,11 +184,11 @@ module.exports = function setupFeatures(ctx) {
       const inst = getInst(slug);
       const retry = inst && ensureSessions(inst).filter(x => x.status === 'linked').sort((a, b) => (a.retryAfter || 0) - (b.retryAfter || 0))[0];
       if (retry) {
-        logInstanceEvent(slug, 'system', 'No healthy backup available. Waiting for a linked session to recover.');
+        logInstanceEvent(slug, 'system', `Session issue (${reason}). No other number available, restarting ${retry.phone ? '+' + retry.phone : retry.label} in 10 seconds.`);
         setTimeout(() => {
           const current = getInst(slug);
-          if (!activeClients[slug] && !clientStates[slug]?.manualStop && current?.sessions.some(x => x.id === retry.id && x.status === 'linked')) initClient(slug, retry.id);
-        }, Math.max(10000, (retry.retryAfter || 0) - Date.now()));
+          if (!activeClients[slug] && !clientStates[slug]?.manualStop && current?.sessions.some(x => x.id === retry.id && x.status === 'linked')) { setActive(slug, retry.id); initClient(slug, retry.id); }
+        }, 10000);
       } else {
         logInstanceEvent(slug, 'error', 'No linked backup numbers left. Add a number on the Sessions page.');
         if (st) st.status = 'needs_number';

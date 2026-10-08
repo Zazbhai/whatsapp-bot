@@ -113,3 +113,12 @@ test('pairing that has not finished after 10 minutes switches back to a linked n
   assert.deepEqual(autoSelectAction({ ...args, pairingSince: 100000 }), { switchTo: 'old' });
   assert.equal(autoSelectAction({ ...args, status: 'ready', pairingSince: 100000 }), null);
 });
+
+test('a single linked number in cooldown is still picked instead of reporting no number', () => {
+  const now = Date.now();
+  const only = [{ id: 'a', status: 'linked', retryAfter: now + 60000 }];
+  assert.equal(pickAutoSession(only, 'a', now).id, 'a');
+  const two = [{ id: 'a', status: 'linked', retryAfter: now + 60000 }, { id: 'b', status: 'linked' }];
+  assert.equal(pickAutoSession(two, 'a', now).id, 'b');
+  assert.equal(pickAutoSession([{ id: 'p', status: 'pending', phone: '1' }], 'p', now), null);
+});
