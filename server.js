@@ -75,6 +75,7 @@ function acquireProcessLock() {
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+require('./whatsapp-compat').installWhatsAppCompatibility();
 const { Client, LocalAuth, MessageMedia, Buttons } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const qrcode = require('qrcode');
@@ -802,6 +803,7 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
     const ignoredList = loadIgnoredUsers(slug);
     
     for (const chat of chats) {
+      try {
       // 0. Skip if chat has no unread messages (already seen/read)
       if (chat.unreadCount === undefined || chat.unreadCount === null || chat.unreadCount <= 0) {
         continue;
@@ -866,6 +868,9 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
           }
         }
       }
+      } catch (err) {
+        logInstanceEvent(slug, 'error', `Skipping unread chat ${chat.id?._serialized || 'unknown'}: ${err.stack || err.message || String(err)}`);
+      }
     }
     
     logInstanceEvent(slug, 'system', `Found ${unrepliedMessages.length} unreplied messages to process.`);
@@ -895,7 +900,7 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
       }
     }
   } catch (err) {
-    logInstanceEvent(slug, 'error', `Failed to detect unreplied messages: ${err.message}`);
+    logInstanceEvent(slug, 'error', `Failed to detect unreplied messages: ${err.stack || err.message || String(err)}`);
   }
 }
 
@@ -2660,6 +2665,7 @@ function initInstanceClient(slug, forcedSessionId) {
 
   client.on('message', async (msg) => {
     if (msg.fromMe) return;
+    try {
 
     // Prevent duplicate message processing (e.g., from startup scan vs live events)
     if (msg.id && msg.id._serialized) {
@@ -2671,14 +2677,6 @@ function initInstanceClient(slug, forcedSessionId) {
         const firstKey = clientStates[slug].processedMessageIds.values().next().value;
         clientStates[slug].processedMessageIds.delete(firstKey);
       }
-    }
-
-    // Mark the chat as seen to clear the unread count immediately (prevents duplicate processing on restart)
-    try {
-      const chat = await msg.getChat();
-      await chat.sendSeen();
-    } catch (e) {
-      logInstanceEvent(slug, 'error', `Failed to send read receipt: ${e.message}`);
     }
 
     // --- NEW GROUP WHITELIST LOGIC ---
@@ -2916,11 +2914,21 @@ function initInstanceClient(slug, forcedSessionId) {
     logInstanceEvent(slug, 'receive', `From "${senderName || 'Unknown Contact'}" (+${senderNumber})${logTag}: "${msg.body}"`);
 
     enqueueMessage(slug, senderNumber, msg);
+    // Optional receipt must never hold the incoming pipeline behind a chat lookup.
+    client.sendSeen(msg.from).catch(e => {
+      logInstanceEvent(slug, 'error', `Failed to send read receipt: ${e.message || String(e)}`);
+    });
+    } catch (err) {
+      if (msg.id?._serialized) clientStates[slug]?.processedMessageIds?.delete(msg.id._serialized);
+      logInstanceEvent(slug, 'error', `Incoming message handling failed: ${err.stack || err.message || String(err)}`);
+    }
   });
 
   try {
-    client.initialize();
     activeClients[slug] = client;
+    client.initialize().catch(err => {
+      logInstanceEvent(slug, 'error', `Engine bootstrap failed: ${err.stack || err.message || String(err)}`);
+    });
   } catch (err) {
     logInstanceEvent(slug, 'error', `Engine bootstrap failed: ${err.message}`);
   }
