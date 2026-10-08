@@ -2585,6 +2585,7 @@ function initInstanceClient(slug, forcedSessionId) {
     if (activeClients[slug] !== client) return;
     // Phone-number login is used instead of QR codes
     if (session.phone) return;
+    features.emitQr(slug, session, qr);
     clientStates[slug].status = 'qr_ready';
     clientStates[slug].qrCodeData = qr;
     
