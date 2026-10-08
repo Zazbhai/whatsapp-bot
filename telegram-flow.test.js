@@ -12,8 +12,12 @@ function harness() {
     { code: 'RDM-ABCDEFGH', tgUserId: '12', phone: '919876543210', tgName: '<Alice>', createdAt: '2026-10-08', used: false }
   ] }];
   let saves = 0;
+  const linking = [];
   const context = {
     tui, console, process: { env: { TELEGRAM_ADMIN_IDS: '99' } }, ctx: {},
+    setTimeout: () => 0, onQr: () => () => {}, qrcode: { toBuffer: async () => Buffer.from('') },
+    addSession: (slug, phone, label) => { const s = { id: 's' + (linking.length + 1), phone, label, status: 'pending' }; instances.find((i) => i.slug === slug).sessions.push(s); return s; },
+    beginLinking: async (slug, s) => { linking.push(`${slug}:${s.id}`); },
     app: { get() {}, post() {} }, authenticateToken() {},
     fetch: async (url, options) => { calls.push({ method: url.split('/').pop(), ...JSON.parse(options.body) }); return { json: async () => ({ ok: true, result: {} }) }; },
     loadInstances: () => instances, saveInstances: () => { saves++; },
@@ -24,7 +28,7 @@ function harness() {
   vm.createContext(context);
   vm.runInContext(source.slice(start, end) + '\nthis.handlers = { handleTelegramCallback, handleTelegramMessage };', context);
   const message = (id, text, type = 'private') => ({ from: { id, first_name: 'Alice' }, chat: { id, type }, text });
-  return { calls, instances, saves: () => saves,
+  return { calls, instances, saves: () => saves, linking: () => linking,
     message: (id, text, type) => context.handlers.handleTelegramMessage(message(id, text, type)),
     callback: (id, data, type) => context.handlers.handleTelegramCallback({ id: 'query', from: { id, first_name: 'Alice' }, message: message(id, '', type), data })
   };
@@ -57,4 +61,23 @@ test('cancel button prevents the next number from starting a session', async () 
 test('button search resolves an exact redeem code for admin', async () => {
   const h = harness(); await h.callback(99, 'find'); await h.message(99, 'RDM-ABCDEFGH');
   assert.equal(h.calls.filter((c) => c.method === 'sendMessage').at(-1).text.includes('RDM-ABCDEFGH'), true);
+});
+test('add session offers QR code and pairing code options', async () => {
+  const h = harness(); await h.message(12, '/addsession');
+  const last = h.calls.filter((c) => c.method === 'sendMessage').at(-1);
+  assert.equal(last.text.includes('QR code'), true);
+  assert.equal(last.text.includes('Pairing code'), true);
+  const data = last.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.deepEqual(data.slice(0, 2), ['add:qr', 'add:code']);
+});
+test('pairing code option asks for the phone number', async () => {
+  const h = harness(); await h.callback(12, 'add:code');
+  const last = h.calls.filter((c) => c.method === 'sendMessage').at(-1);
+  assert.equal(last.text.includes('country code'), true);
+});
+test('QR option creates a phone-less session and starts linking', async () => {
+  const h = harness(); await h.callback(12, 'add:qr');
+  assert.equal(h.instances[0].sessions.length, 1);
+  assert.equal(h.instances[0].sessions[0].phone, null);
+  assert.equal(h.linking().length, 1);
 });
