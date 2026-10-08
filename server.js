@@ -1857,10 +1857,16 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   // 5. Fallback to AI Smart Auto-Responder
   if (!ruleMatched) {
     if (aiHandlesApk) {
+      logInstanceEvent(slug, 'system', `No rule matched for +${senderNumber}. Asking AI for a reply...`);
       globalAIQueue.push({ slug, senderNumber, msg });
       processGlobalAIQueue().catch(err => {
         logInstanceEvent(slug, 'error', `Global AI queue processor failed: ${err.message}`);
       });
+    } else {
+      const reason = !instConfig || !instConfig.aiEnabled
+        ? `AI replies are turned OFF for bot "${slug}". Turn on "AI Smart Auto-Responder" in this bot's settings.`
+        : 'no AI keys found in .env (LLM_API_KEYS or HF_TOKENS).';
+      logInstanceEvent(slug, 'error', `No reply sent to +${senderNumber}: no rule matched and ${reason}`);
     }
   }
 }
@@ -3116,6 +3122,7 @@ app.post('/api/instances', authenticateToken, (req, res) => {
     id: 'inst_' + Date.now(),
     name: name.trim(),
     slug: normalizedSlug,
+    aiEnabled: true,
     createdAt: new Date().toISOString()
   };
 
