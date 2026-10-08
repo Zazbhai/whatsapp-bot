@@ -433,8 +433,13 @@ function updateUserVoiceSettings(slug, senderNumber, updateFields) {
   return userEntry;
 }
 
+// WhatsApp now addresses many private chats as <id>@lid instead of <number>@c.us.
+function isDirectChatId(chatId) {
+  return typeof chatId === 'string' && (chatId.endsWith('@c.us') || chatId.endsWith('@lid'));
+}
+
 function checkAndSetVoiceNoteDemand(slug, senderNumber, msg) {
-  if (!msg.from.endsWith('@c.us')) return;
+  if (!isDirectChatId(msg.from)) return;
   
   const isPtt = msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio');
   const bodyText = msg.body || '';
@@ -854,7 +859,7 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
 
           // Check if contact is expired/muted in bot configuration
           let isMutedOrExpired = false;
-          if (chat.id.server === 'c.us') {
+          if (chat.id.server === 'c.us' || chat.id.server === 'lid') {
             const users = loadSeenUsers(slug);
             const userEntry = users.find(u => u.number === contactNumber);
             if (userEntry) {
@@ -1638,7 +1643,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   const instConfig = listConfig.find(i => i.slug === slug);
 
   // 0. First-Time Welcome Responder always wins before trigger/rule handling.
-  if (msg.from.endsWith('@c.us')) {
+  if (isDirectChatId(msg.from)) {
     const users = loadSeenUsers(slug);
     const userEntry = users.find(u => u.number === senderNumber);
     const alreadyWelcomed = userEntry && userEntry.welcomed;
@@ -1682,7 +1687,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   }
 
   // 2. Track first seen users when welcome is not configured.
-  if (msg.from.endsWith('@c.us')) {
+  if (isDirectChatId(msg.from)) {
     const users = loadSeenUsers(slug);
     const userEntry = users.find(u => u.number === senderNumber);
     const alreadyWelcomed = userEntry && userEntry.welcomed;
@@ -2680,6 +2685,10 @@ function initInstanceClient(slug, forcedSessionId) {
   client.on('message', async (msg) => {
     if (activeClients[slug] !== client) return;
     if (msg.fromMe) return;
+    if (typeof msg.from !== 'string' || !msg.from) {
+      logInstanceEvent(slug, 'error', 'Incoming message has no readable sender; WhatsApp ID format may have changed.');
+      return;
+    }
     try {
 
     // Prevent duplicate message processing (e.g., from startup scan vs live events)
@@ -2733,7 +2742,7 @@ function initInstanceClient(slug, forcedSessionId) {
     // --- 12-HOUR AUTO-MUTE/IGNORE LOGIC FOR INDIVIDUAL CHATS ---
     let isAlreadySeen = false;
     let isExpired = false;
-    if (msg.from.endsWith('@c.us')) {
+    if (isDirectChatId(msg.from)) {
       const users = loadSeenUsers(slug);
       const userEntry = users.find(u => u.number === senderNumber);
       if (userEntry) {
@@ -2864,7 +2873,7 @@ function initInstanceClient(slug, forcedSessionId) {
     if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
       const senderNumber = msg.from.split('@')[0];
       try {
-        if (msg.from.endsWith('@c.us')) {
+        if (isDirectChatId(msg.from)) {
           const shouldPromptForText = markVoiceNoteTextPrompted(
             slug,
             senderNumber,
@@ -2912,10 +2921,10 @@ function initInstanceClient(slug, forcedSessionId) {
     if (senderName) {
       const seenList = loadSeenUsers(slug);
       const existingEntry = seenList.find(u => u.number === senderNumber);
-      if (existingEntry && (existingEntry.name !== senderName || (msg.from.endsWith('@c.us') && existingEntry.chatId !== msg.from))) {
+      if (existingEntry && (existingEntry.name !== senderName || (isDirectChatId(msg.from) && existingEntry.chatId !== msg.from))) {
         // User already seen via DM — just update their display name in the cache + disk
         if (existingEntry.name !== senderName) existingEntry.name = senderName;
-        if (msg.from.endsWith('@c.us')) existingEntry.chatId = msg.from;
+        if (isDirectChatId(msg.from)) existingEntry.chatId = msg.from;
         const seenFilePath = path.join(dataDir, `seen_users_${slug}.json`);
         fs.promises.writeFile(seenFilePath, JSON.stringify(seenList, null, 2), 'utf8')
           .catch(err => console.error(`Async seen users name update failed for ${slug}:`, err));

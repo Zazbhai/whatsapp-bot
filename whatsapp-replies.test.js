@@ -72,7 +72,8 @@ test('a never-finishing read receipt cannot hold up a new incoming reply', async
     io: { to: () => ({ emit() {} }) }, features: { checkWatchWords() {}, reportSessionError: async () => {} },
     loadIgnoredUsers: () => [], loadSeenUsers: () => [], loadInstances: () => [],
     recordSpamMessage: () => false, checkAndSetVoiceNoteDemand() {}, logInstanceEvent() {},
-    enqueueMessage: (slug, number, msg) => queued.push(msg), process: { env: {} }
+    enqueueMessage: (slug, number, msg) => queued.push(msg), process: { env: {} },
+    isDirectChatId: (id) => /@(c\.us|lid)$/.test(id || '')
   };
   context.activeClients = { main: context.client };
   vm.createContext(context);
@@ -87,4 +88,39 @@ test('a never-finishing read receipt cannot hold up a new incoming reply', async
     await handler(msg);
     assert.equal(queued.length, 1);
   } finally { clearTimeout(timer); }
+});
+test('incoming messages with the new WhatsApp ID format keep a readable sender', () => {
+  const { normalizeStructureData } = require('./whatsapp-compat');
+  const data = normalizeStructureData({
+    id: { $1: 'false_123@lid_ABC', fromMe: false, remote: { $1: '123@lid' } },
+    from: { $1: '123@lid' }, to: { $1: '919999999999@c.us' }, body: 'hi'
+  });
+  assert.equal(data.id._serialized, 'false_123@lid_ABC');
+  assert.equal(data.id.remote._serialized, '123@lid');
+  assert.equal(data.from._serialized, '123@lid');
+  assert.equal(data.to._serialized, '919999999999@c.us');
+});
+
+test('patched WhatsApp structures read the sender from the new ID format', () => {
+  const { patchStructures } = require('./whatsapp-compat');
+  class Message { constructor(data) { this._patch(data); } _patch(data) { this.from = typeof data.from === 'object' ? data.from._serialized : data.from; this.id = data.id; } }
+  patchStructures((name) => { if (name === 'Message') return Message; throw new Error('missing'); });
+  patchStructures((name) => { if (name === 'Message') return Message; throw new Error('missing'); });
+  const msg = new Message({ id: { $1: 'm-1' }, from: { $1: '555@lid' } });
+  assert.equal(msg.from, '555@lid');
+  assert.equal(msg.id._serialized, 'm-1');
+  const legacy = new Message({ id: { _serialized: 'm-2' }, from: { _serialized: '911@c.us' } });
+  assert.equal(legacy.from, '911@c.us');
+});
+
+test('private chats using the new @lid address count as direct chats', () => {
+  const start = source.indexOf('function isDirectChatId');
+  const end = source.indexOf('function checkAndSetVoiceNoteDemand', start);
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(context.isDirectChatId('123456@lid'), true);
+  assert.equal(context.isDirectChatId('919999999999@c.us'), true);
+  assert.equal(context.isDirectChatId('12345-678@g.us'), false);
+  assert.equal(context.isDirectChatId(undefined), false);
 });
