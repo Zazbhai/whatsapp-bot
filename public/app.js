@@ -426,7 +426,7 @@ function updateStatusUI(data) {
     } else {
       connectingProgress.textContent = 'Preparing browser sandbox. This may take a moment...';
     }
-  } else if (status === 'qr_ready') {
+  } else if (status === 'qr_ready' || status === 'needs_number' || status === 'pairing') {
     showState('qr');
   } else if (status === 'authenticated') {
     showState('connecting');
@@ -438,7 +438,7 @@ function updateStatusUI(data) {
   }
 }
 
-let currentLinkingMode = 'qr'; // 'qr' or 'phone'
+let currentLinkingMode = 'phone'; // phone-number login (QR disabled)
 
 function switchLinkingMode(mode) {
   currentLinkingMode = mode;
