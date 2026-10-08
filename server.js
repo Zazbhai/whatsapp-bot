@@ -1988,7 +1988,7 @@ async function processSingleAITask(task) {
       .map(m => ({ role: m.role, content: m.content }));
 
     try {
-      let aiResult = await generateAIResponse(slug, msg.body, history);
+      let aiResult = await generateAIResponse(slug, msg.body, history, false, senderNumber);
       let replyText = aiResult?.text || null;
 
       let finalSendApk = aiResult?.sendApk || false;
@@ -1996,13 +1996,14 @@ async function processSingleAITask(task) {
       let finalAskOrder = aiResult?.askOrder || false;
 
       // Check if response exceeds 3 sentences and retry if necessary
-      const maxRetries = 2;
+      // One shorter retry only (each retry adds ~10s); a failed retry keeps the earlier reply.
+      const maxRetries = 1;
       let retryCount = 0;
       while (replyText && countSentences(replyText) > 3 && retryCount < maxRetries) {
         retryCount++;
         logInstanceEvent(slug, 'system', `⚠️ Response exceeds 3 sentences (${countSentences(replyText)} sentences). Retrying AI query with strict length limits (Attempt ${retryCount}/${maxRetries})...`);
-        aiResult = await generateAIResponse(slug, msg.body, history, true);
-        replyText = aiResult?.text || null;
+        aiResult = await generateAIResponse(slug, msg.body, history, true, senderNumber);
+        if (aiResult?.text) replyText = aiResult.text;
         if (aiResult) {
           if (aiResult.sendApk) finalSendApk = true;
           if (aiResult.orderComplete) finalOrderComplete = true;
@@ -2249,7 +2250,7 @@ function releaseApiKey(keyObj) {
 }
 
 // Native LLM Requester with parallel model racing, random key rotation, and 24-hr cooldown run in a child process (multiprocessing)
-async function generateAIResponse(slug, userMessage, history = [], isRetry = false) {
+async function generateAIResponse(slug, userMessage, history = [], isRetry = false, senderNumber = '') {
   const { fork } = require('child_process');
   const inst = getInstanceBySlug(slug);
   const systemPrompt = buildSystemPrompt(inst, isRetry);
@@ -2271,7 +2272,7 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const result = await new Promise((resolve) => {
       const workerPath = path.join(__dirname, 'ai_worker.js');
-      logInstanceEvent(slug, 'system', `Forking AI worker process for +${userMessage.substring(0, 15)}... (Attempt ${attempt}/${maxAttempts})`);
+      logInstanceEvent(slug, 'system', `Asking AI for a reply${senderNumber ? ' to +' + senderNumber : ''} (Attempt ${attempt}/${maxAttempts})`);
       
       const child = fork(workerPath, [], {
         env: { ...process.env }

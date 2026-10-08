@@ -124,3 +124,20 @@ test('private chats using the new @lid address count as direct chats', () => {
   assert.equal(context.isDirectChatId('12345-678@g.us'), false);
   assert.equal(context.isDirectChatId(undefined), false);
 });
+
+test('a failed shorter-reply retry keeps the earlier AI reply instead of sending nothing', () => {
+  const start = source.indexOf('      const maxRetries = 1;');
+  const end = source.indexOf('      // If still too long after max retries', start);
+  assert.ok(start > 0 && end > start);
+  const body = `(async () => { let replyText = first; let finalSendApk = false, finalOrderComplete = false, finalAskOrder = false; let aiResult;
+${source.slice(start, end)}
+return { replyText, calls }; })();`;
+  const context = { first: 'One. Two. Three. Four.', calls: 0, countSentences: (t) => t.split('.').filter(Boolean).length,
+    logInstanceEvent() {}, slug: 'main', msg: { body: 'Give me apk' }, history: [], senderNumber: '1' };
+  context.generateAIResponse = async () => { context.calls++; return null; };
+  vm.createContext(context);
+  return vm.runInContext(body.replace('return { replyText, calls }', 'return { replyText, calls: globalThis.calls }'), context).then((r) => {
+    assert.equal(r.replyText, 'One. Two. Three. Four.');
+    assert.equal(r.calls, 1);
+  });
+});
