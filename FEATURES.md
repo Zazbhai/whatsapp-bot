@@ -34,7 +34,7 @@ Anyone can link a WhatsApp number to the bot from Telegram (private chat with yo
 
 | Command | Who | What it does |
 |---|---|---|
-| `/addsession` | anyone | Asks for a WhatsApp number, replies with the 8-character login code. When login succeeds the user gets a redeem code like `RDM-7KQ2M9XA`. |
+| `/addsession` | anyone | Offers two login options: 📷 QR code (sent as a photo to scan, refreshed automatically) or 🔢 pairing code (user sends their number, gets the 8-character code). When login succeeds the user gets a redeem code like `RDM-7KQ2M9XA`. |
 | `/mycodes` | anyone | Shows that user's own redeem codes |
 | `/codes` (`/codes unused`, `/codes used`) | admins | Lists all stored redeem codes with number, Telegram user and date |
 | `/findcode <code / number / tg id>` | admins | Looks up a code |
