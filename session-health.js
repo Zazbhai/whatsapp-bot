@@ -10,6 +10,26 @@ function pickNextSession(sessions, currentId, now = Date.now()) {
   }
   return null;
 }
+// Best linked number to run automatically: keep the current one when healthy, else the first in priority order.
+function pickAutoSession(sessions, activeId, now = Date.now()) {
+  const ok = (s) => s && s.status === 'linked' && !(s.retryAfter > now);
+  const active = sessions.find(s => s.id === activeId);
+  return ok(active) ? active : (sessions.find(ok) || null);
+}
+
+// Decide what the watchdog should do for one bot. Returns { start: id } or { switchTo: id } or null.
+function autoSelectAction({ sessions, activeId, running, runningSessionId, status, manualStop, idleTicks, pairingSince, now = Date.now(), idleLimit = 3, pairingLimitMs = 10 * 60 * 1000 }) {
+  if (manualStop) return null;
+  const pick = pickAutoSession(sessions, activeId, now);
+  if (!pick) return null;
+  if (!running) return idleTicks >= idleLimit ? { start: pick.id } : null;
+  const current = sessions.find(s => s.id === runningSessionId);
+  if (status !== 'ready' && current && current.status !== 'linked' && pairingSince && now - pairingSince >= pairingLimitMs && pick.id !== runningSessionId) {
+    return { switchTo: pick.id };
+  }
+  return null;
+}
+
 async function closeSession(client, timeoutMs = 5000) {
   let timer;
   try {
@@ -52,4 +72,4 @@ function monitorSession(client, { isCurrent, isReady, onFailure, intervalMs = 30
   timer.unref?.();
   return { stop, check };
 }
-module.exports = { isSessionFailure, pickNextSession, monitorSession, closeSession };
+module.exports = { isSessionFailure, pickNextSession, pickAutoSession, autoSelectAction, monitorSession, closeSession };

@@ -92,3 +92,24 @@ test('all temporarily failing sessions wait before recovery instead of rapid cyc
   assert.equal(h.events.some(e => e[0] === 'session_switched'), false);
   assert.equal(h.timers.find(t => !t.cancelled).delay >= 10000, true);
 });
+const { pickAutoSession, autoSelectAction } = require('./session-health');
+test('auto-select prefers a linked number over the active one still waiting for pairing', () => {
+  const sessions = [{ id: 'new', status: 'pairing', phone: '91111' }, { id: 'old', status: 'linked' }];
+  assert.equal(pickAutoSession(sessions, 'new').id, 'old');
+  assert.equal(pickAutoSession([{ id: 'a', status: 'linked' }, { id: 'b', status: 'linked' }], 'b').id, 'b');
+});
+test('when no number is online for 3 checks, a linked number starts automatically', () => {
+  const base = { sessions: [{ id: 'a', status: 'linked' }], activeId: 'x', running: false, manualStop: false };
+  assert.equal(autoSelectAction({ ...base, idleTicks: 2 }), null);
+  assert.deepEqual(autoSelectAction({ ...base, idleTicks: 3 }), { start: 'a' });
+});
+test('auto-select never overrides a manual stop', () => {
+  assert.equal(autoSelectAction({ sessions: [{ id: 'a', status: 'linked' }], running: false, manualStop: true, idleTicks: 9 }), null);
+});
+test('pairing that has not finished after 10 minutes switches back to a linked number', () => {
+  const sessions = [{ id: 'new', status: 'pairing' }, { id: 'old', status: 'linked' }];
+  const args = { sessions, activeId: 'new', running: true, runningSessionId: 'new', status: 'connecting', manualStop: false, now: 700000 };
+  assert.equal(autoSelectAction({ ...args, pairingSince: 200000 }), null);
+  assert.deepEqual(autoSelectAction({ ...args, pairingSince: 100000 }), { switchTo: 'old' });
+  assert.equal(autoSelectAction({ ...args, status: 'ready', pairingSince: 100000 }), null);
+});

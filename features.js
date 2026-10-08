@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const tui = require('./telegram-ui');
-const { pickNextSession, isSessionFailure, closeSession } = require('./session-health');
+const { pickNextSession, pickAutoSession, autoSelectAction, isSessionFailure, closeSession } = require('./session-health');
 
 module.exports = function setupFeatures(ctx) {
   const {
@@ -84,9 +84,9 @@ module.exports = function setupFeatures(ctx) {
     if (!inst) return null;
     const list = ensureSessions(inst);
     if (forcedId) return list.find((s) => s.id === forcedId) || null;
+    // Always prefer a linked number over one still waiting for its pairing code.
     const active = list.find((s) => s.id === inst.activeSessionId);
-    if (usable(active)) return active;
-    const pick = list.find((s) => s.status === 'linked' && usable(s)) || list.find(usable);
+    const pick = pickAutoSession(list, inst.activeSessionId) || (usable(active) ? active : list.find(usable));
     if (pick) setActive(slug, pick.id);
     return pick || null;
   }
@@ -222,7 +222,15 @@ module.exports = function setupFeatures(ctx) {
       markSession(slug, s.id, { status: 'linked', pairingCode: null, phone: s.phone || wid });
       logInstanceEvent(slug, 'whatsapp', `Backup number +${s.phone} linked and on standby.`);
       ctx.onSessionLinked && ctx.onSessionLinked(slug, s);
-      setTimeout(stop, 8000);
+      setTimeout(async () => {
+        await stop();
+        // Nothing running? Put the freshly linked number to work right away.
+        if (!activeClients[slug] && !clientStates[slug]?.manualStop && getInst(slug)) {
+          logInstanceEvent(slug, 'system', `No number was online. Automatically started +${s.phone}.`);
+          setActive(slug, s.id);
+          Promise.resolve(initClient(slug, s.id)).catch((e) => logInstanceEvent(slug, 'error', `Auto-start failed: ${e.message}`));
+        }
+      }, 8000);
     });
     c.on('auth_failure', (m) => { clearTimeout(timeout); markSession(slug, s.id, { status: 'pending', pairingCode: null }); logInstanceEvent(slug, 'error', `Linking +${s.phone} failed: ${m}`); stop(); });
     c.initialize().catch((e) => { logInstanceEvent(slug, 'error', `Linking +${s.phone} failed: ${e.message}`); stop(); });
@@ -265,6 +273,40 @@ module.exports = function setupFeatures(ctx) {
     persist();
     return s;
   }
+
+  // Watchdog: automatically pick a linked number so nobody has to click "Use this".
+  const idleTicks = {};
+  const pairingSince = {};
+  function autoSelectTick() {
+    for (const inst of loadInstances()) {
+      const slug = inst.slug;
+      const st = clientStates[slug];
+      if (!st) continue;
+      const running = !!activeClients[slug];
+      idleTicks[slug] = running ? 0 : (idleTicks[slug] || 0) + 1;
+      const current = ensureSessions(inst).find((x) => x.id === st.sessionId);
+      if (running && st.status !== 'ready' && current && current.status !== 'linked') pairingSince[slug] = pairingSince[slug] || Date.now();
+      else delete pairingSince[slug];
+      const action = autoSelectAction({ sessions: inst.sessions, activeId: inst.activeSessionId, running,
+        runningSessionId: st.sessionId, status: st.status, manualStop: !!st.manualStop,
+        idleTicks: idleTicks[slug], pairingSince: pairingSince[slug] });
+      if (!action) continue;
+      const target = inst.sessions.find((x) => x.id === (action.start || action.switchTo));
+      const name = target.phone ? '+' + target.phone : target.label;
+      idleTicks[slug] = 0; delete pairingSince[slug];
+      if (action.start) {
+        logInstanceEvent(slug, 'system', `No number was online. Automatically selected ${name}.`);
+        setActive(slug, target.id);
+        Promise.resolve(initClient(slug, target.id)).catch((e) => logInstanceEvent(slug, 'error', `Auto-select failed: ${e.message}`));
+      } else {
+        logInstanceEvent(slug, 'system', `Pairing for ${current.phone ? '+' + current.phone : current.label} did not finish. Automatically switched back to ${name}.`);
+        markSession(slug, current.id, { status: 'pending', pairingCode: null });
+        restartMainWith(slug, target.id).catch((e) => logInstanceEvent(slug, 'error', `Auto-select failed: ${e.message}`));
+      }
+    }
+  }
+  const autoSelectTimer = setInterval(() => { try { autoSelectTick(); } catch (e) { console.error('Auto-select failed:', e); } }, 30000);
+  if (autoSelectTimer.unref) autoSelectTimer.unref();
 
   app.get('/api/instances/:slug/sessions', authenticateToken, (req, res) => {
     const slug = req.params.slug.toLowerCase();
