@@ -9,6 +9,7 @@
 // =============================================================
 const fs = require('fs');
 const path = require('path');
+const qrcode = require('qrcode');
 const tui = require('./telegram-ui');
 const { pickNextSession, pickAutoSession, autoSelectAction, isSessionFailure, closeSession } = require('./session-health');
 
@@ -131,6 +132,17 @@ module.exports = function setupFeatures(ctx) {
     });
   }
 
+  // QR listeners (used by the Telegram "QR code" login option)
+  const qrListeners = {};
+  function emitQr(slug, s, qr) {
+    (qrListeners[`${slug}:${s.id}`] || []).forEach((fn) => { try { fn(qr); } catch (_) {} });
+  }
+  function onQr(slug, id, fn) {
+    const key = `${slug}:${id}`;
+    (qrListeners[key] = qrListeners[key] || []).push(fn);
+    return () => { qrListeners[key] = (qrListeners[key] || []).filter((f) => f !== fn); };
+  }
+
   // Options added to the main client in server.js
   function clientOptionsFor(slug, s) {
     const opts = {
@@ -206,7 +218,8 @@ module.exports = function setupFeatures(ctx) {
     const c = new Client({
       authStrategy: new LocalAuth({ clientId: clientIdFor(slug, s), dataPath: authRoot }),
       puppeteer: { executablePath: findChrome(), headless: true, protocolTimeout: 600000, args: CHROME_ARGS },
-      pairWithPhoneNumber: { phoneNumber: s.phone, showNotification: true, intervalMs: 180000 }
+      // Phone-less sessions (Telegram QR login) fall back to the QR flow.
+      ...(s.phone ? { pairWithPhoneNumber: { phoneNumber: s.phone, showNotification: true, intervalMs: 180000 } } : {})
     });
     linkers[key] = c;
     const stop = async () => { try { await c.destroy(); } catch (_) {} if (linkers[key] === c) delete linkers[key]; emitSessions(slug); };
@@ -216,6 +229,7 @@ module.exports = function setupFeatures(ctx) {
       stop();
     }, 10 * 60 * 1000);
     c.on('code', (code) => emitCode(slug, s, code));
+    c.on('qr', (qr) => emitQr(slug, s, qr));
     c.on('ready', () => {
       clearTimeout(timeout);
       const wid = c.info && c.info.wid ? c.info.wid.user : '';
@@ -582,6 +596,18 @@ module.exports = function setupFeatures(ctx) {
   const tgReply = (chatId, text, reply_markup) => tgCall('sendMessage', {
     chat_id: chatId, text, parse_mode: 'HTML', ...(reply_markup ? { reply_markup } : {})
   }).catch((e) => console.error('[TELEGRAM] Message delivery failed:', e.message));
+  async function tgSendPhoto(chatId, png, caption, reply_markup) {
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('photo', new Blob([png], { type: 'image/png' }), 'qr.png');
+    if (caption) form.append('caption', caption);
+    form.append('parse_mode', 'HTML');
+    if (reply_markup) form.append('reply_markup', JSON.stringify(reply_markup));
+    const r = await fetch(`https://api.telegram.org/bot${tgToken()}/sendPhoto`, { method: 'POST', body: form });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.description || 'Telegram sendPhoto failed');
+    return j.result;
+  }
   const esc = tui.escapeHtml;
   const replyHome = (m) => tgReply(m.chat.id,
     `<b>💚 WA Bot Hub</b>\n\n👋 Hello, ${esc(m.from.first_name || 'there')}!\n\n📱 Add your WhatsApp number to our bot server.\n🎁 Receive a redeem code after the session connects.\n\n<b>🔐 Only link a number you own.</b> Linking authorizes our service to send messages from your number. You can revoke access in WhatsApp → Linked devices.`,
@@ -647,6 +673,43 @@ module.exports = function setupFeatures(ctx) {
     return tgReply(m.chat.id, `<b>🎁 Redeem code details</b>\n\n<code>${esc(r.code)}</code>\n📱 +${esc(r.phone)}\n${admin ? `👤 ${esc(r.tgName)} (${esc(r.tgUserId)})\n` : ''}📅 ${esc(r.createdAt)}\n${r.used ? '✅ Used' : '🟢 Unused'}`, tui.keyboard(...rows));
   }
 
+  // QR login: link a session by scanning a QR code sent to the Telegram chat.
+  async function startQrSession(m) {
+    const chatId = m.chat.id;
+    const fromId = String(m.from.id);
+    const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || m.from.username || fromId;
+    const slug = sessionBotSlug();
+    const inst = slug && getInst(slug);
+    if (!inst) { await tgReply(chatId, '⚠️ No bot is set up yet. Try again later.', tui.backKeyboard()); return; }
+    const s = addSession(slug, null, `TG: ${name}`.slice(0, 60));
+    s.tgOwner = { id: fromId, chatId, name };
+    persist();
+    await tgReply(chatId, '<b>⏳ Preparing QR login…</b>\nYour QR code arrives here in a few seconds.');
+    let sent = 0;
+    const off = onQr(slug, s.id, (qr) => {
+      if (sent >= 5) return;
+      sent += 1;
+      qrcode.toBuffer(qr, { width: 512 }).then((buf) => tgSendPhoto(chatId, buf,
+        sent === 1
+          ? '<b>📷 Scan this QR code</b>\n\nOn the phone where your number is logged into WhatsApp:\n1️⃣ Open WhatsApp → Settings → Linked devices.\n2️⃣ Tap Link a device.\n3️⃣ Point the camera at this code.\n\n⏱ The code expires quickly — a fresh one is sent here automatically.\n🎁 Your redeem code arrives here once the session connects.'
+          : '🔄 New QR code — the previous one expired.',
+        tui.keyboard([tui.button('🏠 Main menu', 'home')])
+      )).catch((e) => console.error('[TELEGRAM] QR photo failed:', e.message));
+    });
+    setTimeout(() => {
+      off();
+      const cur = getInst(slug);
+      const sess = cur && ensureSessions(cur).find((x) => x.id === s.id);
+      if (sess && sess.status !== 'linked') tgReply(chatId, '⏱ The QR login expired. Tap 📱 Add session to try again.', tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
+    }, 3 * 60 * 1000);
+    try {
+      await beginLinking(slug, s);
+    } catch (e) {
+      off();
+      await tgReply(chatId, `❌ Could not connect: ${esc(e.message)}\nPlease try again.`, tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
+    }
+  }
+
   async function handleSessionFlow(m, text) {
     const chatId = m.chat.id;
     const fromId = String(m.from.id);
@@ -654,8 +717,8 @@ module.exports = function setupFeatures(ctx) {
     if (/^\/(addsession|login)\b/i.test(text)) {
       const slug = sessionBotSlug();
       if (!slug) { await tgReply(chatId, '⚠️ No bot is set up yet. Try again later.', tui.backKeyboard()); return true; }
-      tgFlow[chatId] = { step: 'phone', slug };
-      await tgReply(chatId, '<b>📱 Add a WhatsApp session</b>\n\nSend your number with country code, for example <code>919876543210</code>.\n\n🔐 You are approving a linked session on our server, not signing in on your phone. Our service will be able to send messages from your number. Only continue with a number you own.', tui.cancelKeyboard());
+      tgFlow[chatId] = { step: 'method', slug };
+      await tgReply(chatId, '<b>📱 Add a WhatsApp session</b>\n\nHow do you want to connect your number?\n\n📷 <b>QR code</b> — scan a code with your phone.\n🔢 <b>Pairing code</b> — type an 8-letter code on your phone.\n\n🔐 You are approving a linked session on our server, not signing in on your phone. Our service will be able to send messages from your number. Only continue with a number you own.', tui.keyboard([tui.button('📷 QR code', 'add:qr'), tui.button('🔢 Pairing code', 'add:code')], [tui.button('✖️ Cancel', 'cancel')]));
       return true;
     }
     if (/^\/cancel\b/i.test(text)) { delete tgFlow[chatId]; await tgReply(chatId, '✖️ Request cancelled.', tui.homeKeyboard(tgAdmins().includes(fromId))); return true; }
@@ -713,6 +776,13 @@ module.exports = function setupFeatures(ctx) {
     delete tgFlow[m.chat.id];
     if (data === 'home') return replyHome(m);
     if (data === 'add') return handleSessionFlow(m, '/addsession');
+    if (data === 'add:code') {
+      const slug = sessionBotSlug();
+      if (!slug) return tgReply(m.chat.id, '⚠️ No bot is set up yet. Try again later.', tui.backKeyboard());
+      tgFlow[m.chat.id] = { step: 'phone', slug };
+      return tgReply(m.chat.id, '<b>🔢 Pairing code login</b>\n\nSend your number with country code, for example <code>919876543210</code>.', tui.cancelKeyboard());
+    }
+    if (data === 'add:qr') return startQrSession(m);
     if (data === 'cancel') return handleSessionFlow(m, '/cancel');
     if (data.startsWith('mine:')) return sendCodeList(m, false, 'all', data.split(':')[1]);
     if (data === 'admin') return tgReply(m.chat.id, '<b>👑 Admin panel</b>\n\n🎁 Manage redeem codes\n📦 Publish APK updates', tui.adminKeyboard());
@@ -888,7 +958,7 @@ module.exports = function setupFeatures(ctx) {
   });
 
   return {
-    resolveSession, clientOptionsFor, onSessionReady, handleSessionLoss, emitCode,
+    resolveSession, clientOptionsFor, onSessionReady, handleSessionLoss, emitCode, emitQr,
     emitSessions, requestCodeForNumber, apkCaption, storeLink, checkWatchWords,
     authDirFor, markSession, reportSessionError
   };
