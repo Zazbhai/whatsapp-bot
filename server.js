@@ -2685,6 +2685,7 @@ function initInstanceClient(slug, forcedSessionId) {
   client.on('message', async (msg) => {
     if (activeClients[slug] !== client) return;
     if (msg.fromMe) return;
+    logInstanceEvent(slug, 'system', `Incoming event: from=${msg.from || 'unknown'} type=${msg.type || 'unknown'}`);
     if (typeof msg.from !== 'string' || !msg.from) {
       logInstanceEvent(slug, 'error', 'Incoming message has no readable sender; WhatsApp ID format may have changed.');
       return;
