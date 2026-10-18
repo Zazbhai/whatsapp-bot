@@ -10,14 +10,19 @@ const homeKeyboard = (admin) => keyboard(
 const backKeyboard = () => keyboard([button('🏠 Main menu', 'home')]);
 const cancelKeyboard = () => keyboard([button('✖️ Cancel', 'cancel')]);
 const adminKeyboard = () => keyboard(
-  [button('🎁 All codes', 'codes:all:0')],
+  [button('➕ Add coupon', 'addcode'), button('🎁 All codes', 'codes:all:0')],
   [button('🟢 Unused', 'codes:unused:0'), button('✅ Used', 'codes:used:0')],
   [button('🔎 Find code', 'find'), button('📦 Update APK', 'upload')],
   [button('🏠 Main menu', 'home')]
 );
+const addcodeKeyboard = () => keyboard(
+  [button('🎲 Generate random coupon', 'addcode:gen')],
+  [button('✍️ Custom coupon code', 'addcode:custom')],
+  [button('👑 Admin panel', 'admin')]
+);
 function canViewCode(record, userId, admin) { return !!record && (admin || String(record.tgUserId) === String(userId)); }
 function canUseCallback(data, admin) {
-  return !/^(admin|codes|find|upload|used|unused)(:|$)/.test(data) || admin;
+  return !/^(admin|codes|find|upload|used|unused|addcode)(:|$)/.test(data) || admin;
 }
 function pageOf(records, page, size = 5) {
   const pages = Math.max(1, Math.ceil(records.length / size));
@@ -35,4 +40,4 @@ function codePage(records, page, prefix, admin) {
   buttons.push([button(admin ? '👑 Admin panel' : '🏠 Main menu', admin ? 'admin' : 'home')]);
   return { text: `<b>🎁 ${admin ? 'Redeem code register' : 'Your redeem codes'}</b>\n📋 ${records.length} total · Page ${index + 1}/${pages}\n\n${text || 'No codes here yet.'}`, reply_markup: keyboard(...buttons) };
 }
-module.exports = { escapeHtml, button, keyboard, homeKeyboard, backKeyboard, cancelKeyboard, adminKeyboard, canViewCode, canUseCallback, pageOf, codePage };
+module.exports = { escapeHtml, button, keyboard, homeKeyboard, backKeyboard, cancelKeyboard, adminKeyboard, addcodeKeyboard, canViewCode, canUseCallback, pageOf, codePage };

@@ -7,7 +7,7 @@ test('users can only open their own redeem codes', () => {
   assert.equal(ui.canViewCode({ tgUserId: '12' }, '13', true), true);
 });
 test('every admin button requires admin privileges', () => {
-  for (const action of ['admin', 'codes:all:0', 'codes:used:0', 'find', 'upload', 'used:RDM-ABCDEFGH', 'unused:RDM-ABCDEFGH']) {
+  for (const action of ['admin', 'codes:all:0', 'codes:used:0', 'find', 'upload', 'used:RDM-ABCDEFGH', 'unused:RDM-ABCDEFGH', 'addcode', 'addcode:gen', 'addcode:custom']) {
     assert.equal(ui.canUseCallback(action, false), false, action);
     assert.equal(ui.canUseCallback(action, true), true, action);
   }

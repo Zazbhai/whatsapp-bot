@@ -81,3 +81,21 @@ test('QR option creates a phone-less session and starts linking', async () => {
   assert.equal(h.instances[0].sessions[0].phone, null);
   assert.equal(h.linking().length, 1);
 });
+test('admin can create random and custom coupons via buttons and commands', async () => {
+  const h = harness();
+  await h.callback(99, 'addcode:gen');
+  assert.equal(h.instances[0].redeemCodes.length, 2);
+  assert.equal(h.instances[0].redeemCodes[0].used, false);
+
+  await h.message(99, '/addcode VIP2026');
+  assert.equal(h.instances[0].redeemCodes.length, 3);
+  assert.equal(h.instances[0].redeemCodes[0].code, 'VIP2026');
+  assert.equal(h.instances[0].redeemCodes[0].used, false);
+});
+test('non-admin cannot create coupons', async () => {
+  const h = harness();
+  await h.callback(12, 'addcode:gen');
+  assert.equal(h.instances[0].redeemCodes.length, 1);
+  await h.message(12, '/addcode HACK');
+  assert.equal(h.instances[0].redeemCodes.length, 1);
+});

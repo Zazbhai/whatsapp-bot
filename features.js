@@ -655,6 +655,30 @@ module.exports = function setupFeatures(ctx) {
     }
     return null;
   }
+  function addCouponCode(customCode, adminInfo) {
+    const slug = sessionBotSlug();
+    const insts = loadInstances();
+    const inst = (slug && insts.find((i) => i.slug === slug)) || insts[0];
+    if (!inst) return null;
+    let code = customCode ? String(customCode).trim().toUpperCase() : makeRedeemCode(inst);
+    code = code.replace(/^\/+/, '');
+    if ((inst.redeemCodes || []).some((r) => r.code === code)) {
+      return { error: 'exists', code };
+    }
+    const record = {
+      code, bot: inst.slug, sessionId: null, phone: 'Admin Created',
+      tgUserId: adminInfo ? String(adminInfo.id) : null,
+      tgName: adminInfo ? (adminInfo.name || 'Admin') : 'Admin',
+      createdAt: now(), used: false, usedAt: null
+    };
+    inst.redeemCodes = inst.redeemCodes || [];
+    inst.redeemCodes.unshift(record);
+    inst.redeemCodes = inst.redeemCodes.slice(0, 5000);
+    saveInstances(insts);
+    persist();
+    logInstanceEvent(inst.slug, 'system', `Coupon code ${code} created manually by ${record.tgName}.`);
+    return { record };
+  }
   const fmtCode = (r) => `${r.used ? '☑️' : '🟢'} ${r.code} — +${r.phone} — ${r.tgName} (${r.tgUserId}) — ${r.createdAt.slice(0, 16).replace('T', ' ')}${r.used ? ' — used' : ''}`;
 
   async function sendCodeList(m, admin, filter = 'all', page = 0) {
@@ -748,10 +772,21 @@ module.exports = function setupFeatures(ctx) {
   }
 
   async function handleAdminCodes(m, text, isAdmin) {
-    if (!/^\/(codes|used|unused|findcode)\b/i.test(text)) return false;
+    if (!/^\/(codes|used|unused|findcode|addcode|newcode|coupon)\b/i.test(text)) return false;
     if (!isAdmin || m.chat.type !== 'private') { await tgReply(m.chat.id, '⛔ Open the admin panel in a private chat with this bot.'); return true; }
     delete tgFlow[m.chat.id];
     const [cmd, arg] = text.split(/\s+/);
+    if (/^\/(addcode|newcode|coupon)\b/i.test(cmd)) {
+      const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || m.from.username || String(m.from.id);
+      const res = addCouponCode(arg, { id: m.from.id, name });
+      if (!res) { await tgReply(m.chat.id, '⚠️ Could not create coupon. Ensure a bot is configured.', tui.adminKeyboard()); return true; }
+      if (res.error === 'exists') {
+        await tgReply(m.chat.id, `⚠️ Coupon <code>${esc(res.code)}</code> already exists! Please choose another code.`, tui.keyboard([tui.button('➕ Try another', 'addcode')], [tui.button('👑 Admin panel', 'admin')]));
+        return true;
+      }
+      await tgReply(m.chat.id, `<b>✅ Coupon created!</b>\n\n🎁 Code: <code>${esc(res.record.code)}</code>\n🟢 Status: Unused\n📅 Created: ${esc(res.record.createdAt)}\n\nUsers can redeem this coupon code.`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('➕ Add another', 'addcode')], [tui.button('👑 Admin panel', 'admin')]));
+      return true;
+    }
     if (/^\/codes/i.test(cmd)) { await sendCodeList(m, true, (arg || 'all').toLowerCase()); return true; }
     if (/^\/findcode/i.test(cmd)) {
       if (!arg) { tgFlow[m.chat.id] = { step: 'find' }; await tgReply(m.chat.id, '<b>🔎 Find a redeem code</b>\nSend a redeem code, full phone number or Telegram user ID.', tui.cancelKeyboard()); return true; }
@@ -786,6 +821,17 @@ module.exports = function setupFeatures(ctx) {
     if (data === 'cancel') return handleSessionFlow(m, '/cancel');
     if (data.startsWith('mine:')) return sendCodeList(m, false, 'all', data.split(':')[1]);
     if (data === 'admin') return tgReply(m.chat.id, '<b>👑 Admin panel</b>\n\n🎁 Manage redeem codes\n📦 Publish APK updates', tui.adminKeyboard());
+    if (data === 'addcode') return tgReply(m.chat.id, '<b>➕ Add a new coupon</b>\n\nChoose an option below, or send <code>/addcode YOUR_CODE</code> to create one instantly.', tui.addcodeKeyboard());
+    if (data === 'addcode:gen') {
+      const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || m.from.username || String(m.from.id);
+      const res = addCouponCode(null, { id: m.from.id, name });
+      if (!res) return tgReply(m.chat.id, '⚠️ Could not create coupon. Ensure a bot is configured.', tui.adminKeyboard());
+      return tgReply(m.chat.id, `<b>✅ New coupon created!</b>\n\n🎁 Code: <code>${esc(res.record.code)}</code>\n🟢 Status: Unused\n📅 Created: ${esc(res.record.createdAt)}\n\nUsers can redeem this coupon code.`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('➕ Add another', 'addcode')], [tui.button('👑 Admin panel', 'admin')]));
+    }
+    if (data === 'addcode:custom') {
+      tgFlow[m.chat.id] = { step: 'addcode' };
+      return tgReply(m.chat.id, '<b>✍️ Custom coupon code</b>\n\nSend your desired coupon code (letters, numbers, hyphens):\nExample: <code>VIP2026</code> or <code>OFFER50</code>', tui.cancelKeyboard());
+    }
     if (data.startsWith('codes:')) { const [, filter, page] = data.split(':'); return sendCodeList(m, true, filter, page); }
     if (data === 'find') return handleAdminCodes(m, '/findcode', admin);
     if (data.startsWith('detail:')) return showCode(m, data.slice(7), admin);
@@ -802,6 +848,12 @@ module.exports = function setupFeatures(ctx) {
 
   // Dashboard API for redeem codes
   app.get('/api/redeem-codes', authenticateToken, (req, res) => res.json(allCodes()));
+  app.post('/api/redeem-codes', authenticateToken, (req, res) => {
+    const resAdd = addCouponCode(req.body.code, { id: 'dashboard', name: 'Dashboard' });
+    if (!resAdd) return res.status(400).json({ error: 'No bot configured' });
+    if (resAdd.error === 'exists') return res.status(409).json({ error: 'Coupon code already exists' });
+    res.json(resAdd.record);
+  });
   app.post('/api/redeem-codes/:code/used', authenticateToken, (req, res) => {
     const r = setCodeUsed(req.params.code.toUpperCase(), req.body.used !== false);
     r ? res.json(r) : res.status(404).json({ error: 'Not found' });
@@ -824,6 +876,9 @@ module.exports = function setupFeatures(ctx) {
     }
     if (tgFlow[chatId] && tgFlow[chatId].step === 'find' && text && !text.startsWith('/') && isAdmin) {
       return handleAdminCodes(m, `/findcode ${text}`, isAdmin);
+    }
+    if (tgFlow[chatId] && tgFlow[chatId].step === 'addcode' && text && !text.startsWith('/') && isAdmin) {
+      return handleAdminCodes(m, `/addcode ${text}`, isAdmin);
     }
     if (!m.document && await handleSessionFlow(m, text)) return;
     if (await handleAdminCodes(m, text, isAdmin)) return;
