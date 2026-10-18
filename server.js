@@ -125,7 +125,7 @@ app.use((req, res, next) => {
       const targetUrl = buildWhatsAppUrl(active.phone, req.query, process.env.REDIRECT_DEFAULT_TEXT || '');
       return res.redirect(302, targetUrl);
     }
-    return res.status(200).send(renderWaitingPage({ mainDashboardPort: PORT }));
+    return res.redirect(302, '/app');
   }
   next();
 });
@@ -142,7 +142,7 @@ app.get(['/wa', '/chat', '/redirect'], (req, res) => {
     const targetUrl = buildWhatsAppUrl(active.phone, req.query, process.env.REDIRECT_DEFAULT_TEXT || '');
     return res.redirect(302, targetUrl);
   }
-  res.status(200).send(renderWaitingPage({ mainDashboardPort: PORT }));
+  res.redirect(302, '/app');
 });
 
 // Middleware
@@ -4343,7 +4343,9 @@ server.listen(PORT, () => {
         preferredSlug: 'primary'
       }),
       defaultText: process.env.REDIRECT_DEFAULT_TEXT || '',
-      mainDashboardPort: PORT
+      mainDashboardPort: PORT,
+      dataDir,
+      rootDir: __dirname
     });
   } catch (err) {
     console.error('[SYSTEM] Failed to start WhatsApp Redirect Gateway:', err.message);

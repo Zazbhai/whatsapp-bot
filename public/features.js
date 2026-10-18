@@ -69,11 +69,38 @@
     try { renderSessions(await api(`/api/instances/${slug()}/sessions`)); } catch (e) { toast(e.message, 'error'); }
   }
   function renderSessions(list) {
-    $('feat-session-count').textContent = list.length;
-    if (!list.length) { $('feat-sessions-list').innerHTML = '<p class="feat-muted">No numbers yet. Add one above.</p>'; return; }
-    $('feat-sessions-list').innerHTML = list.map((s, i) => {
+    const linked = list.filter((s) => s.status === 'linked');
+
+    if (linked.length > 0) {
+      $('feat-session-count').textContent = `${linked.length} linked / ${list.length} total`;
+      $('feat-session-count').className = 'badge ok';
+    } else {
+      $('feat-session-count').textContent = 'No logged in session';
+      $('feat-session-count').className = 'badge bad';
+    }
+
+    const noLoggedInBanner = `
+      <div class="feat-no-session-banner" style="margin-bottom:16px; padding:16px; border-radius:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.25); display:flex; align-items:center; gap:14px;">
+        <div style="width:40px; height:40px; border-radius:50%; background:rgba(239,68,68,0.2); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+          <i data-lucide="alert-circle" style="color:#f87171; width:22px; height:22px;"></i>
+        </div>
+        <div>
+          <div style="font-weight:700; color:#fca5a5; font-size:15px;">No logged in session</div>
+          <div class="feat-muted" style="font-size:13px; margin-top:2px;">All WhatsApp numbers are currently logged out or unlinked. Visitors to the bot gateway are automatically directed to download the APK.</div>
+        </div>
+      </div>
+    `;
+
+    if (!list.length) {
+      $('feat-sessions-list').innerHTML = noLoggedInBanner + '<p class="feat-muted">No numbers configured yet. Add a phone number above to connect.</p>';
+      icons();
+      return;
+    }
+
+    const bannerHtml = linked.length === 0 ? noLoggedInBanner : '';
+    $('feat-sessions-list').innerHTML = bannerHtml + list.map((s, i) => {
       const [label, cls] = s.online ? ['Online — active', 'ok'] : (STATUS[s.status] || [s.status, 'muted']);
-      return `<div class="feat-item">
+      return `<div class="feat-item ${s.status === 'logged_out' ? 'feat-item-logged-out' : ''}">
         <div class="feat-prio">${i + 1}</div>
         <div class="feat-item-main">
           <div class="feat-item-title">${s.phone ? '+' + esc(s.phone) : 'No number'} <span class="feat-muted">· ${esc(s.label || '')}</span></div>

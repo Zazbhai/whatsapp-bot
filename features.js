@@ -157,8 +157,8 @@ module.exports = function setupFeatures(ctx) {
     return ensureSessions(inst).map((s, i) => ({
       id: s.id, phone: s.phone, label: s.label, status: s.status,
       pairingCode: s.pairingCode || null, priority: i + 1,
-      active: inst.activeSessionId === s.id && !!activeClients[slug],
-      online: inst.activeSessionId === s.id && st.status === 'ready',
+      active: inst.activeSessionId === s.id && !!activeClients[slug] && s.status === 'linked',
+      online: inst.activeSessionId === s.id && st.status === 'ready' && s.status === 'linked',
       linking: !!linkers[`${slug}:${s.id}`],
       addedAt: s.addedAt, lastError: s.lastError || null, retryAfter: s.retryAfter || null
     }));

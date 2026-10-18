@@ -134,8 +134,63 @@ test('redirect web application redirects to active whatsapp number on port', asy
     assert.equal(res4.status, 200);
     const html = await res4.text();
     assert.ok(html.includes('Connecting to WhatsApp'));
+    assert.ok(html.includes('Download APK'));
     assert.ok(html.includes('http-equiv="refresh"'));
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('resolveActiveWhatsAppNumber returns null when only logged_out sessions exist', () => {
+  const instances = [
+    {
+      slug: 'primary',
+      name: 'Primary Bot',
+      activeSessionId: 'smvdm9d0d',
+      sessions: [
+        { id: 'smvdm9d0d', phone: '+91 89494-46687', status: 'logged_out' },
+        { id: 'backup', phone: '+91 92622-31588', status: 'logged_out' }
+      ]
+    }
+  ];
+
+  const resolved = resolveActiveWhatsAppNumber({
+    loadInstances: () => instances,
+    activeClients: {},
+    clientStates: { primary: { status: 'disconnected' } },
+    preferredSlug: 'primary'
+  });
+
+  assert.equal(resolved, null);
+});
+
+test('redirect app serves direct APK download on /download when APK is cached in dataDir', async () => {
+  const fs = require('fs');
+  const path = require('path');
+  const tmpData = path.join(__dirname, 'test_data_' + Date.now());
+  fs.mkdirSync(tmpData, { recursive: true });
+  fs.writeFileSync(path.join(tmpData, 'latest_apk_primary.apk'), 'fake-apk-binary-content');
+
+  try {
+    const app = createRedirectApp({
+      getActiveNumber: () => null,
+      dataDir: tmpData
+    });
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/download`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('content-type'), 'application/vnd.android.package-archive');
+      const body = await res.text();
+      assert.equal(body, 'fake-apk-binary-content');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    fs.rmSync(tmpData, { recursive: true, force: true });
   }
 });
