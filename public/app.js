@@ -1150,6 +1150,18 @@ dashboardLogoutBtn.addEventListener('click', () => {
   }
 });
 
+// AUTH PORTAL: Password Visibility Toggle
+const authPasswordToggle = document.getElementById('auth-password-toggle');
+if (authPasswordToggle && authPasswordInput) {
+  authPasswordToggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    const isPassword = authPasswordInput.type === 'password';
+    authPasswordInput.type = isPassword ? 'text' : 'password';
+    authPasswordToggle.innerHTML = `<i data-lucide="${isPassword ? 'eye-off' : 'eye'}"></i>`;
+    if (window.lucide) lucide.createIcons();
+  });
+}
+
 // AUTH PORTAL: Form Submit
 authForm.addEventListener('submit', async (e) => {
   e.preventDefault();

@@ -1161,9 +1161,14 @@ body {
 
 .input-with-icon {
   position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 
-.input-with-icon i {
+.input-with-icon i,
+.input-with-icon svg.lucide,
+.input-with-icon > svg {
   position: absolute;
   left: 15px;
   top: 50%;
@@ -1171,27 +1176,74 @@ body {
   color: var(--text-muted);
   width: 18px;
   height: 18px;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .input-with-icon input {
-  padding-left: 45px;
+  width: 100%;
+  padding-left: 45px !important;
+  box-sizing: border-box;
+}
+
+.input-with-icon.has-toggle input {
+  padding-right: 44px !important;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 6px;
+  transition: color var(--transition-speed), background var(--transition-speed);
+  z-index: 5;
+}
+
+.password-toggle-btn:hover {
+  color: var(--text-main);
+  background: rgba(125, 125, 125, 0.12);
+}
+
+.password-toggle-btn i,
+.password-toggle-btn svg {
+  position: static !important;
+  transform: none !important;
+  width: 18px;
+  height: 18px;
+  pointer-events: auto !important;
 }
 
 .sleek-form input[type="text"],
+.sleek-form input[type="password"],
+.sleek-form input[type="number"],
+.sleek-form input[type="email"],
 .sleek-form textarea,
 .sleek-form select {
   width: 100%;
+  box-sizing: border-box;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--panel-border);
   border-radius: 12px;
   padding: 12px 15px;
   color: white;
   font-family: inherit;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   transition: all var(--transition-speed);
 }
 
 .sleek-form input[type="text"]:focus,
+.sleek-form input[type="password"]:focus,
+.sleek-form input[type="number"]:focus,
+.sleek-form input[type="email"]:focus,
 .sleek-form textarea:focus,
 .sleek-form select:focus {
   outline: none;
@@ -1902,6 +1954,15 @@ body {
   box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
   text-align: center;
   animation: authCardFade 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.auth-card .form-group {
+  text-align: left;
+}
+
+.auth-card .form-group label {
+  text-align: left;
+  display: block;
 }
 
 @keyframes authCardFade {
