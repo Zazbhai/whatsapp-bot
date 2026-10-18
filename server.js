@@ -84,6 +84,10 @@ const multer = require('multer');
 
 // Server configuration
 const PORT = process.env.PORT || 3000;
+const REDIRECT_PORT = process.env.REDIRECT_PORT || 3001;
+const { resolveActiveWhatsAppNumber, startRedirectServer } = require('./redirect-server');
+let redirectServerInstance = null;
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -3401,7 +3405,8 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
     aiSmartApkEnabled: inst ? inst.aiSmartApkEnabled !== false : true,
     adminForwardNumber: inst && inst.adminForwardNumber ? inst.adminForwardNumber : '',
     blockTriggerText: inst && inst.blockTriggerText ? inst.blockTriggerText : '',
-    downloadPort: process.env.APK_PORT || '3005'
+    downloadPort: process.env.APK_PORT || '3005',
+    redirectPort: REDIRECT_PORT
   });
 });
 
@@ -4231,6 +4236,22 @@ server.listen(PORT, () => {
   console.log(`🌐 Dashboard Portal Interface: http://localhost:${PORT}`);
   console.log(`=============================================================\n`);
 
+  try {
+    redirectServerInstance = startRedirectServer({
+      port: Number(REDIRECT_PORT),
+      getActiveNumber: () => resolveActiveWhatsAppNumber({
+        loadInstances,
+        activeClients,
+        clientStates,
+        preferredSlug: 'primary'
+      }),
+      defaultText: process.env.REDIRECT_DEFAULT_TEXT || '',
+      mainDashboardPort: PORT
+    });
+  } catch (err) {
+    console.error('[SYSTEM] Failed to start WhatsApp Redirect Gateway:', err.message);
+  }
+
   // Check if FFmpeg is installed
   const { exec } = require('child_process');
   exec('ffmpeg -version', (err) => {
@@ -4248,7 +4269,14 @@ server.listen(PORT, () => {
 // =============================================================
 async function gracefulShutdown(signal) {
   console.log(`\n[SYSTEM] ${signal} received. Shutting down all WhatsApp engines gracefully...`);
-  
+
+  if (redirectServerInstance && typeof redirectServerInstance.close === 'function') {
+    try {
+      console.log('[SYSTEM] Closing WhatsApp Redirect Gateway...');
+      await redirectServerInstance.close();
+    } catch (_) {}
+  }
+
   const slugs = Object.keys(activeClients);
   await Promise.allSettled(slugs.map(async (slug) => {
     try {
@@ -4265,3 +4293,4 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+

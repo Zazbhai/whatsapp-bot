@@ -59,3 +59,12 @@ Send `/start` or `/menu` in a private chat to open the interactive menu:
   - **📦 Update APK**: APK upload instructions and dashboard links.
 
 The bot uses bold headings, copyable codes, status emojis and inline buttons. Random coupon generation and used/unused toggles have been removed in favor of clean pool-to-user delivery. Run `node --test telegram-ui.test.js telegram-flow.test.js` to verify the Telegram access rules and button flows without live credentials.
+
+## WhatsApp Auto-Redirect Gateway (Port 3001)
+
+A dedicated web service running on `http://localhost:3001` (configured via `REDIRECT_PORT` in `.env`):
+- **Instant Redirect**: When visitors open `http://localhost:3001` (or `http://your-server-ip:3001`), they are automatically redirected (HTTP 302) to `https://wa.me/<active_number>` for the WhatsApp number currently active in the bot.
+- **Failover-aware**: If the bot switches or auto-rotates to a backup number, the redirect immediately points to the new active number without browser cache locking.
+- **Pre-filled Message Support**: Forward any text message, e.g. `http://localhost:3001/?text=Hello%20Support` -> `https://wa.me/<active_number>?text=Hello%20Support`.
+- **Status API**: `GET /api/status` returns `{ ok: true, active: true, phone: "...", url: "https://wa.me/..." }`.
+- **Waiting Screen**: If no number is online or linked yet, visitors see a modern real-time connection screen that polls and automatically forwards them the moment a number becomes ready.
