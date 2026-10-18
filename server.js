@@ -159,17 +159,41 @@ function loadActiveTokens() {
   return activeTokensCache;
 }
 
-function saveActiveTokens(tokens) {
-  activeTokensCache = tokens;
+function safeWriteJson(filePath, data) {
+  const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  const bakPath = `${filePath}.bak`;
+
   try {
-    // Write asynchronously to prevent event-loop blockings!
-    fs.promises.writeFile(tokensFilePath, JSON.stringify(tokens, null, 2), 'utf8')
-      .catch(err => console.error('[SYSTEM] Async tokens write failed:', err));
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    // 1. Write to temporary file first
+    fs.writeFileSync(tempPath, content, 'utf8');
+
+    // 2. Keep backup of existing valid file
+    if (fs.existsSync(filePath)) {
+      try {
+        const stats = fs.statSync(filePath);
+        if (stats.size > 0) {
+          fs.copyFileSync(filePath, bakPath);
+        }
+      } catch (_) {}
+    }
+
+    // 3. Atomically replace target file
+    fs.renameSync(tempPath, filePath);
     return true;
   } catch (err) {
-    console.error('Failed to save active tokens:', err);
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (_) {}
+    console.error(`[CRITICAL] Failed atomic write to ${filePath}:`, err.message);
     return false;
   }
+}
+
+function saveActiveTokens(tokens) {
+  activeTokensCache = tokens;
+  return safeWriteJson(tokensFilePath, tokens);
 }
 
 // Instances Persistent Database
@@ -179,33 +203,67 @@ const instancesFilePath = path.join(dataDir, 'instances.json');
 let instancesCache = null;
 
 function loadInstances() {
-  if (instancesCache) {
+  if (instancesCache && Array.isArray(instancesCache) && instancesCache.length > 0) {
     return instancesCache;
   }
-  try {
-    if (fs.existsSync(instancesFilePath)) {
-      const data = fs.readFileSync(instancesFilePath, 'utf8');
-      instancesCache = JSON.parse(data);
-      return instancesCache;
+
+  const bakPath = `${instancesFilePath}.bak`;
+
+  const tryParse = (targetPath) => {
+    try {
+      if (!fs.existsSync(targetPath)) return null;
+      const raw = fs.readFileSync(targetPath, 'utf8').trim();
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (parsed && typeof parsed === 'object') return [parsed];
+    } catch (err) {
+      console.warn(`[WARN] Failed to parse instances database from ${targetPath}: ${err.message}`);
     }
-  } catch (err) {
-    console.error('Failed to load instances database:', err);
+    return null;
+  };
+
+  // 1. Try reading the primary instances.json file
+  let loaded = tryParse(instancesFilePath);
+
+  // 2. If primary file was empty or corrupted, automatically restore from backup!
+  if (!loaded && fs.existsSync(bakPath)) {
+    console.warn('[SYSTEM] Corrupted or empty instances.json detected! Restoring from instances.json.bak...');
+    loaded = tryParse(bakPath);
+    if (loaded) {
+      try {
+        safeWriteJson(instancesFilePath, loaded);
+        console.log('[SYSTEM] Successfully restored instances database from backup (.bak)!');
+      } catch (_) {}
+    }
   }
-  instancesCache = [];
+
+  // 3. Preserve corrupted file copy for inspection instead of silent loss
+  if (!loaded && fs.existsSync(instancesFilePath)) {
+    try {
+      const raw = fs.readFileSync(instancesFilePath, 'utf8');
+      if (raw.trim().length > 0) {
+        const corruptPath = `${instancesFilePath}.corrupt.${Date.now()}`;
+        fs.writeFileSync(corruptPath, raw, 'utf8');
+        console.warn(`[SYSTEM] Preserved corrupted instances file at: ${corruptPath}`);
+      }
+    } catch (_) {}
+  }
+
+  instancesCache = loaded || [];
   return instancesCache;
 }
 
 function saveInstances(instances) {
-  instancesCache = instances;
-  try {
-    // Write asynchronously to prevent thread blocking!
-    fs.promises.writeFile(instancesFilePath, JSON.stringify(instances, null, 2), 'utf8')
-      .catch(err => console.error('[SYSTEM] Async instances write failed:', err));
-    return true;
-  } catch (err) {
-    console.error('Failed to save instances database:', err);
-    return false;
+  if (!Array.isArray(instances) || instances.length === 0) {
+    // Safety guard: Never overwrite an existing database with an empty array if we previously loaded instances
+    if (instancesCache && instancesCache.length > 0) {
+      console.error('[CRITICAL] Prevented accidental overwrite of instances database with empty list!');
+      return false;
+    }
   }
+  instancesCache = instances;
+  return safeWriteJson(instancesFilePath, instances);
 }
 
 // Premade default persona and AI rules for every instance / session

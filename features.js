@@ -49,13 +49,48 @@ module.exports = function setupFeatures(ctx) {
   function ensureSessions(inst) {
     if (!inst) return [];
     if (!Array.isArray(inst.sessions)) {
+      inst.sessions = [];
+    }
+
+    // Auto-discover sessions that exist in authRoot (.wwebjs_auth)
+    try {
+      if (fs.existsSync(authRoot)) {
+        const files = fs.readdirSync(authRoot);
+        const prefix = `session-session_${inst.slug}`;
+        for (const f of files) {
+          if (f === prefix) {
+            let def = inst.sessions.find((x) => x.id === 'default');
+            if (!def) {
+              inst.sessions.unshift({
+                id: 'default', phone: '', label: 'Main number',
+                status: 'linked', addedAt: now()
+              });
+            } else if (def.status === 'pending') {
+              def.status = 'linked';
+            }
+          } else if (f.startsWith(`${prefix}_`)) {
+            const sid = f.slice(`${prefix}_`.length);
+            if (sid && !inst.sessions.some((x) => x.id === sid)) {
+              inst.sessions.push({
+                id: sid, phone: '', label: `Session ${sid}`,
+                status: 'linked', addedAt: now()
+              });
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (inst.sessions.length === 0) {
       const legacyLinked = fs.existsSync(path.join(authRoot, `session-session_${inst.slug}`));
-      inst.sessions = [{
+      inst.sessions.push({
         id: 'default', phone: '', label: 'Main number',
         status: legacyLinked ? 'linked' : 'pending', addedAt: now()
-      }];
-      inst.activeSessionId = 'default';
-      persist();
+      });
+    }
+
+    if (!inst.activeSessionId || !inst.sessions.some((x) => x.id === inst.activeSessionId)) {
+      inst.activeSessionId = inst.sessions[0].id;
     }
     return inst.sessions;
   }

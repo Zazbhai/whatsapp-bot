@@ -122,3 +122,73 @@ test('a single linked number in cooldown is still picked instead of reporting no
   assert.equal(pickAutoSession(two, 'a', now).id, 'b');
   assert.equal(pickAutoSession([{ id: 'p', status: 'pending', phone: '1' }], 'p', now), null);
 });
+
+test('corrupted instances.json with unexpected end of JSON input automatically restores from backup', () => {
+  const path = require('node:path');
+  const tmpDir = path.join(__dirname, 'scratch_test_' + Date.now());
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const mainFile = path.join(tmpDir, 'instances.json');
+  const bakFile = path.join(tmpDir, 'instances.json.bak');
+  try {
+    fs.writeFileSync(mainFile, '{"broken":', 'utf8');
+    const validData = [{ id: 'inst_1', slug: 'primary', sessions: [{ id: 'default', phone: '918949446687', status: 'linked' }] }];
+    fs.writeFileSync(bakFile, JSON.stringify(validData), 'utf8');
+
+    const tryParse = (p) => {
+      try {
+        const raw = fs.readFileSync(p, 'utf8').trim();
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch (_) { return null; }
+    };
+
+    let loaded = tryParse(mainFile);
+    if (!loaded && fs.existsSync(bakFile)) {
+      loaded = tryParse(bakFile);
+      if (loaded) {
+        fs.copyFileSync(bakFile, mainFile);
+      }
+    }
+
+    assert.equal(loaded?.[0]?.slug, 'primary');
+    assert.equal(loaded?.[0]?.sessions?.[0]?.phone, '918949446687');
+    assert.deepEqual(JSON.parse(fs.readFileSync(mainFile, 'utf8')), validData);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('ensureSessions discovers and recovers linked sessions from authRoot (.wwebjs_auth)', () => {
+  const path = require('node:path');
+  const tmpAuth = path.join(__dirname, 'scratch_auth_' + Date.now());
+  fs.mkdirSync(path.join(tmpAuth, 'session-session_primary'), { recursive: true });
+  fs.mkdirSync(path.join(tmpAuth, 'session-session_primary_smv2nvup2'), { recursive: true });
+
+  try {
+    const inst = { slug: 'primary', sessions: [] };
+    const authRoot = tmpAuth;
+    const now = () => new Date().toISOString();
+
+    const files = fs.readdirSync(authRoot);
+    const prefix = `session-session_${inst.slug}`;
+    for (const f of files) {
+      if (f === prefix) {
+        if (!inst.sessions.some(x => x.id === 'default')) {
+          inst.sessions.unshift({ id: 'default', phone: '', label: 'Main number', status: 'linked', addedAt: now() });
+        }
+      } else if (f.startsWith(`${prefix}_`)) {
+        const sid = f.slice(`${prefix}_`.length);
+        if (sid && !inst.sessions.some(x => x.id === sid)) {
+          inst.sessions.push({ id: sid, phone: '', label: `Session ${sid}`, status: 'linked', addedAt: now() });
+        }
+      }
+    }
+
+    assert.equal(inst.sessions.length, 2);
+    assert.ok(inst.sessions.some(s => s.id === 'default' && s.status === 'linked'));
+    assert.ok(inst.sessions.some(s => s.id === 'smv2nvup2' && s.status === 'linked'));
+  } finally {
+    fs.rmSync(tmpAuth, { recursive: true, force: true });
+  }
+});
+

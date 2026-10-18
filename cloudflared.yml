@@ -1,0 +1,35 @@
+# ==============================================================================
+# Cloudflare Named Tunnel Multi-Ingress Configuration
+# ==============================================================================
+# If you have your own domain on Cloudflare, you can route all bot services:
+# 1. wa.yourdomain.com      -> Port 3001 (WhatsApp Auto-Redirect to active number)
+# 2. bot.yourdomain.com     -> Port 3000 (Main Admin Dashboard & Web Store)
+# 3. apk.yourdomain.com     -> Port 3005 (Direct APK Download Server)
+#
+# Steps:
+# 1. cloudflared tunnel login
+# 2. cloudflared tunnel create whatsapp-tunnel
+# 3. Put your Tunnel UUID below and copy credentials file
+# 4. cloudflared tunnel route dns whatsapp-tunnel wa.yourdomain.com
+# 5. cloudflared tunnel route dns whatsapp-tunnel bot.yourdomain.com
+# 6. cloudflared tunnel run whatsapp-tunnel
+# ==============================================================================
+
+tunnel: YOUR-TUNNEL-UUID
+credentials-file: /root/.cloudflared/YOUR-TUNNEL-UUID.json
+
+ingress:
+  # WhatsApp Auto-Redirect Gateway (Opens active WhatsApp chat)
+  - hostname: wa.yourdomain.com
+    service: http://127.0.0.1:3001
+
+  # Main Admin Dashboard & Store Page
+  - hostname: bot.yourdomain.com
+    service: http://127.0.0.1:3000
+
+  # APK Direct Download Server
+  - hostname: apk.yourdomain.com
+    service: http://127.0.0.1:3005
+
+  # Catch-all 404 rule (Required by Cloudflare)
+  - service: http_status:404
