@@ -385,9 +385,15 @@ function createRedirectApp({
     res.status(200).send(renderWaitingPage({ mainDashboardPort }));
   };
 
-  app.get('/', redirectHandler);
-  app.get('/wa', redirectHandler);
-  app.get('/chat', redirectHandler);
+  // Forward store / APK download requests to the main dashboard port (3000)
+  app.use(['/app', '/store-media'], (req, res) => {
+    const host = req.headers.host ? req.headers.host.split(':')[0] : 'localhost';
+    const targetUrl = `http://${host}:${mainDashboardPort}${req.originalUrl}`;
+    res.redirect(302, targetUrl);
+  });
+
+  // Catch-all route: redirects to active WhatsApp number or shows waiting page
+  app.get('*', redirectHandler);
 
   return app;
 }

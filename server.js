@@ -85,7 +85,12 @@ const multer = require('multer');
 // Server configuration
 const PORT = process.env.PORT || 3000;
 const REDIRECT_PORT = process.env.REDIRECT_PORT || 3001;
-const { resolveActiveWhatsAppNumber, startRedirectServer } = require('./redirect-server');
+const {
+  resolveActiveWhatsAppNumber,
+  startRedirectServer,
+  buildWhatsAppUrl,
+  renderWaitingPage
+} = require('./redirect-server');
 let redirectServerInstance = null;
 
 const app = express();
@@ -104,6 +109,40 @@ server.on('error', (err) => {
   } else {
     console.error('[SYSTEM] Server error:', err.message);
   }
+});
+
+// Auto-detect wa.* or chat.* subdomains and redirect to active WhatsApp number
+app.use((req, res, next) => {
+  const host = (req.hostname || req.headers.host || '').toLowerCase();
+  if (host.startsWith('wa.') || host.startsWith('chat.')) {
+    const active = resolveActiveWhatsAppNumber({
+      loadInstances,
+      activeClients,
+      clientStates,
+      preferredSlug: 'primary'
+    });
+    if (active && active.phone) {
+      const targetUrl = buildWhatsAppUrl(active.phone, req.query, process.env.REDIRECT_DEFAULT_TEXT || '');
+      return res.redirect(302, targetUrl);
+    }
+    return res.status(200).send(renderWaitingPage({ mainDashboardPort: PORT }));
+  }
+  next();
+});
+
+// Dedicated redirect paths on main port 3000: /wa, /chat, /redirect
+app.get(['/wa', '/chat', '/redirect'], (req, res) => {
+  const active = resolveActiveWhatsAppNumber({
+    loadInstances,
+    activeClients,
+    clientStates,
+    preferredSlug: 'primary'
+  });
+  if (active && active.phone) {
+    const targetUrl = buildWhatsAppUrl(active.phone, req.query, process.env.REDIRECT_DEFAULT_TEXT || '');
+    return res.redirect(302, targetUrl);
+  }
+  res.status(200).send(renderWaitingPage({ mainDashboardPort: PORT }));
 });
 
 // Middleware
