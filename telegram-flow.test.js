@@ -26,26 +26,29 @@ function harness() {
     persist() {}, logInstanceEvent() {}, storeLink: () => 'https://example.com/app'
   };
   vm.createContext(context);
-  vm.runInContext(source.slice(start, end) + '\nthis.handlers = { handleTelegramCallback, handleTelegramMessage, checkPendingCouponDeliveries };', context);
+  vm.runInContext(source.slice(start, end) + '\nthis.handlers = { handleTelegramCallback, handleTelegramMessage, checkPendingCouponDeliveries, handleSessionLoggedOut };', context);
   const message = (id, text, type = 'private') => ({ from: { id, first_name: 'Alice' }, chat: { id, type }, text });
   return { calls, instances, saves: () => saves, linking: () => linking,
     message: (id, text, type) => context.handlers.handleTelegramMessage(message(id, text, type)),
     callback: (id, data, type) => context.handlers.handleTelegramCallback({ id: 'query', from: { id, first_name: 'Alice' }, message: message(id, '', type), data }),
     checkPendingCoupons: () => context.handlers.checkPendingCouponDeliveries(),
+    handleSessionLoggedOut: (slug, s, reason) => context.handlers.handleSessionLoggedOut(slug, s, reason),
     ctx: context.ctx
   };
 }
-test('forged mark-used callback cannot alter admin register', async () => {
-  const h = harness(); await h.callback(12, 'used:RDM-ABCDEFGH');
-  assert.equal(h.instances[0].redeemCodes[0].used, false);
-  assert.equal(h.saves(), 0);
+test('non-admin cannot trigger admin coupon callbacks', async () => {
+  const h = harness(); await h.callback(12, 'addcoupon');
+  assert.equal(h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 12).length, 0);
 });
-test('admin mark-used and unused buttons persist the chosen state', async () => {
-  const h = harness(); await h.callback(99, 'used:RDM-ABCDEFGH');
-  assert.equal(h.instances[0].redeemCodes[0].used, true);
-  await h.callback(99, 'unused:RDM-ABCDEFGH');
-  assert.equal(h.instances[0].redeemCodes[0].used, false);
-  assert.equal(h.saves(), 2);
+test('admin coupon inventory displays app and status without used/unused filters', async () => {
+  const h = harness();
+  await h.message(99, '/addcoupon Blinkit BLINK50');
+  await h.callback(99, 'coupons:0');
+  const last = h.calls.filter((c) => c.method === 'sendMessage').at(-1);
+  assert.equal(last.text.includes('Blinkit'), true);
+  assert.equal(last.text.includes('BLINK50'), true);
+  assert.equal(last.text.includes('Available in pool'), true);
+  assert.equal(last.text.includes('used'), false);
 });
 test('another user cannot get code details from a copied button', async () => {
   const h = harness(); await h.callback(13, 'detail:RDM-ABCDEFGH');
@@ -83,30 +86,31 @@ test('QR option creates a phone-less session and starts linking', async () => {
   assert.equal(h.instances[0].sessions[0].phone, null);
   assert.equal(h.linking().length, 1);
 });
-test('admin can create random and custom coupons via buttons and commands', async () => {
+test('admin can configure coupon app and code via buttons and commands', async () => {
   const h = harness();
-  await h.callback(99, 'addcode:gen');
-  assert.equal(h.instances[0].redeemCodes.length, 2);
-  assert.equal(h.instances[0].redeemCodes[0].used, false);
+  // Admin clicks addcoupon, selects Blinkit app, and sends code
+  await h.callback(99, 'addc:app:Blinkit');
+  await h.message(99, 'BLINKIT50');
+  assert.equal(h.instances[0].redeemCodes[0].app, 'Blinkit');
+  assert.equal(h.instances[0].redeemCodes[0].code, 'BLINKIT50');
 
-  await h.message(99, '/addcode VIP2026');
-  assert.equal(h.instances[0].redeemCodes.length, 3);
-  assert.equal(h.instances[0].redeemCodes[0].code, 'VIP2026');
-  assert.equal(h.instances[0].redeemCodes[0].used, false);
+  // Admin adds via command with app and code
+  await h.message(99, '/addcoupon BigBasket BB2026');
+  assert.equal(h.instances[0].redeemCodes[0].app, 'BigBasket');
+  assert.equal(h.instances[0].redeemCodes[0].code, 'BB2026');
 });
 test('non-admin cannot create coupons', async () => {
   const h = harness();
-  await h.callback(12, 'addcode:gen');
+  await h.callback(12, 'addc:app:Blinkit');
   assert.equal(h.instances[0].redeemCodes.length, 1);
-  await h.message(12, '/addcode HACK');
+  await h.message(12, '/addcoupon Blinkit HACK');
   assert.equal(h.instances[0].redeemCodes.length, 1);
 });
-test('session linking does not give random codes immediately, delivers admin-added coupon after 6h', async () => {
+test('session linking delivers preferred app coupon after 6h without random codes', async () => {
   const h = harness();
-  // Admin adds a coupon to the pool
-  await h.message(99, '/addcode PROMO6H');
-  assert.equal(h.instances[0].redeemCodes[0].code, 'PROMO6H');
-  assert.equal(h.instances[0].redeemCodes[0].assignedSessionId, undefined);
+  // Admin adds Blinkit and Swiggy coupons to the pool
+  await h.message(99, '/addcoupon Blinkit BLINKIT100');
+  await h.message(99, '/addcoupon Swiggy SWIGGY50');
 
   // User links a session
   const session = { id: 'sess_1', phone: '919876543210', status: 'linked', tgOwner: { id: '12', chatId: 12, name: 'Alice' } };
@@ -118,10 +122,9 @@ test('session linking does not give random codes immediately, delivers admin-add
   assert.equal(session.couponDelivered, false);
   assert.equal(typeof session.couponDeliveryAt, 'number');
 
-  // 2. Verifies user got the 6 hours message
-  const userMsg = h.calls.filter((c) => c.chat_id === 12).at(-1);
-  assert.equal(userMsg.text.includes('delivered after 6 hours'), true);
-  assert.equal(userMsg.text.includes('RDM-'), false);
+  // 2. User selects Blinkit preference
+  await h.callback(12, 'prefapp:Blinkit');
+  assert.equal(session.preferredApp, 'Blinkit');
 
   // 3. Before 6h, delivery check should not deliver anything
   await h.checkPendingCoupons();
@@ -132,9 +135,126 @@ test('session linking does not give random codes immediately, delivers admin-add
   session.couponDeliveryAt = Date.now() - 1000;
   await h.checkPendingCoupons();
 
-  // 5. Verifies admin-added coupon was delivered, not random code!
+  // 5. Verifies preferred Blinkit coupon was delivered, not random code!
   assert.equal(session.couponDelivered, true);
-  assert.equal(session.redeemCode, 'PROMO6H');
+  assert.equal(session.redeemCode, 'BLINKIT100');
+  assert.equal(session.couponApp, 'Blinkit');
   const deliveredMsg = h.calls.filter((c) => c.chat_id === 12).at(-1);
-  assert.equal(deliveredMsg.text.includes('PROMO6H'), true);
+  assert.equal(deliveredMsg.text.includes('Blinkit'), true);
+  assert.equal(deliveredMsg.text.includes('BLINKIT100'), true);
 });
+
+test('once a user logs in with a number, the same number cannot be logged in again', async () => {
+  const h = harness();
+  // 1. Session is linked with phone 919876543210
+  const session = { id: 's_linked', phone: '919876543210', status: 'linked', tgOwner: { id: '12', chatId: 12, name: 'Alice' } };
+  h.instances[0].sessions.push(session);
+
+  // 2. Another or same user attempts to add session with the same number
+  await h.callback(13, 'add:code');
+  await h.message(13, '919876543210');
+
+  const lastCall = h.calls.filter((c) => c.chat_id === 13).at(-1);
+  assert.equal(lastCall.text.includes('Number already used'), true);
+  assert.equal(lastCall.text.includes('can only be linked once'), true);
+
+  // Ensure no new session was added to linking list
+  assert.equal(h.instances[0].sessions.filter((s) => s.id !== 's_linked').length, 0);
+});
+
+test('a number that previously logged out cannot be logged in again', async () => {
+  const h = harness();
+  // Session was previously logged in and is now logged out
+  const session = { id: 's_loggedout', phone: '919888888888', status: 'logged_out', everLinked: true };
+  h.instances[0].sessions.push(session);
+
+  await h.callback(14, 'add:code');
+  await h.message(14, '919888888888');
+
+  const lastCall = h.calls.filter((c) => c.chat_id === 14).at(-1);
+  assert.equal(lastCall.text.includes('Number already used'), true);
+  assert.equal(h.instances[0].sessions.filter((s) => s.id !== 's_loggedout').length, 0);
+});
+
+test('findcode searching for an app returns only that app without matching coupons with empty phone', async () => {
+  const h = harness();
+  await h.message(99, '/addcoupon Zepto ZEPTO50');
+  await h.message(99, '/addcoupon Blinkit BLINKIT20');
+  await h.message(99, '/findcode Zepto');
+
+  const lastCall = h.calls.filter((c) => c.chat_id === 99).at(-1);
+  assert.equal(lastCall.text.includes('ZEPTO50'), true);
+  assert.equal(lastCall.text.includes('BLINKIT20'), false);
+});
+
+test('cross-instance coupon fallback delivers coupons when the primary instance is out', async () => {
+  const h = harness();
+  // Instance 2 has the coupon
+  h.instances.push({
+    slug: 'backup-bot',
+    sessions: [],
+    redeemCodes: [
+      { code: 'BIGBASKET99', app: 'BigBasket', isAdminAdded: true, deliveredTo: null, assignedSessionId: null, createdAt: '2026-10-08', used: false }
+    ]
+  });
+
+  const session = { id: 's_cross', phone: '919111111111', status: 'linked', tgOwner: { id: '77', chatId: 77, name: 'Bob' }, preferredApp: 'BigBasket' };
+  h.instances[0].sessions.push(session);
+  h.ctx.onSessionLinked('main', session);
+
+  session.couponDeliveryAt = Date.now() - 1000;
+  await h.checkPendingCoupons();
+
+  assert.equal(session.couponDelivered, true);
+  assert.equal(session.redeemCode, 'BIGBASKET99');
+  assert.equal(session.couponApp, 'BigBasket');
+  const userMsg = h.calls.filter((c) => c.chat_id === 77).at(-1);
+  assert.equal(userMsg.text.includes('BIGBASKET99'), true);
+});
+
+test('when session logs out, pending coupon is cancelled and user receives Telegram relogin message', async () => {
+  const h = harness();
+  const session = {
+    id: 's_user1',
+    phone: '919555555555',
+    status: 'linked',
+    tgOwner: { id: '55', chatId: 55, name: 'Charlie' }
+  };
+  h.instances[0].sessions.push(session);
+  h.ctx.onSessionLinked('main', session);
+
+  // Scheduled coupon is pending
+  assert.equal(session.couponDelivered, false);
+  assert.equal(typeof session.couponDeliveryAt, 'number');
+
+  // Session logs out
+  h.handleSessionLoggedOut('main', session, 'UNPAIRED');
+
+  // 1. Coupon is rejected and cancelled
+  assert.equal(session.couponCancelled, true);
+  assert.equal(session.couponDelivered, true);
+  assert.equal(session.couponDeliveryAt, null);
+
+  // 2. User received logout and relogin notification
+  const userMsg = h.calls.filter((c) => c.chat_id === 55).at(-1);
+  assert.ok(userMsg);
+  assert.equal(userMsg.text.includes('logged out or expired'), true);
+  assert.equal(userMsg.text.includes('re-login and reconnect'), true);
+  assert.equal(userMsg.text.includes('Pending coupon rejected'), true);
+
+  // 3. User can re-login with the same number after logout
+  session.status = 'logged_out';
+  await h.callback(55, 'add:code');
+  await h.message(55, '919555555555');
+
+  assert.equal(h.calls.filter((c) => c.chat_id === 55).some((c) => c.text?.includes('Preparing session')), true);
+
+  // But another user trying to claim the same number is blocked
+  await h.callback(999, 'add:code');
+  await h.message(999, '919555555555');
+  const blockedCall = h.calls.filter((c) => c.chat_id === 999).at(-1);
+  assert.equal(blockedCall.text.includes('Number already used'), true);
+});
+
+
+

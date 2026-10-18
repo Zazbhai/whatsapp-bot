@@ -14,6 +14,11 @@ function buildCompatibleUtils(loadUtils) {
   );
   // MediaData.__x_id collides with the outgoing Msg's own id.
   source = source.replace('if (botOptions) {', 'if (message.__x_id) delete message.__x_id;\n        if (botOptions) {');
+  // WhatsApp removed canCheckStatusRankingPosterGating in WAWebStatusGatingUtils
+  source = source.replaceAll(
+    'window.require(\'WAWebStatusGatingUtils\').canCheckStatusRankingPosterGating()',
+    '(typeof window.require(\'WAWebStatusGatingUtils\')?.canCheckStatusRankingPosterGating === \'function\' ? window.require(\'WAWebStatusGatingUtils\').canCheckStatusRankingPosterGating() : false)'
+  );
   return new Function(`return (${source});`)();
 }
 
@@ -59,6 +64,31 @@ function patchStructures(load = (name) => require(`whatsapp-web.js/src/structure
   }
 }
 
+function patchClient(loadClient = () => require('whatsapp-web.js/src/Client')) {
+  let Client;
+  try { Client = loadClient(); } catch (_) { return; }
+  const proto = Client && Client.prototype;
+  if (!proto || typeof proto.inject !== 'function' || proto.inject.__navCompat) return;
+  const originalInject = proto.inject;
+  const patchedInject = async function () {
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await originalInject.call(this);
+      } catch (err) {
+        const isNavError = /Execution context was destroyed|most likely because of a navigation/i.test(err?.message || String(err));
+        if (isNavError && attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+        throw err;
+      }
+    }
+  };
+  patchedInject.__navCompat = true;
+  proto.inject = patchedInject;
+}
+
 function installWhatsAppCompatibility() {
   const utilsPath = require.resolve('whatsapp-web.js/src/util/Injected/Utils');
   const utils = require(utilsPath);
@@ -66,6 +96,7 @@ function installWhatsAppCompatibility() {
   if (typeof utils.LoadUtils !== 'function') throw new Error('Unsupported WhatsApp utility loader');
   utils.LoadUtils = buildCompatibleUtils(utils.LoadUtils);
   patchStructures();
+  patchClient();
 }
 
-module.exports = { buildCompatibleUtils, installWhatsAppCompatibility, normalizeStructureData, patchStructures };
+module.exports = { buildCompatibleUtils, installWhatsAppCompatibility, normalizeStructureData, patchStructures, patchClient };

@@ -64,7 +64,12 @@ module.exports = function setupFeatures(ctx) {
     const inst = getInst(slug);
     const s = inst && ensureSessions(inst).find((x) => x.id === id);
     if (!s) return null;
+    const oldStatus = s.status;
     Object.assign(s, patch);
+    if (patch.status === 'logged_out' && (oldStatus !== 'logged_out' || !s.loggedOutNotified)) {
+      s.loggedOutNotified = true;
+      if (typeof handleSessionLoggedOut === 'function') handleSessionLoggedOut(slug, s, patch.lastError);
+    }
     persist();
     emitSessions(slug);
     return s;
@@ -156,7 +161,20 @@ module.exports = function setupFeatures(ctx) {
 
   function onSessionReady(slug, s, client) {
     const wid = client && client.info && client.info.wid ? client.info.wid.user : '';
-    markSession(slug, s.id, { status: 'linked', pairingCode: null, phone: s.phone || wid, lastError: null, retryAfter: 0 });
+    const resolvedPhone = digits(s.phone || wid);
+    if (resolvedPhone && isNumberAlreadyLoggedIn(resolvedPhone, s.id)) {
+      logInstanceEvent(slug, 'system', `Rejected duplicate login for +${resolvedPhone}. Number already logged in previously.`);
+      markSession(slug, s.id, { status: 'logged_out', pairingCode: null, lastError: 'Number already logged in previously' });
+      emitSessions(slug);
+      if (client) { try { client.destroy(); } catch (_) {} }
+      if (s.tgOwner && s.tgOwner.chatId) {
+        tgReply(s.tgOwner.chatId, `⚠️ <b>Login rejected: Number already used</b>\n\nYour WhatsApp number <code>+${esc(resolvedPhone)}</code> has already been logged in previously.\n\nEach phone number can only be linked once. This session has been disconnected.`, tui.keyboard([tui.button('📱 Try with another number', 'add')], [tui.button('🏠 Main menu', 'home')]));
+      }
+      return;
+    }
+    s.everLinked = true;
+    markSession(slug, s.id, { status: 'linked', pairingCode: null, phone: resolvedPhone || s.phone, lastError: null, retryAfter: 0 });
+    recordNumberLoggedIn(slug, resolvedPhone);
     setActive(slug, s.id);
     emitSessions(slug);
     ctx.onSessionLinked && ctx.onSessionLinked(slug, s);
@@ -226,6 +244,9 @@ module.exports = function setupFeatures(ctx) {
     const timeout = setTimeout(() => {
       logInstanceEvent(slug, 'system', `Linking +${s.phone} timed out. Click "New code" to try again.`);
       markSession(slug, s.id, { status: 'pending', pairingCode: null });
+      if (s.tgOwner && s.tgOwner.chatId && typeof tgReply === 'function') {
+        tgReply(s.tgOwner.chatId, `⏱ <b>Pairing code expired</b>\n\nThe 8-character pairing code for <code>+${esc(s.phone)}</code> has expired.\n\nPlease tap <b>📱 Add session</b> to request a fresh code.`, tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
+      }
       stop();
     }, 10 * 60 * 1000);
     c.on('code', (code) => emitCode(slug, s, code));
@@ -233,8 +254,20 @@ module.exports = function setupFeatures(ctx) {
     c.on('ready', () => {
       clearTimeout(timeout);
       const wid = c.info && c.info.wid ? c.info.wid.user : '';
-      markSession(slug, s.id, { status: 'linked', pairingCode: null, phone: s.phone || wid });
-      logInstanceEvent(slug, 'whatsapp', `Backup number +${s.phone} linked and on standby.`);
+      const resolvedPhone = digits(s.phone || wid);
+      if (resolvedPhone && isNumberAlreadyLoggedIn(resolvedPhone, s.id)) {
+        logInstanceEvent(slug, 'system', `Rejected duplicate login for +${resolvedPhone}. Number already logged in previously.`);
+        markSession(slug, s.id, { status: 'logged_out', pairingCode: null, lastError: 'Number already logged in previously' });
+        stop();
+        if (s.tgOwner && s.tgOwner.chatId) {
+          tgReply(s.tgOwner.chatId, `⚠️ <b>Login rejected: Number already used</b>\n\nYour WhatsApp number <code>+${esc(resolvedPhone)}</code> has already been logged in previously.\n\nEach phone number can only be linked once. This session has been disconnected.`, tui.keyboard([tui.button('📱 Try with another number', 'add')], [tui.button('🏠 Main menu', 'home')]));
+        }
+        return;
+      }
+      s.everLinked = true;
+      markSession(slug, s.id, { status: 'linked', pairingCode: null, phone: resolvedPhone || s.phone });
+      recordNumberLoggedIn(slug, resolvedPhone);
+      logInstanceEvent(slug, 'whatsapp', `Backup number +${resolvedPhone || s.phone} linked and on standby.`);
       ctx.onSessionLinked && ctx.onSessionLinked(slug, s);
       setTimeout(async () => {
         await stop();
@@ -270,20 +303,28 @@ module.exports = function setupFeatures(ctx) {
     else await restartMainWith(slug, s.id);
   }
 
-  function addSession(slug, phone, label) {
+  function addSession(slug, phone, label, tgOwner) {
     const inst = getInst(slug);
     const list = ensureSessions(inst);
-    let s = list.find((x) => x.phone === phone);
-    if (!s) {
-      // Reuse the empty legacy slot instead of creating a duplicate
-      const empty = list.find((x) => !x.phone && x.status !== 'linked');
+    let s = phone ? list.find((x) => x.phone === phone) : null;
+    if (s && s.status === 'logged_out') {
+      s.status = 'pending';
+      s.pairingCode = null;
+      s.couponCancelled = false;
+      s.couponDelivered = false;
+      s.couponDeliveryAt = null;
+      s.loggedOutNotified = false;
+      if (label) s.label = label;
+      if (tgOwner) s.tgOwner = tgOwner;
+    } else if (!s) {
+      // Reuse the empty legacy default slot instead of creating a duplicate
+      const empty = list.find((x) => x.id === 'default' && !x.phone && x.status !== 'linked');
       if (empty) { empty.phone = phone; empty.label = label || empty.label; s = empty; }
       else {
         s = { id: 's' + Date.now().toString(36), phone, label: label || `Number ${list.length + 1}`, status: 'pending', addedAt: now() };
         list.push(s);
       }
     }
-    if (s.status === 'logged_out') s.status = 'pending';
     persist();
     return s;
   }
@@ -313,8 +354,9 @@ module.exports = function setupFeatures(ctx) {
         setActive(slug, target.id);
         Promise.resolve(initClient(slug, target.id)).catch((e) => logInstanceEvent(slug, 'error', `Auto-select failed: ${e.message}`));
       } else {
-        logInstanceEvent(slug, 'system', `Pairing for ${current.phone ? '+' + current.phone : current.label} did not finish. Automatically switched back to ${name}.`);
-        markSession(slug, current.id, { status: 'pending', pairingCode: null });
+        const prevLabel = current?.phone ? '+' + current.phone : (current?.label || 'previous session');
+        logInstanceEvent(slug, 'system', `Pairing for ${prevLabel} did not finish. Automatically switched back to ${name}.`);
+        if (current) markSession(slug, current.id, { status: 'pending', pairingCode: null });
         restartMainWith(slug, target.id).catch((e) => logInstanceEvent(slug, 'error', `Auto-select failed: ${e.message}`));
       }
     }
@@ -333,6 +375,9 @@ module.exports = function setupFeatures(ctx) {
     const phone = digits(req.body.phone);
     if (!getInst(slug)) return res.status(404).json({ error: 'Bot not found.' });
     if (phone.length < 8) return res.status(400).json({ error: 'Enter the full number with country code, e.g. 919876543210.' });
+    if (isNumberAlreadyLoggedIn(phone)) {
+      return res.status(400).json({ error: `Phone number +${phone} has already been logged in previously. Each number can only be linked once.` });
+    }
     const s = addSession(slug, phone, (req.body.label || '').trim());
     try {
       const wait = waitForCode(slug, s.id);
@@ -620,13 +665,6 @@ module.exports = function setupFeatures(ctx) {
     const list = loadInstances();
     return (want && list.find((i) => i.slug === want) ? want : (list[0] && list[0].slug)) || null;
   };
-  function makeRedeemCode(inst) {
-    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let c;
-    do { c = 'RDM-' + Array.from({ length: 8 }, () => abc[Math.floor(Math.random() * abc.length)]).join(''); }
-    while ((inst.redeemCodes || []).some((r) => r.code === c));
-    return c;
-  }
   const COUPON_DELAY_HOURS = 6;
   const getCouponDelayMs = () => {
     if (process.env.COUPON_DELIVERY_DELAY_MS !== undefined) {
@@ -635,19 +673,121 @@ module.exports = function setupFeatures(ctx) {
     return COUPON_DELAY_HOURS * 60 * 60 * 1000;
   };
 
+  function isNumberAlreadyLoggedIn(phone, excludeSessionId, allowOwnerId) {
+    if (!phone) return false;
+    const d = digits(phone);
+    if (d.length < 7) return false;
+    const insts = loadInstances();
+    for (const inst of insts) {
+      if ((inst.linkedNumbers || []).some((n) => digits(n) === d)) {
+        const ownedLoggedOut = (inst.sessions || []).some((s) => s.phone && digits(s.phone) === d && s.tgOwner && String(s.tgOwner.id) === String(allowOwnerId) && s.status === 'logged_out');
+        if (!ownedLoggedOut) return true;
+      }
+      for (const s of (inst.sessions || [])) {
+        if (excludeSessionId && s.id === excludeSessionId) continue;
+        if (s.phone && digits(s.phone) === d) {
+          if (s.status === 'linked' || s.status === 'pairing') {
+            return true;
+          }
+          if (s.status === 'logged_out' || s.everLinked) {
+            if (allowOwnerId && s.tgOwner && String(s.tgOwner.id) === String(allowOwnerId)) {
+              continue;
+            }
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  function recordNumberLoggedIn(slug, phone) {
+    if (!phone) return;
+    const d = digits(phone);
+    if (d.length < 7) return;
+    const insts = loadInstances();
+    const inst = (slug && insts.find((i) => i.slug === slug)) || insts[0];
+    if (inst) {
+      inst.linkedNumbers = inst.linkedNumbers || [];
+      if (!inst.linkedNumbers.includes(d)) {
+        inst.linkedNumbers.push(d);
+        saveInstances(insts);
+        persist();
+      }
+    }
+  }
+
   ctx.onSessionLinked = (slug, s) => {
     const inst = getInst(slug);
     if (!inst || !s.tgOwner || s.redeemCode || s.couponDeliveryAt) return;
     const sess = ensureSessions(inst).find((x) => x.id === s.id) || s;
+    sess.everLinked = true;
+    if (sess.phone) recordNumberLoggedIn(slug, sess.phone);
     const delayMs = getCouponDelayMs();
     sess.couponDeliveryAt = Date.now() + delayMs;
     sess.couponDelivered = false;
     persist();
-    logInstanceEvent(slug, 'system', `Session linked for ${s.tgOwner.name} (+${sess.phone}). Coupon code delivery scheduled after 6 hours.`);
-    tgReply(s.tgOwner.chatId, `<b>✅ Session added successfully!</b>\n\n📱 +${esc(sess.phone)} is now connected to our bot server.\n\n⏳ <b>Your coupon code will be delivered after 6 hours.</b>\nPlease keep your session active. Thank you!`, tui.homeKeyboard(tgAdmins().includes(String(s.tgOwner.id))));
-    tgAdmins().forEach((a) => tgReply(a, `<b>🆕 New session connected</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(sess.phone)}\n⏳ Coupon will be delivered after 6 hours from the admin-added coupon pool.`, tui.keyboard([tui.button('➕ Add coupon to pool', 'addcode')], [tui.button('👑 Admin panel', 'admin')])));
+    logInstanceEvent(slug, 'system', `Session linked for ${s.tgOwner.name} (+${sess.phone}). Coupon delivery scheduled after 6 hours.`);
+    tgReply(s.tgOwner.chatId,
+      `<b>✅ Session added successfully!</b>\n\n📱 +${esc(sess.phone)} is now connected to our bot server.\n\n⏳ <b>Your coupon code will be delivered after 6 hours.</b>\nPlease keep your session active.\n\nWhich app coupon would you prefer?`,
+      tui.userPrefAppKeyboard()
+    );
+    tgAdmins().forEach((a) => tgReply(a,
+      `<b>🆕 New session connected</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(sess.phone)}\n⏳ Coupon will be delivered after 6 hours from the admin-added coupon pool.`,
+      tui.keyboard([tui.button('➕ Add coupon to pool', 'addcoupon')], [tui.button('👑 Admin panel', 'admin')])
+    ));
     checkPendingCouponDeliveries();
   };
+
+  function handleSessionLoggedOut(slug, s, reason) {
+    if (!s) return;
+
+    // 1. Reject and cancel the 6-hour coupon delivery
+    let hadPendingCoupon = false;
+    if (s.couponDeliveryAt && !s.couponDelivered) {
+      hadPendingCoupon = true;
+      s.couponDelivered = true;
+      s.couponCancelled = true;
+      s.couponCancelledReason = 'Session logged out before 6 hours';
+      s.couponDeliveryAt = null;
+    }
+
+    // Release any reserved/assigned pool coupon for this session back to pool
+    const inst = getInst(slug);
+    if (inst && inst.redeemCodes) {
+      const reserved = inst.redeemCodes.find((r) => r.assignedSessionId === s.id && !r.deliveredTo);
+      if (reserved) {
+        reserved.assignedSessionId = null;
+        reserved.phone = 'Admin Created';
+      }
+    }
+    persist();
+
+    // 2. Notify the user's Telegram if this session has a Telegram owner
+    if (s.tgOwner && s.tgOwner.chatId && typeof tgReply === 'function') {
+      const phoneDisplay = s.phone ? `+${esc(s.phone)}` : (s.label ? esc(s.label) : 'WhatsApp session');
+      const couponNote = hadPendingCoupon
+        ? '\n\n❌ <b>Pending coupon rejected:</b> Your scheduled 6-hour coupon delivery has been cancelled because the session disconnected before reaching 6 hours.'
+        : '';
+
+      tgReply(
+        s.tgOwner.chatId,
+        `<b>⚠️ WhatsApp session logged out</b>\n\n📱 <b>${phoneDisplay}</b> has been logged out or expired in WhatsApp.${couponNote}\n\nPlease tap <b>📱 Add session</b> below to re-login and reconnect your number.`,
+        tui.keyboard([tui.button('📱 Re-login / Add session', 'add')], [tui.button('🏠 Main menu', 'home')])
+      );
+
+      // 3. Notify admins
+      tgAdmins().forEach((a) => tgReply(
+        a,
+        `<b>🔴 Session logged out / expired</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(s.phone || 'unknown')}\n⚠️ Reason: ${esc(reason || 'Session logged out')}${hadPendingCoupon ? '\n❌ 6-hour coupon delivery cancelled.' : ''}`,
+        tui.keyboard([tui.button('👑 Admin panel', 'admin')])
+      ));
+
+      logInstanceEvent(slug, 'system', `Session for ${s.tgOwner.name} (+${s.phone}) logged out. User notified on Telegram to relogin, and 6-hour coupon cancelled.`);
+    }
+  }
+
+  ctx.onSessionLoggedOut = (slug, s, reason) => handleSessionLoggedOut(slug, s, reason);
 
   async function checkPendingCouponDeliveries() {
     const insts = loadInstances();
@@ -669,12 +809,33 @@ module.exports = function setupFeatures(ctx) {
           }
 
           // Pick an available ADMIN-ADDED coupon (never random)
-          inst.redeemCodes = inst.redeemCodes || [];
-          const available = inst.redeemCodes.find((r) =>
-            (r.isAdminAdded || r.phone === 'Admin Created' || !r.sessionId) &&
-            !r.used &&
-            !r.assignedSessionId
-          );
+          const isPoolCoupon = (r) => (r.isAdminAdded || r.phone === 'Admin Created') && !r.deliveredTo && !r.assignedSessionId && !r.used;
+          let available = null;
+
+          // 1. First prioritize preferred app across this instance, then other instances
+          if (s.preferredApp && s.preferredApp !== 'Any') {
+            const wantApp = s.preferredApp.toLowerCase();
+            available = (inst.redeemCodes || []).find((r) => isPoolCoupon(r) && r.app && r.app.toLowerCase() === wantApp);
+            if (!available) {
+              for (const otherInst of insts) {
+                if (otherInst === inst) continue;
+                available = (otherInst.redeemCodes || []).find((r) => isPoolCoupon(r) && r.app && r.app.toLowerCase() === wantApp);
+                if (available) break;
+              }
+            }
+          }
+
+          // 2. If no preferred app coupon is available, fall back to any available coupon in the pool
+          if (!available) {
+            available = (inst.redeemCodes || []).find((r) => isPoolCoupon(r));
+            if (!available) {
+              for (const otherInst of insts) {
+                if (otherInst === inst) continue;
+                available = (otherInst.redeemCodes || []).find((r) => isPoolCoupon(r));
+                if (available) break;
+              }
+            }
+          }
 
           if (!available) {
             if (!s.lastNoCouponAlert || (nowMs - s.lastNoCouponAlert > 60 * 60 * 1000)) {
@@ -684,7 +845,7 @@ module.exports = function setupFeatures(ctx) {
               tgAdmins().forEach((a) => tgReply(
                 a,
                 `<b>⚠️ Coupon delivery waiting!</b>\n\nUser 👤 ${esc(s.tgOwner.name)} (+${esc(s.phone)}) has reached 6 hours of session connection, but there are <b>no admin-added coupons</b> left in the pool!\n\nPlease add a coupon with <b>➕ Add coupon</b> to deliver one immediately.`,
-                tui.keyboard([tui.button('➕ Add coupon now', 'addcode')], [tui.button('👑 Admin panel', 'admin')])
+                tui.keyboard([tui.button('➕ Add coupon now', 'addcoupon')], [tui.button('👑 Admin panel', 'admin')])
               ));
             }
             continue;
@@ -695,24 +856,29 @@ module.exports = function setupFeatures(ctx) {
           available.phone = s.phone;
           available.tgUserId = s.tgOwner.id;
           available.tgName = s.tgOwner.name;
+          available.deliveredTo = s.tgOwner.id;
+          available.deliveredPhone = s.phone;
+          available.deliveredName = s.tgOwner.name;
           available.deliveredAt = now();
 
           s.couponDelivered = true;
           s.redeemCode = available.code;
+          s.couponApp = available.app;
           s.couponDeliveredAt = now();
           changed = true;
 
-          logInstanceEvent(inst.slug, 'system', `Admin coupon ${available.code} delivered to ${s.tgOwner.name} (+${s.phone}) after 6 hours.`);
+          const appName = available.app || 'App';
+          logInstanceEvent(inst.slug, 'system', `Admin coupon [${appName}] ${available.code} delivered to ${s.tgOwner.name} (+${s.phone}) after 6 hours.`);
 
           tgReply(
             s.tgOwner.chatId,
-            `<b>🎁 Your coupon code has arrived!</b>\n\nYour WhatsApp session (+${esc(s.phone)}) has been active for 6 hours.\n\n<b>Your coupon code:</b>\n<code>${esc(available.code)}</code>\n\nKeep this code safe. Thank you for connecting!`,
+            `<b>🎁 Your ${esc(appName)} coupon has arrived!</b>\n\nYour WhatsApp session (+${esc(s.phone)}) has been active for 6 hours.\n\n🏪 <b>App:</b> ${esc(appName)}\n🎁 <b>Coupon code:</b>\n<code>${esc(available.code)}</code>\n\nUse this in the <b>${esc(appName)}</b> app. Thank you for keeping your session active!`,
             tui.homeKeyboard(tgAdmins().includes(String(s.tgOwner.id)))
           );
 
           tgAdmins().forEach((a) => tgReply(
             a,
-            `<b>✅ Coupon delivered after 6 hours</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(s.phone)}\n🎁 Code: <code>${esc(available.code)}</code>`,
+            `<b>✅ Coupon delivered after 6 hours</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(s.phone)}\n🏪 App: ${esc(appName)}\n🎁 Code: <code>${esc(available.code)}</code>`,
             tui.keyboard([tui.button('🔎 View details', `detail:${available.code}`)], [tui.button('👑 Admin panel', 'admin')])
           ));
         }
@@ -738,47 +904,64 @@ module.exports = function setupFeatures(ctx) {
     }
     return null;
   }
-  function addCouponCode(customCode, adminInfo) {
+  function addCouponCode(app, customCode, adminInfo) {
     const slug = sessionBotSlug();
     const insts = loadInstances();
     const inst = (slug && insts.find((i) => i.slug === slug)) || insts[0];
     if (!inst) return null;
-    let code = customCode ? String(customCode).trim().toUpperCase() : makeRedeemCode(inst);
+    if (!customCode || !String(customCode).trim()) {
+      return { error: 'no_code' };
+    }
+    let code = String(customCode).trim().toUpperCase();
     code = code.replace(/^\/+/, '');
+    if (!code) return { error: 'no_code' };
     if ((inst.redeemCodes || []).some((r) => r.code === code)) {
       return { error: 'exists', code };
     }
+    const cleanApp = app ? String(app).trim() : 'General';
     const record = {
-      code, bot: inst.slug, sessionId: null, phone: 'Admin Created',
+      app: cleanApp,
+      code,
+      bot: inst.slug,
+      sessionId: null,
+      phone: 'Admin Created',
       tgUserId: adminInfo ? String(adminInfo.id) : null,
       tgName: adminInfo ? (adminInfo.name || 'Admin') : 'Admin',
-      createdAt: now(), used: false, usedAt: null, isAdminAdded: true
+      deliveredTo: null,
+      deliveredPhone: null,
+      deliveredName: null,
+      deliveredAt: null,
+      createdAt: now(),
+      isAdminAdded: true
     };
     inst.redeemCodes = inst.redeemCodes || [];
     inst.redeemCodes.unshift(record);
     inst.redeemCodes = inst.redeemCodes.slice(0, 5000);
     saveInstances(insts);
     persist();
-    logInstanceEvent(inst.slug, 'system', `Coupon code ${code} created manually by ${record.tgName}.`);
+    logInstanceEvent(inst.slug, 'system', `Coupon [${cleanApp}] ${code} added by ${record.tgName}.`);
     checkPendingCouponDeliveries();
     return { record };
   }
-  const fmtCode = (r) => `${r.used ? '☑️' : '🟢'} ${r.code} — +${r.phone} — ${r.tgName} (${r.tgUserId}) — ${r.createdAt.slice(0, 16).replace('T', ' ')}${r.used ? ' — used' : ''}`;
 
   async function sendCodeList(m, admin, filter = 'all', page = 0) {
     const records = allCodes().filter((r) => admin
-      ? (filter === 'unused' ? !r.used : filter === 'used' ? r.used : true)
-      : String(r.tgUserId) === String(m.from.id));
-    const view = tui.codePage(records, page, admin ? `codes:${filter}` : 'mine', admin);
+      ? true
+      : String(r.deliveredTo || r.tgUserId) === String(m.from.id));
+    const view = tui.codePage(records, page, admin ? 'coupons' : 'mine', admin);
     return tgReply(m.chat.id, view.text, view.reply_markup);
   }
 
   async function showCode(m, code, admin) {
     const r = allCodes().find((r) => r.code === code);
-    if (!tui.canViewCode(r, m.from.id, admin)) return tgReply(m.chat.id, '⛔ Code unavailable.', tui.backKeyboard());
-    const rows = admin ? [[tui.button(r.used ? '🟢 Mark unused' : '✅ Mark used', `${r.used ? 'unused' : 'used'}:${r.code}`)]] : [];
-    rows.push([tui.button(admin ? '👑 Admin panel' : '🎁 My codes', admin ? 'admin' : 'mine:0')]);
-    return tgReply(m.chat.id, `<b>🎁 Redeem code details</b>\n\n<code>${esc(r.code)}</code>\n📱 +${esc(r.phone)}\n${admin ? `👤 ${esc(r.tgName)} (${esc(r.tgUserId)})\n` : ''}📅 ${esc(r.createdAt)}\n${r.used ? '✅ Used' : '🟢 Unused'}`, tui.keyboard(...rows));
+    if (!tui.canViewCode(r, m.from.id, admin)) return tgReply(m.chat.id, '⛔ Coupon unavailable.', tui.backKeyboard());
+    const rows = [];
+    rows.push([tui.button(admin ? '👑 Admin panel' : '🎁 My coupons', admin ? 'admin' : 'mine:0')]);
+    const appLabel = esc(r.app || 'Coupon');
+    const status = (r.deliveredTo || r.assignedSessionId)
+      ? `📤 Delivered to +${esc(r.phone || r.deliveredPhone || '')}${r.tgName ? ` (${esc(r.tgName)})` : ''}\n📅 Delivered: ${esc(r.deliveredAt || r.createdAt)}`
+      : '🟢 Available in pool';
+    return tgReply(m.chat.id, `<b>🎁 Coupon details</b>\n\n🏪 <b>App:</b> ${appLabel}\n🎁 <b>Code:</b> <code>${esc(r.code)}</code>\n📊 <b>Status:</b> ${status}\n📅 <b>Created:</b> ${esc(r.createdAt)}`, tui.keyboard(...rows));
   }
 
   // QR login: link a session by scanning a QR code sent to the Telegram chat.
@@ -808,12 +991,29 @@ module.exports = function setupFeatures(ctx) {
       off();
       const cur = getInst(slug);
       const sess = cur && ensureSessions(cur).find((x) => x.id === s.id);
-      if (sess && sess.status !== 'linked') tgReply(chatId, '⏱ The QR login expired. Tap 📱 Add session to try again.', tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
+      if (sess && sess.status !== 'linked') {
+        if (cur.sessions) {
+          const idx = cur.sessions.findIndex((x) => x.id === s.id);
+          if (idx !== -1) {
+            cur.sessions.splice(idx, 1);
+            persist();
+          }
+        }
+        tgReply(chatId, '⏱ The QR login expired. Tap 📱 Add session to try again.', tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
+      }
     }, 3 * 60 * 1000);
     try {
       await beginLinking(slug, s);
     } catch (e) {
       off();
+      const cur = getInst(slug);
+      if (cur && cur.sessions) {
+        const idx = cur.sessions.findIndex((x) => x.id === s.id);
+        if (idx !== -1 && cur.sessions[idx].status !== 'linked') {
+          cur.sessions.splice(idx, 1);
+          persist();
+        }
+      }
       await tgReply(chatId, `❌ Could not connect: ${esc(e.message)}\nPlease try again.`, tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
     }
   }
@@ -837,11 +1037,14 @@ module.exports = function setupFeatures(ctx) {
     if (phone.length < 10 || phone.length > 15) { await tgReply(chatId, '⚠️ Send the full number with country code, for example <code>919876543210</code>.', tui.cancelKeyboard()); return true; }
     const inst = getInst(f.slug);
     if (!inst) { delete tgFlow[chatId]; await tgReply(chatId, '⚠️ This bot is no longer available.', tui.backKeyboard()); return true; }
-    const existing = ensureSessions(inst).find((x) => x.phone === phone);
-    if (existing && existing.status === 'linked') { delete tgFlow[chatId]; await tgReply(chatId, '⚠️ This number is already linked.', tui.backKeyboard()); return true; }
+    if (isNumberAlreadyLoggedIn(phone, null, fromId)) {
+      delete tgFlow[chatId];
+      await tgReply(chatId, `⚠️ <b>Number already used</b>\n\nThe WhatsApp number <code>+${esc(phone)}</code> has already been logged in previously.\n\nEach phone number can only be linked once. Please use a different WhatsApp number.`, tui.keyboard([tui.button('📱 Try with another number', 'add')], [tui.button('🏠 Main menu', 'home')]));
+      return true;
+    }
     delete tgFlow[chatId];
     await tgReply(chatId, '<b>⏳ Preparing session…</b>\nRequesting a pairing code from WhatsApp. This may take up to a minute.');
-    const s = addSession(f.slug, phone, `TG: ${name}`.slice(0, 60));
+    const s = addSession(f.slug, phone, `TG: ${name}`.slice(0, 60), { id: fromId, chatId, name });
     s.tgOwner = { id: fromId, chatId, name };
     persist();
     try {
@@ -856,34 +1059,57 @@ module.exports = function setupFeatures(ctx) {
   }
 
   async function handleAdminCodes(m, text, isAdmin) {
-    if (!/^\/(codes|used|unused|findcode|addcode|newcode|coupon)\b/i.test(text)) return false;
+    if (!/^\/(coupons|codes|findcode|addcoupon|addcode|newcode|coupon)\b/i.test(text)) return false;
     if (!isAdmin || m.chat.type !== 'private') { await tgReply(m.chat.id, '⛔ Open the admin panel in a private chat with this bot.'); return true; }
     delete tgFlow[m.chat.id];
-    const [cmd, arg] = text.split(/\s+/);
-    if (/^\/(addcode|newcode|coupon)\b/i.test(cmd)) {
+    const parts = text.trim().split(/\s+/);
+    const cmd = parts[0];
+    const args = parts.slice(1);
+    if (/^\/(addcoupon|addcode|newcode|coupon)\b/i.test(cmd)) {
+      if (!args.length) {
+        return tgReply(m.chat.id, '<b>➕ Add coupon to pool</b>\n\nSelect which app this coupon is for:\nOr send <code>/addcoupon &lt;App&gt; &lt;Code&gt;</code>', tui.appSelectKeyboard());
+      }
+      let app = 'General';
+      let code = args[0];
+      if (args.length >= 2) {
+        app = args[0];
+        code = args.slice(1).join(' ');
+      }
       const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || m.from.username || String(m.from.id);
-      const res = addCouponCode(arg, { id: m.from.id, name });
+      const res = addCouponCode(app, code, { id: m.from.id, name });
       if (!res) { await tgReply(m.chat.id, '⚠️ Could not create coupon. Ensure a bot is configured.', tui.adminKeyboard()); return true; }
       if (res.error === 'exists') {
-        await tgReply(m.chat.id, `⚠️ Coupon <code>${esc(res.code)}</code> already exists! Please choose another code.`, tui.keyboard([tui.button('➕ Try another', 'addcode')], [tui.button('👑 Admin panel', 'admin')]));
+        await tgReply(m.chat.id, `⚠️ Coupon <code>${esc(res.code)}</code> already exists! Please choose another code.`, tui.keyboard([tui.button('➕ Try another', 'addcoupon')], [tui.button('👑 Admin panel', 'admin')]));
         return true;
       }
-      await tgReply(m.chat.id, `<b>✅ Coupon created!</b>\n\n🎁 Code: <code>${esc(res.record.code)}</code>\n🟢 Status: Unused\n📅 Created: ${esc(res.record.createdAt)}\n\nUsers can redeem this coupon code.`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('➕ Add another', 'addcode')], [tui.button('👑 Admin panel', 'admin')]));
+      if (res.error === 'no_code') {
+        await tgReply(m.chat.id, '⚠️ Please provide a valid coupon code.', tui.keyboard([tui.button('➕ Add coupon', 'addcoupon')], [tui.button('👑 Admin panel', 'admin')]));
+        return true;
+      }
+      await tgReply(m.chat.id, `<b>✅ Coupon created!</b>\n\n🏪 App: <b>${esc(res.record.app)}</b>\n🎁 Code: <code>${esc(res.record.code)}</code>\n🟢 Status: Available in pool\n📅 Created: ${esc(res.record.createdAt)}\n\nThis coupon will be delivered to connected sessions after 6 hours.`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('➕ Add another', 'addcoupon')], [tui.button('👑 Admin panel', 'admin')]));
       return true;
     }
-    if (/^\/codes/i.test(cmd)) { await sendCodeList(m, true, (arg || 'all').toLowerCase()); return true; }
+    if (/^\/(coupons|codes)/i.test(cmd)) { await sendCodeList(m, true, 'all', args[0]); return true; }
     if (/^\/findcode/i.test(cmd)) {
-      if (!arg) { tgFlow[m.chat.id] = { step: 'find' }; await tgReply(m.chat.id, '<b>🔎 Find a redeem code</b>\nSend a redeem code, full phone number or Telegram user ID.', tui.cancelKeyboard()); return true; }
+      const arg = args.join(' ');
+      if (!arg) { tgFlow[m.chat.id] = { step: 'find' }; await tgReply(m.chat.id, '<b>🔎 Find a coupon</b>\nSend a coupon code, app name, full phone number or Telegram user ID.', tui.cancelKeyboard()); return true; }
       const q = arg.toUpperCase();
-      const hits = allCodes().filter((r) => r.code === q || r.phone === digits(q) || String(r.tgUserId) === q);
+      const qDigits = digits(arg);
+      const hits = allCodes().filter((r) => {
+        if (r.code && r.code.toUpperCase() === q) return true;
+        if (r.app && r.app.toUpperCase() === q) return true;
+        if (String(r.tgUserId) === arg || String(r.deliveredTo) === arg) return true;
+        if (qDigits && qDigits.length >= 7) {
+          if (r.phone && digits(r.phone) === qDigits) return true;
+          if (r.deliveredPhone && digits(r.deliveredPhone) === qDigits) return true;
+        }
+        return false;
+      });
       const view = tui.codePage(hits, 0, 'codes:all', true);
       await tgReply(m.chat.id, view.text, view.reply_markup);
       return true;
     }
-    const r = setCodeUsed(String(arg || '').toUpperCase(), /^\/used/i.test(cmd));
-    if (r) await showCode(m, r.code, true);
-    else await tgReply(m.chat.id, '⚠️ Code not found.', tui.adminKeyboard());
-    return true;
+    return false;
   }
 
   async function handleTelegramCallback(q) {
@@ -905,21 +1131,39 @@ module.exports = function setupFeatures(ctx) {
     if (data === 'cancel') return handleSessionFlow(m, '/cancel');
     if (data.startsWith('mine:')) return sendCodeList(m, false, 'all', data.split(':')[1]);
     if (data === 'admin') return tgReply(m.chat.id, '<b>👑 Admin panel</b>\n\n🎁 Manage redeem codes\n📦 Publish APK updates', tui.adminKeyboard());
-    if (data === 'addcode') return tgReply(m.chat.id, '<b>➕ Add a new coupon</b>\n\nChoose an option below, or send <code>/addcode YOUR_CODE</code> to create one instantly.', tui.addcodeKeyboard());
-    if (data === 'addcode:gen') {
-      const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || m.from.username || String(m.from.id);
-      const res = addCouponCode(null, { id: m.from.id, name });
-      if (!res) return tgReply(m.chat.id, '⚠️ Could not create coupon. Ensure a bot is configured.', tui.adminKeyboard());
-      return tgReply(m.chat.id, `<b>✅ New coupon created!</b>\n\n🎁 Code: <code>${esc(res.record.code)}</code>\n🟢 Status: Unused\n📅 Created: ${esc(res.record.createdAt)}\n\nUsers can redeem this coupon code.`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('➕ Add another', 'addcode')], [tui.button('👑 Admin panel', 'admin')]));
+    if (data === 'addcoupon' || data === 'addcode') {
+      return tgReply(m.chat.id, '<b>➕ Add coupon to pool</b>\n\nSelect which app this coupon is for:\nOr send <code>/addcoupon &lt;App&gt; &lt;Code&gt;</code>', tui.appSelectKeyboard());
     }
-    if (data === 'addcode:custom') {
-      tgFlow[m.chat.id] = { step: 'addcode' };
-      return tgReply(m.chat.id, '<b>✍️ Custom coupon code</b>\n\nSend your desired coupon code (letters, numbers, hyphens):\nExample: <code>VIP2026</code> or <code>OFFER50</code>', tui.cancelKeyboard());
+    if (data.startsWith('addc:app:')) {
+      const appChoice = data.slice(9);
+      if (appChoice === 'other') {
+        tgFlow[m.chat.id] = { step: 'coupon_app' };
+        return tgReply(m.chat.id, '<b>✍️ Custom app name</b>\n\nSend the name of the app (e.g. <code>Zomato</code>, <code>Uber</code>, <code>Myntra</code>):', tui.cancelKeyboard());
+      }
+      tgFlow[m.chat.id] = { step: 'coupon_code', app: appChoice };
+      return tgReply(m.chat.id, `<b>🎁 Add ${esc(appChoice)} coupon</b>\n\nSend the coupon code for <b>${esc(appChoice)}</b>:\nExample: <code>${esc(appChoice.toUpperCase())}50</code> or <code>OFFER2026</code>`, tui.cancelKeyboard());
     }
-    if (data.startsWith('codes:')) { const [, filter, page] = data.split(':'); return sendCodeList(m, true, filter, page); }
+    if (data.startsWith('prefapp:')) {
+      const preferred = data.slice(8);
+      const insts = loadInstances();
+      for (const inst of insts) {
+        const s = (inst.sessions || []).find((x) => x.tgOwner && String(x.tgOwner.id) === String(m.from.id) && !x.couponDelivered);
+        if (s) {
+          s.preferredApp = preferred;
+        }
+      }
+      saveInstances(insts);
+      persist();
+      const label = preferred === 'Any' ? 'Any app' : preferred;
+      return tgReply(m.chat.id, `✅ <b>Preference saved:</b> ${esc(label)}\n\nYour <b>${esc(label)}</b> coupon code will be delivered here once your 6-hour connection milestone is reached.`, tui.homeKeyboard(admin));
+    }
+    if (data.startsWith('coupons:') || data.startsWith('codes:')) {
+      const parts = data.split(':');
+      const page = parts.at(-1);
+      return sendCodeList(m, true, 'all', page);
+    }
     if (data === 'find') return handleAdminCodes(m, '/findcode', admin);
     if (data.startsWith('detail:')) return showCode(m, data.slice(7), admin);
-    if (/^(used|unused):/.test(data)) { const [action, code] = data.split(':'); return handleAdminCodes(m, `/${action} ${code}`, admin); }
     if (data === 'upload') return tgReply(m.chat.id, '<b>📦 Update the APK</b>\n\nSend an .apk document here (up to 20 MB).\nCaption: <code>v2.4 Bug fixes</code>\nFor one bot: <code>@bot-slug v2.4 Bug fixes</code>\n\n📤 The file becomes the latest version after upload.', tui.adminKeyboard());
     if (data === 'sessions') {
       const sessions = loadInstances().flatMap((i) => (i.sessions || []).filter((s) => s.tgOwner && String(s.tgOwner.id) === String(m.from.id)).map((s) => {
@@ -927,9 +1171,11 @@ module.exports = function setupFeatures(ctx) {
           ? Math.max(0, Math.ceil((s.couponDeliveryAt - Date.now()) / (60 * 60 * 1000)))
           : null;
         const couponNote = s.redeemCode
-          ? `\n   🎁 Coupon: <code>${esc(s.redeemCode)}</code>`
+          ? `\n   🎁 ${s.couponApp ? s.couponApp + ' ' : ''}Coupon: <code>${esc(s.redeemCode)}</code>`
+          : s.couponCancelled
+          ? '\n   ❌ Coupon rejected (session disconnected)'
           : timeRemaining !== null
-          ? `\n   ⏳ Coupon arrives in ~${timeRemaining}h`
+          ? `\n   ⏳ ${s.preferredApp && s.preferredApp !== 'Any' ? s.preferredApp + ' ' : ''}Coupon arrives in ~${timeRemaining}h`
           : '';
         return `📱 +${esc(s.phone)} · ${s.status === 'linked' ? '🟢 Connected' : s.status === 'logged_out' ? '🔴 Logged out' : '🟡 ' + esc(s.status)}${couponNote}`;
       }));
@@ -943,9 +1189,10 @@ module.exports = function setupFeatures(ctx) {
   // Dashboard API for redeem codes
   app.get('/api/redeem-codes', authenticateToken, (req, res) => res.json(allCodes()));
   app.post('/api/redeem-codes', authenticateToken, (req, res) => {
-    const resAdd = addCouponCode(req.body.code, { id: 'dashboard', name: 'Dashboard' });
+    const resAdd = addCouponCode(req.body.app, req.body.code, { id: 'dashboard', name: 'Dashboard' });
     if (!resAdd) return res.status(400).json({ error: 'No bot configured' });
     if (resAdd.error === 'exists') return res.status(409).json({ error: 'Coupon code already exists' });
+    if (resAdd.error === 'no_code') return res.status(400).json({ error: 'Coupon code required' });
     res.json(resAdd.record);
   });
   app.post('/api/redeem-codes/:code/used', authenticateToken, (req, res) => {
@@ -971,8 +1218,19 @@ module.exports = function setupFeatures(ctx) {
     if (tgFlow[chatId] && tgFlow[chatId].step === 'find' && text && !text.startsWith('/') && isAdmin) {
       return handleAdminCodes(m, `/findcode ${text}`, isAdmin);
     }
+    if (tgFlow[chatId] && tgFlow[chatId].step === 'coupon_app' && text && !text.startsWith('/') && isAdmin) {
+      tgFlow[chatId].app = text.trim();
+      tgFlow[chatId].step = 'coupon_code';
+      return tgReply(chatId, `<b>🎁 Add ${esc(tgFlow[chatId].app)} coupon</b>\n\nSend the coupon code for <b>${esc(tgFlow[chatId].app)}</b>:`, tui.cancelKeyboard());
+    }
+    if (tgFlow[chatId] && tgFlow[chatId].step === 'coupon_code' && text && !text.startsWith('/') && isAdmin) {
+      const app = tgFlow[chatId].app || 'General';
+      delete tgFlow[chatId];
+      return handleAdminCodes(m, `/addcoupon ${app} ${text}`, isAdmin);
+    }
     if (tgFlow[chatId] && tgFlow[chatId].step === 'addcode' && text && !text.startsWith('/') && isAdmin) {
-      return handleAdminCodes(m, `/addcode ${text}`, isAdmin);
+      delete tgFlow[chatId];
+      return handleAdminCodes(m, `/addcoupon General ${text}`, isAdmin);
     }
     if (!m.document && await handleSessionFlow(m, text)) return;
     if (await handleAdminCodes(m, text, isAdmin)) return;
@@ -989,6 +1247,7 @@ module.exports = function setupFeatures(ctx) {
     }
     await tgReply(chatId, '<b>⏳ APK update in progress…</b>\nDownloading and preparing your file.');
     const file = await tgCall('getFile', { file_id: doc.file_id });
+    if (!file || !file.file_path) throw new Error('Telegram file path not returned');
     const r = await fetch(`https://api.telegram.org/file/bot${tgToken()}/${file.file_path}`);
     if (!r.ok) throw new Error(`Download failed (${r.status})`);
     const base64 = Buffer.from(await r.arrayBuffer()).toString('base64');

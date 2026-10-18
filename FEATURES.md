@@ -28,32 +28,34 @@ Also: new light theme (`public/light-theme.css`).
 
 New code lives in `features.js` (server) and `public/features.js` (dashboard); `server.js` only has small hooks into it.
 
-## Add sessions from Telegram + redeem codes
+## Add sessions from Telegram + App Coupons
 
 Anyone can link a WhatsApp number to the bot from Telegram (private chat with your bot):
 
 | Command | Who | What it does |
 |---|---|---|
-| `/addsession` | anyone | Offers two login options: 📷 QR code (sent as a photo to scan, refreshed automatically) or 🔢 pairing code (user sends their number, gets the 8-character code). When login succeeds the user gets a redeem code like `RDM-7KQ2M9XA`. |
-| `/mycodes` | anyone | Shows that user's own redeem codes |
-| `/addcode` (`/addcode <custom_code>`) | admins | Creates a new coupon (random 8-character code or custom code name) |
-| `/codes` (`/codes unused`, `/codes used`) | admins | Lists all stored redeem codes with number, Telegram user and date |
-| `/findcode <code / number / tg id>` | admins | Looks up a code |
-| `/used <code>` / `/unused <code>` | admins | Marks a code as redeemed or not |
+| `/addsession` | anyone | Offers two login options: 📷 QR code (sent as a photo to scan, refreshed automatically) or 🔢 pairing code (user sends their number, gets the 8-character code). When connected, users can choose their preferred app coupon (Blinkit, BigBasket, Zepto, Swiggy, etc.). |
+| `/mycodes` | anyone | Shows that user's own coupons delivered after keeping the session active for 6 hours |
+| `/addcoupon <App> <Code>` | admins | Adds a coupon code for an app (e.g. `Blinkit`, `BigBasket`, `Zepto`, `Swiggy`, etc.) into the pool. No random codes are generated. |
+| `/coupons` / `/codes` | admins | Lists coupon inventory (available in pool and delivered to connected sessions) |
+| `/findcode <code / app / number / tg id>` | admins | Looks up a coupon by code, app name, phone number, or Telegram ID |
 
-Admins (TELEGRAM_ADMIN_IDS) also get a message every time a new code is issued.
-Codes are stored per bot in `instances.json` (`redeemCodes`) and are available at `GET /api/redeem-codes`.
+Admins (TELEGRAM_ADMIN_IDS) get notified when sessions connect and when coupons are delivered.
+Coupons are stored per bot in `instances.json` (`redeemCodes`) and are available at `GET /api/redeem-codes`.
 Optional `.env`: `TELEGRAM_SESSION_BOT=<bot slug>` — which bot new sessions are added to (default: the first bot).
+Optional `.env`: `COUPON_DELIVERY_DELAY_MS` — customize the 6-hour delay for testing (default: `21600000` ms = 6 hours).
 
 ## Telegram button menus
 
 Send `/start` or `/menu` in a private chat to open the interactive menu:
-- **📱 Add session** — enter a number and approve our server as a linked device in WhatsApp.
-- **🎁 My redeem codes** — paginated personal codes, with a details button for each one.
-- **📊 My sessions** — see connection status and refresh it.
+- **📱 Add session** — enter a number and approve our server as a linked device in WhatsApp. Once connected, choose a preferred app (Blinkit, BigBasket, Zepto, Swiggy, Any).
+- **🎁 My coupons** — paginated personal coupons delivered after 6 hours of keeping the session connected.
+- **📊 My sessions** — see connection status and countdown to coupon arrival (`⏳ Blinkit Coupon arrives in ~5h`).
 - **❓ Help** — pairing explanation and your Telegram ID.
-- **👑 Admin panel** — admins get a separate menu with all/unused/used code filters, search, mark-used/unused buttons and APK upload instructions.
+- **👑 Admin panel** — admins get an inventory management menu:
+  - **➕ Add coupon**: Select an app (Blinkit, BigBasket, Zepto, Swiggy, Amazon, Flipkart, or custom app) and input the code.
+  - **🎁 View coupons**: Inventory view showing status (`🟢 Available in pool` vs `📤 Delivered to +phone (User)`).
+  - **🔎 Find coupon**: Search by code, app, phone, or Telegram user ID.
+  - **📦 Update APK**: APK upload instructions and dashboard links.
 
-The bot uses bold headings, copyable codes, status emojis and inline buttons. Telegram controls message and button colors; arbitrary text colors are not supported. Existing slash commands still work. Codes and admin actions are available only in private chats; users can only view their own codes.
-
-After updating, restart the bot and send `/start` to get a fresh menu. Run `node --test telegram-ui.test.js telegram-flow.test.js` to verify the Telegram access rules and button flows without live credentials.
+The bot uses bold headings, copyable codes, status emojis and inline buttons. Random coupon generation and used/unused toggles have been removed in favor of clean pool-to-user delivery. Run `node --test telegram-ui.test.js telegram-flow.test.js` to verify the Telegram access rules and button flows without live credentials.

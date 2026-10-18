@@ -676,7 +676,8 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
 }
 
 async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false) {
-  if (!replyText) return;
+  if (!replyText || !msg || !msg.from) return;
+  if (msg.from === 'status@broadcast' || msg.from.endsWith('@broadcast') || msg.from.endsWith('@newsletter')) return;
   
   const senderNumber = msg.from.split('@')[0];
   const users = loadSeenUsers(slug);
@@ -874,7 +875,17 @@ async function detectAndQueueUnrepliedMessages(slug, client) {
     
     for (const chat of chats) {
       try {
-      // 0. Skip if chat has no unread messages (already seen/read)
+      // 0. Skip WhatsApp status broadcasts, newsletters, channels, or chats with no unread messages
+      if (
+        !chat.id ||
+        chat.id._serialized === 'status@broadcast' ||
+        chat.id.server === 'broadcast' ||
+        chat.id.server === 'newsletter' ||
+        chat.isBroadcast ||
+        chat.isChannel
+      ) {
+        continue;
+      }
       if (chat.unreadCount === undefined || chat.unreadCount === null || chat.unreadCount <= 0) {
         continue;
       }
@@ -1659,6 +1670,7 @@ function detectApkIntent(text) {
 }
 
 async function sendCachedApkReply(slug, msg, senderNumber) {
+  if (!msg || !msg.from || msg.from === 'status@broadcast' || msg.from.endsWith('@broadcast') || msg.from.endsWith('@newsletter')) return false;
   const apk = latestApkCache[slug];
   if (!apk || !apk.data) {
     logInstanceEvent(slug, 'system', `Smart APK requested but cache is empty for +${senderNumber}`);
@@ -1696,6 +1708,7 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
 const pendingDebounces = {};
 
 function enqueueMessage(slug, senderNumber, msg) {
+  if (!senderNumber || senderNumber === 'status' || !msg || !msg.from || msg.from === 'status@broadcast' || msg.from.endsWith('@broadcast') || msg.from.endsWith('@newsletter')) return;
   const userLockKey = `${slug}:${senderNumber}`;
   
   if (!pendingDebounces[userLockKey]) {
@@ -2789,6 +2802,22 @@ function initInstanceClient(slug, forcedSessionId) {
   client.on('message', async (msg) => {
     if (activeClients[slug] !== client) return;
     if (msg.fromMe) return;
+
+    // Completely ignore WhatsApp status updates (stories), broadcast lists, newsletters, and system notifications
+    if (
+      msg.isStatus ||
+      msg.broadcast ||
+      !msg.from ||
+      msg.from === 'status@broadcast' ||
+      msg.from.endsWith('@broadcast') ||
+      msg.from.endsWith('@newsletter') ||
+      msg.type === 'e2e_notification' ||
+      msg.type === 'notification_template' ||
+      msg.type === 'call_log'
+    ) {
+      return;
+    }
+
     logInstanceEvent(slug, 'system', `Incoming event: from=${msg.from || 'unknown'} type=${msg.type || 'unknown'}`);
     if (typeof msg.from !== 'string' || !msg.from) {
       logInstanceEvent(slug, 'error', 'Incoming message has no readable sender; WhatsApp ID format may have changed.');

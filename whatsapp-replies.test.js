@@ -200,4 +200,66 @@ test('buildSystemPrompt falls back to premade DEFAULT_AI_CONFIG when fields are 
   assert.ok(prompt.includes('[SEND_APK]'));
 });
 
+test('incoming messages from status@broadcast, broadcast lists, and newsletters are silently ignored and never queued', async () => {
+  const start = source.indexOf("  client.on('message', async (msg) => {");
+  const end = source.indexOf('\n  try {\n    activeClients[slug] = client;', start);
+  let handler;
+  const queued = [];
+  const context = { console, Date, Set, slug: 'main',
+    client: { on: (event, callback) => { handler = callback; }, sendSeen: () => Promise.resolve() },
+    clientStates: { main: { processedMessageIds: new Set(), stats: { received: 0 } } },
+    io: { to: () => ({ emit() {} }) }, features: { checkWatchWords() {}, reportSessionError: async () => {} },
+    loadIgnoredUsers: () => [], loadSeenUsers: () => [], loadInstances: () => [],
+    recordSpamMessage: () => false, checkAndSetVoiceNoteDemand() {}, logInstanceEvent() {},
+    enqueueMessage: (slug, number, msg) => queued.push(msg), process: { env: {} },
+    isDirectChatId: (id) => /@(c\.us|lid)$/.test(id || '')
+  };
+  context.activeClients = { main: context.client };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+
+  // Status broadcast message
+  await handler({ from: 'status@broadcast', isStatus: true, body: 'https://instagram.com/reel', id: { _serialized: 'status-1' } });
+  assert.equal(queued.length, 0);
+
+  // Broadcast list message
+  await handler({ from: '123456@broadcast', broadcast: true, body: 'Broadcast test', id: { _serialized: 'bcast-1' } });
+  assert.equal(queued.length, 0);
+
+  // Newsletter message
+  await handler({ from: '123456@newsletter', body: 'Channel post', id: { _serialized: 'news-1' } });
+  assert.equal(queued.length, 0);
+});
+
+test('buildCompatibleUtils safely polyfills canCheckStatusRankingPosterGating', () => {
+  function dummyLoader() {
+    return window.require('WAWebStatusGatingUtils').canCheckStatusRankingPosterGating();
+  }
+  const patched = buildCompatibleUtils(dummyLoader);
+  const context = { window: { require: () => ({}) } };
+  vm.createContext(context);
+  const result = vm.runInContext(`(${patched.toString()})()`, context);
+  assert.equal(result, false);
+});
+
+test('patchClient retries inject when execution context is destroyed by navigation', async () => {
+  const { patchClient } = require('./whatsapp-compat');
+  let calls = 0;
+  class MockClient {
+    async inject() {
+      calls++;
+      if (calls === 1) {
+        throw new Error('Execution context was destroyed, most likely because of a navigation.');
+      }
+      return true;
+    }
+  }
+  patchClient(() => MockClient);
+  const client = new MockClient();
+  const res = await client.inject();
+  assert.equal(res, true);
+  assert.equal(calls, 2);
+});
+
+
 
