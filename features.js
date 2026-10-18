@@ -627,23 +627,106 @@ module.exports = function setupFeatures(ctx) {
     while ((inst.redeemCodes || []).some((r) => r.code === c));
     return c;
   }
+  const COUPON_DELAY_HOURS = 6;
+  const getCouponDelayMs = () => {
+    if (process.env.COUPON_DELIVERY_DELAY_MS !== undefined) {
+      return Number(process.env.COUPON_DELIVERY_DELAY_MS);
+    }
+    return COUPON_DELAY_HOURS * 60 * 60 * 1000;
+  };
+
   ctx.onSessionLinked = (slug, s) => {
     const inst = getInst(slug);
-    if (!inst || !s.tgOwner || s.redeemCode) return;
+    if (!inst || !s.tgOwner || s.redeemCode || s.couponDeliveryAt) return;
     const sess = ensureSessions(inst).find((x) => x.id === s.id) || s;
-    const code = makeRedeemCode(inst);
-    sess.redeemCode = code;
-    inst.redeemCodes = inst.redeemCodes || [];
-    inst.redeemCodes.unshift({
-      code, bot: slug, sessionId: sess.id, phone: sess.phone,
-      tgUserId: s.tgOwner.id, tgName: s.tgOwner.name, createdAt: now(), used: false, usedAt: null
-    });
-    inst.redeemCodes = inst.redeemCodes.slice(0, 5000);
+    const delayMs = getCouponDelayMs();
+    sess.couponDeliveryAt = Date.now() + delayMs;
+    sess.couponDelivered = false;
     persist();
-    logInstanceEvent(slug, 'system', `Redeem code ${code} issued to ${s.tgOwner.name} for +${sess.phone}.`);
-    tgReply(s.tgOwner.chatId, `<b>✅ Session connected!</b>\n\n📱 +${esc(sess.phone)} is now connected to our bot server.\n\n<b>🎁 Your redeem code</b>\n<code>${esc(code)}</code>\n\nKeep this code safe.`, tui.homeKeyboard(tgAdmins().includes(String(s.tgOwner.id))));
-    tgAdmins().forEach((a) => tgReply(a, `<b>🆕 New session connected</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(sess.phone)}\n🎁 <code>${esc(code)}</code>`, tui.keyboard([tui.button('🔎 View redeem code', `detail:${code}`)], [tui.button('👑 Admin panel', 'admin')])));
+    logInstanceEvent(slug, 'system', `Session linked for ${s.tgOwner.name} (+${sess.phone}). Coupon code delivery scheduled after 6 hours.`);
+    tgReply(s.tgOwner.chatId, `<b>✅ Session added successfully!</b>\n\n📱 +${esc(sess.phone)} is now connected to our bot server.\n\n⏳ <b>Your coupon code will be delivered after 6 hours.</b>\nPlease keep your session active. Thank you!`, tui.homeKeyboard(tgAdmins().includes(String(s.tgOwner.id))));
+    tgAdmins().forEach((a) => tgReply(a, `<b>🆕 New session connected</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(sess.phone)}\n⏳ Coupon will be delivered after 6 hours from the admin-added coupon pool.`, tui.keyboard([tui.button('➕ Add coupon to pool', 'addcode')], [tui.button('👑 Admin panel', 'admin')])));
+    checkPendingCouponDeliveries();
   };
+
+  async function checkPendingCouponDeliveries() {
+    const insts = loadInstances();
+    let changed = false;
+    const nowMs = Date.now();
+
+    for (const inst of insts) {
+      const sessions = inst.sessions || [];
+      for (const s of sessions) {
+        if (!s.tgOwner || s.couponDelivered || !s.couponDeliveryAt) continue;
+
+        if (nowMs >= s.couponDeliveryAt) {
+          if (s.status === 'logged_out') {
+            s.couponDelivered = true;
+            s.couponCancelled = true;
+            changed = true;
+            logInstanceEvent(inst.slug, 'system', `Coupon delivery skipped for +${s.phone} because the session logged out.`);
+            continue;
+          }
+
+          // Pick an available ADMIN-ADDED coupon (never random)
+          inst.redeemCodes = inst.redeemCodes || [];
+          const available = inst.redeemCodes.find((r) =>
+            (r.isAdminAdded || r.phone === 'Admin Created' || !r.sessionId) &&
+            !r.used &&
+            !r.assignedSessionId
+          );
+
+          if (!available) {
+            if (!s.lastNoCouponAlert || (nowMs - s.lastNoCouponAlert > 60 * 60 * 1000)) {
+              s.lastNoCouponAlert = nowMs;
+              changed = true;
+              logInstanceEvent(inst.slug, 'error', `No admin coupon available in pool for ${s.tgOwner.name} (+${s.phone}) after 6 hours.`);
+              tgAdmins().forEach((a) => tgReply(
+                a,
+                `<b>⚠️ Coupon delivery waiting!</b>\n\nUser 👤 ${esc(s.tgOwner.name)} (+${esc(s.phone)}) has reached 6 hours of session connection, but there are <b>no admin-added coupons</b> left in the pool!\n\nPlease add a coupon with <b>➕ Add coupon</b> to deliver one immediately.`,
+                tui.keyboard([tui.button('➕ Add coupon now', 'addcode')], [tui.button('👑 Admin panel', 'admin')])
+              ));
+            }
+            continue;
+          }
+
+          // Assign admin coupon and deliver
+          available.assignedSessionId = s.id;
+          available.phone = s.phone;
+          available.tgUserId = s.tgOwner.id;
+          available.tgName = s.tgOwner.name;
+          available.deliveredAt = now();
+
+          s.couponDelivered = true;
+          s.redeemCode = available.code;
+          s.couponDeliveredAt = now();
+          changed = true;
+
+          logInstanceEvent(inst.slug, 'system', `Admin coupon ${available.code} delivered to ${s.tgOwner.name} (+${s.phone}) after 6 hours.`);
+
+          tgReply(
+            s.tgOwner.chatId,
+            `<b>🎁 Your coupon code has arrived!</b>\n\nYour WhatsApp session (+${esc(s.phone)}) has been active for 6 hours.\n\n<b>Your coupon code:</b>\n<code>${esc(available.code)}</code>\n\nKeep this code safe. Thank you for connecting!`,
+            tui.homeKeyboard(tgAdmins().includes(String(s.tgOwner.id)))
+          );
+
+          tgAdmins().forEach((a) => tgReply(
+            a,
+            `<b>✅ Coupon delivered after 6 hours</b>\n\n👤 ${esc(s.tgOwner.name)} (${esc(s.tgOwner.id)})\n📱 +${esc(s.phone)}\n🎁 Code: <code>${esc(available.code)}</code>`,
+            tui.keyboard([tui.button('🔎 View details', `detail:${available.code}`)], [tui.button('👑 Admin panel', 'admin')])
+          ));
+        }
+      }
+    }
+
+    if (changed) {
+      saveInstances(insts);
+      persist();
+    }
+  }
+
+  if (typeof setInterval === 'function') setInterval(checkPendingCouponDeliveries, 30000);
+
   function allCodes() {
     return loadInstances().flatMap((i) => i.redeemCodes || []).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   }
@@ -669,7 +752,7 @@ module.exports = function setupFeatures(ctx) {
       code, bot: inst.slug, sessionId: null, phone: 'Admin Created',
       tgUserId: adminInfo ? String(adminInfo.id) : null,
       tgName: adminInfo ? (adminInfo.name || 'Admin') : 'Admin',
-      createdAt: now(), used: false, usedAt: null
+      createdAt: now(), used: false, usedAt: null, isAdminAdded: true
     };
     inst.redeemCodes = inst.redeemCodes || [];
     inst.redeemCodes.unshift(record);
@@ -677,6 +760,7 @@ module.exports = function setupFeatures(ctx) {
     saveInstances(insts);
     persist();
     logInstanceEvent(inst.slug, 'system', `Coupon code ${code} created manually by ${record.tgName}.`);
+    checkPendingCouponDeliveries();
     return { record };
   }
   const fmtCode = (r) => `${r.used ? '☑️' : '🟢'} ${r.code} — +${r.phone} — ${r.tgName} (${r.tgUserId}) — ${r.createdAt.slice(0, 16).replace('T', ' ')}${r.used ? ' — used' : ''}`;
@@ -715,7 +799,7 @@ module.exports = function setupFeatures(ctx) {
       sent += 1;
       qrcode.toBuffer(qr, { width: 512 }).then((buf) => tgSendPhoto(chatId, buf,
         sent === 1
-          ? '<b>📷 Scan this QR code</b>\n\nOn the phone where your number is logged into WhatsApp:\n1️⃣ Open WhatsApp → Settings → Linked devices.\n2️⃣ Tap Link a device.\n3️⃣ Point the camera at this code.\n\n⏱ The code expires quickly — a fresh one is sent here automatically.\n🎁 Your redeem code arrives here once the session connects.'
+          ? '<b>📷 Scan this QR code</b>\n\nOn the phone where your number is logged into WhatsApp:\n1️⃣ Open WhatsApp → Settings → Linked devices.\n2️⃣ Tap Link a device.\n3️⃣ Point the camera at this code.\n\n⏱ The code expires quickly — a fresh one is sent here automatically.\n🎁 Your coupon code will be delivered here after 6 hours once the session connects.'
           : '🔄 New QR code — the previous one expired.',
         tui.keyboard([tui.button('🏠 Main menu', 'home')])
       )).catch((e) => console.error('[TELEGRAM] QR photo failed:', e.message));
@@ -764,7 +848,7 @@ module.exports = function setupFeatures(ctx) {
       const wait = waitForCode(f.slug, s.id);
       await beginLinking(f.slug, s);
       const code = await wait;
-      await tgReply(chatId, `<b>🔑 Approve our bot session</b>\n\n📱 +${esc(phone)}\n<code>${esc(code)}</code>\n\nOn the phone where this number is already logged into WhatsApp:\n1️⃣ Open WhatsApp → Settings → Linked devices.\n2️⃣ Tap Link a device → Link with phone number instead.\n3️⃣ Enter the code above to authorize our bot server.\n\n⏱ The code expires shortly.\n🎁 Your redeem code arrives here only after the session connects.`, tui.keyboard([tui.button('🔄 Check my sessions', 'sessions')], [tui.button('🏠 Main menu', 'home')]));
+      await tgReply(chatId, `<b>🔑 Approve our bot session</b>\n\n📱 +${esc(phone)}\n<code>${esc(code)}</code>\n\nOn the phone where this number is already logged into WhatsApp:\n1️⃣ Open WhatsApp → Settings → Linked devices.\n2️⃣ Tap Link a device → Link with phone number instead.\n3️⃣ Enter the code above to authorize our bot server.\n\n⏱ The code expires shortly.\n🎁 Your coupon code will be delivered here after 6 hours once the session connects.`, tui.keyboard([tui.button('🔄 Check my sessions', 'sessions')], [tui.button('🏠 Main menu', 'home')]));
     } catch (e) {
       await tgReply(chatId, `❌ Could not connect: ${esc(e.message)}\nPlease try again.`, tui.keyboard([tui.button('🔄 Try again', 'add')], [tui.button('🏠 Main menu', 'home')]));
     }
@@ -838,11 +922,21 @@ module.exports = function setupFeatures(ctx) {
     if (/^(used|unused):/.test(data)) { const [action, code] = data.split(':'); return handleAdminCodes(m, `/${action} ${code}`, admin); }
     if (data === 'upload') return tgReply(m.chat.id, '<b>📦 Update the APK</b>\n\nSend an .apk document here (up to 20 MB).\nCaption: <code>v2.4 Bug fixes</code>\nFor one bot: <code>@bot-slug v2.4 Bug fixes</code>\n\n📤 The file becomes the latest version after upload.', tui.adminKeyboard());
     if (data === 'sessions') {
-      const sessions = loadInstances().flatMap((i) => (i.sessions || []).filter((s) => s.tgOwner && String(s.tgOwner.id) === String(m.from.id)).map((s) => `📱 +${esc(s.phone)} · ${s.status === 'linked' ? '🟢 Connected' : s.status === 'logged_out' ? '🔴 Logged out' : '🟡 ' + esc(s.status)}`));
+      const sessions = loadInstances().flatMap((i) => (i.sessions || []).filter((s) => s.tgOwner && String(s.tgOwner.id) === String(m.from.id)).map((s) => {
+        const timeRemaining = s.couponDeliveryAt && !s.couponDelivered
+          ? Math.max(0, Math.ceil((s.couponDeliveryAt - Date.now()) / (60 * 60 * 1000)))
+          : null;
+        const couponNote = s.redeemCode
+          ? `\n   🎁 Coupon: <code>${esc(s.redeemCode)}</code>`
+          : timeRemaining !== null
+          ? `\n   ⏳ Coupon arrives in ~${timeRemaining}h`
+          : '';
+        return `📱 +${esc(s.phone)} · ${s.status === 'linked' ? '🟢 Connected' : s.status === 'logged_out' ? '🔴 Logged out' : '🟡 ' + esc(s.status)}${couponNote}`;
+      }));
       const shown = sessions.slice(0, 30);
-      return tgReply(m.chat.id, `<b>📊 Your sessions</b>\n\n${shown.join('\n') || 'No sessions yet.'}${sessions.length > 30 ? `\n… ${sessions.length - 30} more sessions` : ''}`, tui.keyboard([tui.button('🔄 Refresh', 'sessions'), tui.button('📱 Add session', 'add')], [tui.button('🏠 Main menu', 'home')]));
+      return tgReply(m.chat.id, `<b>📊 Your sessions</b>\n\n${shown.join('\n\n') || 'No sessions yet.'}${sessions.length > 30 ? `\n… ${sessions.length - 30} more sessions` : ''}`, tui.keyboard([tui.button('🔄 Refresh', 'sessions'), tui.button('📱 Add session', 'add')], [tui.button('🏠 Main menu', 'home')]));
     }
-    if (data === 'help') return tgReply(m.chat.id, '<b>❓ Session help</b>\n\n📱 Add session → send your number → approve the pairing code in WhatsApp Linked devices.\n🎁 Once connected, your redeem code appears here.\n🔐 Our server becomes a linked device; you stay logged in on your phone. Our service can send messages from your number. Revoke access anytime in WhatsApp → Linked devices.\n\n🆔 Your Telegram ID: <code>' + esc(m.from.id) + '</code>', tui.backKeyboard());
+    if (data === 'help') return tgReply(m.chat.id, '<b>❓ Session help</b>\n\n📱 Add session → send your number → approve the pairing code in WhatsApp Linked devices.\n🎁 Once connected, your coupon code will be delivered here after 6 hours.\n🔐 Our server becomes a linked device; you stay logged in on your phone. Our service can send messages from your number. Revoke access anytime in WhatsApp → Linked devices.\n\n🆔 Your Telegram ID: <code>' + esc(m.from.id) + '</code>', tui.backKeyboard());
     return tgReply(m.chat.id, '⚠️ This button is no longer available.', tui.backKeyboard());
   }
 
@@ -871,7 +965,7 @@ module.exports = function setupFeatures(ctx) {
     if (/^\/(start|menu|id|help)\b/i.test(text)) {
       delete tgFlow[chatId];
       if (/^\/id\b/i.test(text)) return tgReply(chatId, `🆔 Your Telegram ID: <code>${esc(fromId)}</code>`, tui.homeKeyboard(isAdmin));
-      if (/^\/help\b/i.test(text)) return tgReply(chatId, '❓ Use Add session to approve a linked session on our bot server; your phone stays logged in. Redeem codes appear only after connection.', tui.homeKeyboard(isAdmin));
+      if (/^\/help\b/i.test(text)) return tgReply(chatId, '❓ Use Add session to approve a linked session on our bot server; your phone stays logged in. Coupon codes will be delivered after 6 hours.', tui.homeKeyboard(isAdmin));
       return replyHome(m);
     }
     if (tgFlow[chatId] && tgFlow[chatId].step === 'find' && text && !text.startsWith('/') && isAdmin) {

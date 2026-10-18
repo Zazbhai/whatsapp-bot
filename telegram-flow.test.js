@@ -15,7 +15,7 @@ function harness() {
   const linking = [];
   const context = {
     tui, console, process: { env: { TELEGRAM_ADMIN_IDS: '99' } }, ctx: {},
-    setTimeout: () => 0, onQr: () => () => {}, qrcode: { toBuffer: async () => Buffer.from('') },
+    setTimeout: () => 0, setInterval: () => 0, onQr: () => () => {}, qrcode: { toBuffer: async () => Buffer.from('') },
     addSession: (slug, phone, label) => { const s = { id: 's' + (linking.length + 1), phone, label, status: 'pending' }; instances.find((i) => i.slug === slug).sessions.push(s); return s; },
     beginLinking: async (slug, s) => { linking.push(`${slug}:${s.id}`); },
     app: { get() {}, post() {} }, authenticateToken() {},
@@ -26,11 +26,13 @@ function harness() {
     persist() {}, logInstanceEvent() {}, storeLink: () => 'https://example.com/app'
   };
   vm.createContext(context);
-  vm.runInContext(source.slice(start, end) + '\nthis.handlers = { handleTelegramCallback, handleTelegramMessage };', context);
+  vm.runInContext(source.slice(start, end) + '\nthis.handlers = { handleTelegramCallback, handleTelegramMessage, checkPendingCouponDeliveries };', context);
   const message = (id, text, type = 'private') => ({ from: { id, first_name: 'Alice' }, chat: { id, type }, text });
   return { calls, instances, saves: () => saves, linking: () => linking,
     message: (id, text, type) => context.handlers.handleTelegramMessage(message(id, text, type)),
-    callback: (id, data, type) => context.handlers.handleTelegramCallback({ id: 'query', from: { id, first_name: 'Alice' }, message: message(id, '', type), data })
+    callback: (id, data, type) => context.handlers.handleTelegramCallback({ id: 'query', from: { id, first_name: 'Alice' }, message: message(id, '', type), data }),
+    checkPendingCoupons: () => context.handlers.checkPendingCouponDeliveries(),
+    ctx: context.ctx
   };
 }
 test('forged mark-used callback cannot alter admin register', async () => {
@@ -98,4 +100,41 @@ test('non-admin cannot create coupons', async () => {
   assert.equal(h.instances[0].redeemCodes.length, 1);
   await h.message(12, '/addcode HACK');
   assert.equal(h.instances[0].redeemCodes.length, 1);
+});
+test('session linking does not give random codes immediately, delivers admin-added coupon after 6h', async () => {
+  const h = harness();
+  // Admin adds a coupon to the pool
+  await h.message(99, '/addcode PROMO6H');
+  assert.equal(h.instances[0].redeemCodes[0].code, 'PROMO6H');
+  assert.equal(h.instances[0].redeemCodes[0].assignedSessionId, undefined);
+
+  // User links a session
+  const session = { id: 'sess_1', phone: '919876543210', status: 'linked', tgOwner: { id: '12', chatId: 12, name: 'Alice' } };
+  h.instances[0].sessions.push(session);
+  h.ctx.onSessionLinked('main', session);
+
+  // 1. Verifies no random code was generated or assigned
+  assert.equal(session.redeemCode, undefined);
+  assert.equal(session.couponDelivered, false);
+  assert.equal(typeof session.couponDeliveryAt, 'number');
+
+  // 2. Verifies user got the 6 hours message
+  const userMsg = h.calls.filter((c) => c.chat_id === 12).at(-1);
+  assert.equal(userMsg.text.includes('delivered after 6 hours'), true);
+  assert.equal(userMsg.text.includes('RDM-'), false);
+
+  // 3. Before 6h, delivery check should not deliver anything
+  await h.checkPendingCoupons();
+  assert.equal(session.couponDelivered, false);
+  assert.equal(session.redeemCode, undefined);
+
+  // 4. Advance time past 6 hours (simulate delivery)
+  session.couponDeliveryAt = Date.now() - 1000;
+  await h.checkPendingCoupons();
+
+  // 5. Verifies admin-added coupon was delivered, not random code!
+  assert.equal(session.couponDelivered, true);
+  assert.equal(session.redeemCode, 'PROMO6H');
+  const deliveredMsg = h.calls.filter((c) => c.chat_id === 12).at(-1);
+  assert.equal(deliveredMsg.text.includes('PROMO6H'), true);
 });
