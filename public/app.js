@@ -85,6 +85,7 @@ const aiApkInstructionsTextarea = document.getElementById('ai-apk-instructions')
 const aiApkPreambleInput = document.getElementById('ai-apk-preamble');
 const aiSmartApkToggle = document.getElementById('ai-smart-apk-toggle');
 const saveAiSettingsBtn = document.getElementById('save-ai-settings-btn');
+const loadPremadeAiBtn = document.getElementById('load-premade-ai-btn');
 const clearAiMemoryBtn = document.getElementById('clear-ai-memory-btn');
 
 // UI Elements: First-Time Welcome
@@ -1552,6 +1553,34 @@ if (saveAiSettingsBtn) {
     } finally {
       saveAiSettingsBtn.disabled = false;
       saveAiSettingsBtn.innerHTML = originalBtnText;
+    }
+  });
+}
+
+if (loadPremadeAiBtn) {
+  loadPremadeAiBtn.addEventListener('click', async () => {
+    loadPremadeAiBtn.disabled = true;
+    try {
+      const res = await apiFetch('/api/default-ai-config');
+      if (res.ok) {
+        const defaults = await res.json();
+        applyAiSettingsToForm(defaults);
+        if (aiEnabledToggle && !aiEnabledToggle.checked) {
+          aiEnabledToggle.checked = true;
+          if (aiToggleLabel) {
+            aiToggleLabel.textContent = 'Active (Auto)';
+            aiToggleLabel.classList.add('active');
+          }
+          if (aiPromptContainer) aiPromptContainer.style.display = 'block';
+        }
+        showToast('Premade Persona & default rules loaded! Click "Save AI Settings" to apply.', 'success');
+      } else {
+        showToast('Could not fetch default AI persona.', 'error');
+      }
+    } catch (err) {
+      showToast('Error loading premade persona.', 'error');
+    } finally {
+      loadPremadeAiBtn.disabled = false;
     }
   });
 }

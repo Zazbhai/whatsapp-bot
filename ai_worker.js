@@ -64,8 +64,8 @@ process.on('message', async (data) => {
   }
 
   const hfModels = [
-    process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V4-Flash:novita',
-    'deepseek-ai/DeepSeek-V4-Flash:novita',
+    process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V3',
+    'deepseek-ai/DeepSeek-V3',
     'Qwen/Qwen2.5-72B-Instruct'
   ];
 
@@ -94,6 +94,21 @@ process.on('message', async (data) => {
 
   async function tryModel(url, apiKey, model, abortSignal, attempt = 1) {
     try {
+      const requestPayload = {
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...history,
+          { role: 'user', content: userMessage }
+        ],
+        max_tokens: 500
+      };
+
+      if (url.includes('openrouter.ai')) {
+        // Exclude reasoning tokens from OpenRouter responses (prevents thinking models from leaking thoughts)
+        requestPayload.reasoning = { exclude: true };
+      }
+
       const response = await fetch(url, {
         signal: abortSignal,
         method: 'POST',
@@ -101,15 +116,7 @@ process.on('message', async (data) => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`
         },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...history,
-            { role: 'user', content: userMessage }
-          ],
-          max_tokens: 300
-        })
+        body: JSON.stringify(requestPayload)
       });
 
       if (!response.ok) {
@@ -129,11 +136,11 @@ process.on('message', async (data) => {
       }
 
       const responseJson = await response.json();
-      const content = responseJson?.choices?.[0]?.message?.content?.trim();
-      if (!content) {
+      let content = responseJson?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim()) {
         throw new Error('Empty AI response content');
       }
-      return { content, model };
+      return { content: content.trim(), model };
     } catch (err) {
       const isTransient = err.status === 429 || [500, 502, 503, 504].includes(err.status);
       const isAborted = abortSignal?.aborted || err.name === 'AbortError';

@@ -38,7 +38,7 @@ test('APK media data cannot overwrite the outgoing message ID', () => {
   assert.deepEqual(buildCompatibleUtils(loader)(), { body: 'apk' });
 });
 
-const source = fs.readFileSync(require.resolve('./server'), 'utf8');
+const source = fs.readFileSync(require.resolve('./server'), 'utf8').replace(/\r\n/g, '\n');
 test('a failed unread chat does not prevent another unread message from being queued', async () => {
   const start = source.indexOf('async function detectAndQueueUnrepliedMessages');
   const end = source.indexOf('// Shared rules path', start);
@@ -141,3 +141,63 @@ return { replyText, calls }; })();`;
     assert.equal(r.calls, 1);
   });
 });
+
+test('parseAIResponse completely strips reasoning tags and extracts proper reply', () => {
+  const start = source.indexOf('function parseAIResponse');
+  const end = source.indexOf('function detectApkIntent', start);
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+
+  // 1. Clean response
+  const r1 = context.parseAIResponse('Hello! Aap kaise hain?');
+  assert.equal(r1.text, 'Hello! Aap kaise hain?');
+
+  // 2. <think> tag stripped
+  const r2 = context.parseAIResponse('<think>User is greeting. Reply politely.</think>Namaste! Kaise ho?');
+  assert.equal(r2.text, 'Namaste! Kaise ho?');
+
+  // 3. Unclosed <think> tag stripped
+  const r3 = context.parseAIResponse('<think>User is asking how to download... I should check rules');
+  assert.equal(r3.text, null);
+
+  // 4. Thought process with explicit reply marker
+  const r4 = context.parseAIResponse(`Thinking Process:
+1. User asked for app download
+2. Persona requires Hinglish
+Final Response:
+App download karne ke liye upar wale link par click karein!`);
+  assert.equal(r4.text, 'App download karne ke liye upar wale link par click karein!');
+
+  // 5. Pure thought / system prompt leak rejected
+  const r5 = context.parseAIResponse(`was too long or had reasoning)
+   - Must not include thought process, analysis, or explanation
+   - Must output only the direct response
+   - If user has installed & ordered, add or , but this doesn't seem to be the case here - they're just asking how to download
+   - The user previously got a link, asked about app status, asked about free iPhone, etc. No clear order confirmation yet.`);
+  assert.equal(r5.text, null);
+
+  // 6. Emotion expression tags like <laugh> and <sigh> preserved
+  const r6 = context.parseAIResponse('Haan bilkul <laugh> main theek hoon! <sigh>');
+  assert.equal(r6.text, 'Haan bilkul <laugh> main theek hoon! <sigh>');
+});
+
+test('buildSystemPrompt falls back to premade DEFAULT_AI_CONFIG when fields are empty', () => {
+  const startCfg = source.indexOf('const DEFAULT_AI_CONFIG =');
+  const endCfg = source.indexOf('// Bootstrap default bot instance', startCfg);
+  const startPrompt = source.indexOf('function buildSystemPrompt');
+  const endPrompt = source.indexOf('function detectProcessIntent', startPrompt);
+
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(source.slice(startCfg, endCfg) + '\n' + source.slice(startPrompt, endPrompt), context);
+
+  // When instance has empty or undefined persona, premade persona is automatically applied
+  const emptyInst = { slug: 'test' };
+  const prompt = context.buildSystemPrompt(emptyInst);
+  assert.ok(prompt.includes('One Shop app'));
+  assert.ok(prompt.includes('RULES & PERSONA'));
+  assert.ok(prompt.includes('[SEND_APK]'));
+});
+
+
