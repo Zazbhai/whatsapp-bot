@@ -46,51 +46,58 @@ module.exports = function setupFeatures(ctx) {
     return path.join(authRoot, `session-${clientIdFor(slug, s)}`);
   }
 
+  const hasPhone = (s) => Boolean(s && s.phone && String(s.phone).trim().length > 0);
+
   function ensureSessions(inst) {
     if (!inst) return [];
     if (!Array.isArray(inst.sessions)) {
       inst.sessions = [];
     }
 
-    // Auto-discover sessions that exist in authRoot (.wwebjs_auth)
-    try {
-      if (fs.existsSync(authRoot)) {
-        const files = fs.readdirSync(authRoot);
-        const prefix = `session-session_${inst.slug}`;
-        for (const f of files) {
-          if (f === prefix) {
-            let def = inst.sessions.find((x) => x.id === 'default');
-            if (!def) {
-              inst.sessions.unshift({
-                id: 'default', phone: '', label: 'Main number',
-                status: 'linked', addedAt: now()
-              });
-            } else if (def.status === 'pending') {
-              def.status = 'linked';
-            }
-          } else if (f.startsWith(`${prefix}_`)) {
-            const sid = f.slice(`${prefix}_`.length);
-            if (sid && !inst.sessions.some((x) => x.id === sid)) {
-              inst.sessions.push({
-                id: sid, phone: '', label: `Session ${sid}`,
-                status: 'linked', addedAt: now()
-              });
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    if (inst.sessions.length === 0) {
-      const legacyLinked = fs.existsSync(path.join(authRoot, `session-session_${inst.slug}`));
-      inst.sessions.push({
-        id: 'default', phone: '', label: 'Main number',
-        status: legacyLinked ? 'linked' : 'pending', addedAt: now()
+    let changed = false;
+    // Filter out ghost sessions that have no phone number and are not actively pairing
+    const realSessions = inst.sessions.filter(hasPhone);
+    if (realSessions.length > 0) {
+      const beforeLen = inst.sessions.length;
+      inst.sessions = inst.sessions.filter((s) => {
+        if (hasPhone(s)) return true;
+        const key = `${inst.slug}:${s.id}`;
+        // Only keep phone-less slot if actively waiting for pairing code
+        return Boolean(s.pairingCode || (linkers && linkers[key]));
       });
+      if (inst.sessions.length !== beforeLen) changed = true;
     }
 
-    if (!inst.activeSessionId || !inst.sessions.some((x) => x.id === inst.activeSessionId)) {
-      inst.activeSessionId = inst.sessions[0].id;
+    // If completely empty, keep a single pending default slot for pairing
+    if (inst.sessions.length === 0) {
+      inst.sessions.push({
+        id: 'default', phone: '', label: 'Main number',
+        status: 'pending', addedAt: now()
+      });
+      changed = true;
+    }
+
+    // A session without a phone number can NEVER be considered 'linked'
+    for (const s of inst.sessions) {
+      if (!hasPhone(s) && s.status === 'linked') {
+        s.status = 'pending';
+        changed = true;
+      }
+    }
+
+    // Ensure activeSessionId points to a real number if one exists
+    const activeValid = inst.sessions.find((x) => x.id === inst.activeSessionId && hasPhone(x));
+    if (!activeValid) {
+      const firstLinked = inst.sessions.find((x) => x.status === 'linked' && hasPhone(x));
+      const firstWithPhone = inst.sessions.find(hasPhone);
+      const newActive = firstLinked ? firstLinked.id : (firstWithPhone ? firstWithPhone.id : inst.sessions[0].id);
+      if (inst.activeSessionId !== newActive) {
+        inst.activeSessionId = newActive;
+        changed = true;
+      }
+    }
+    if (changed) {
+      try { persist(); } catch (_) {}
     }
     return inst.sessions;
   }
@@ -117,19 +124,25 @@ module.exports = function setupFeatures(ctx) {
     persist();
   }
 
-  const usable = (s) => s && !(s.retryAfter > Date.now()) && (s.status === 'linked' || (s.phone && s.status !== 'logged_out'));
+  const usable = (s) => s && hasPhone(s) && !(s.retryAfter > Date.now()) && (s.status === 'linked' || s.status !== 'logged_out');
 
   // Which session should the main WhatsApp engine of this bot run?
   function resolveSession(slug, forcedId) {
     const inst = getInst(slug);
     if (!inst) return null;
     const list = ensureSessions(inst);
-    if (forcedId) return list.find((s) => s.id === forcedId) || null;
+    if (forcedId) {
+      const target = list.find((s) => s.id === forcedId);
+      return target && hasPhone(target) ? target : null;
+    }
     // Always prefer a linked number over one still waiting for its pairing code.
     const active = list.find((s) => s.id === inst.activeSessionId);
     const pick = pickAutoSession(list, inst.activeSessionId) || (usable(active) ? active : list.find(usable));
-    if (pick) setActive(slug, pick.id);
-    return pick || null;
+    if (pick && hasPhone(pick)) {
+      setActive(slug, pick.id);
+      return pick;
+    }
+    return null;
   }
 
   function nextLinked(slug, currentId) {
@@ -382,7 +395,8 @@ module.exports = function setupFeatures(ctx) {
         idleTicks: idleTicks[slug], pairingSince: pairingSince[slug] });
       if (!action) continue;
       const target = inst.sessions.find((x) => x.id === (action.start || action.switchTo));
-      const name = target.phone ? '+' + target.phone : target.label;
+      if (!target || !hasPhone(target)) continue;
+      const name = '+' + target.phone;
       idleTicks[slug] = 0; delete pairingSince[slug];
       if (action.start) {
         logInstanceEvent(slug, 'system', `No number was online. Automatically selected ${name}.`);

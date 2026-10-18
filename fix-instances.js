@@ -69,55 +69,36 @@ if (!instances || !Array.isArray(instances) || instances.length === 0) {
   }];
 }
 
-// 4. Scan .wwebjs_auth for any existing session credentials on the machine
+// 4. Purge all ghost sessions that have NO phone number
 const primary = instances.find(i => i.slug === 'primary') || instances[0];
 if (!Array.isArray(primary.sessions)) primary.sessions = [];
 
-let recoveredCount = 0;
-if (fs.existsSync(authDir)) {
-  const folders = fs.readdirSync(authDir);
-  console.log(`🔍 Inspecting ${folders.length} credential folder(s) in .wwebjs_auth...`);
+const hasPhone = (s) => Boolean(s && s.phone && String(s.phone).trim().length > 0);
 
-  for (const f of folders) {
-    const prefix = `session-session_${primary.slug}`;
-    if (f === prefix) {
-      let def = primary.sessions.find(s => s.id === 'default');
-      if (!def) {
-        primary.sessions.unshift({
-          id: 'default',
-          phone: '',
-          label: 'Main number',
-          status: 'linked',
-          addedAt: new Date().toISOString()
-        });
-        recoveredCount++;
-        console.log('   ➕ Recovered default session from credentials.');
-      } else {
-        def.status = 'linked';
-      }
-    } else if (f.startsWith(`${prefix}_`)) {
-      const sid = f.slice(`${prefix}_`.length);
-      let existing = primary.sessions.find(s => s.id === sid);
-      if (!existing) {
-        primary.sessions.push({
-          id: sid,
-          phone: '',
-          label: `Session ${sid}`,
-          status: 'linked',
-          addedAt: new Date().toISOString()
-        });
-        recoveredCount++;
-        console.log(`   ➕ Recovered session "${sid}" from credentials.`);
-      } else {
-        existing.status = 'linked';
-      }
-    }
-  }
+const beforeCount = primary.sessions.length;
+// Keep only sessions with real phone numbers
+primary.sessions = primary.sessions.filter(hasPhone);
+const purgedCount = beforeCount - primary.sessions.length;
+
+if (purgedCount > 0) {
+  console.log(`🧹 Purged ${purgedCount} ghost session(s) without phone numbers.`);
 }
 
-if (!primary.activeSessionId || !primary.sessions.some(s => s.id === primary.activeSessionId)) {
-  primary.activeSessionId = primary.sessions[0]?.id || 'default';
+// If all sessions were purged, create a single clean pending slot for login
+if (primary.sessions.length === 0) {
+  primary.sessions.push({
+    id: 'default',
+    phone: '',
+    label: 'Main number',
+    status: 'pending',
+    addedAt: new Date().toISOString()
+  });
 }
+
+// Ensure activeSessionId points to a real number
+const firstLinked = primary.sessions.find(s => s.status === 'linked' && hasPhone(s));
+const firstWithPhone = primary.sessions.find(hasPhone);
+primary.activeSessionId = firstLinked ? firstLinked.id : (firstWithPhone ? firstWithPhone.id : primary.sessions[0].id);
 
 // Write repaired instances.json atomically
 const tempFile = `${instancesPath}.tmp.${Date.now()}`;
@@ -126,7 +107,6 @@ fs.renameSync(tempFile, instancesPath);
 
 console.log('=============================================================');
 console.log(`🎉 RECOVERY COMPLETE!`);
-console.log(`📁 Saved valid instances database to: ${instancesPath}`);
-console.log(`🔢 Active sessions in primary bot: ${primary.sessions.length} (${recoveredCount} newly discovered from .wwebjs_auth)`);
+console.log(`🔢 Valid sessions in primary bot: ${primary.sessions.length} (${purgedCount} ghost sessions removed)`);
 console.log(`👉 You can now restart your bot with: pm2 restart bot`);
 console.log('=============================================================');

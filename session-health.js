@@ -2,23 +2,33 @@ const SESSION_FAILURE = /target closed|session closed|connection closed|browser.
 function isSessionFailure(error) {
   return SESSION_FAILURE.test(String(error?.message || error));
 }
+function hasValidNumber(s) {
+  if (!s) return false;
+  if ('phone' in s) {
+    return Boolean(s.phone && String(s.phone).trim().length > 0);
+  }
+  return true;
+}
+
 function pickNextSession(sessions, currentId, now = Date.now()) {
   const index = sessions.findIndex(s => s.id === currentId);
   for (let offset = 1; offset <= sessions.length; offset++) {
     const candidate = sessions[(index + offset) % sessions.length];
-    if (candidate && candidate.id !== currentId && candidate.status === 'linked' && !(candidate.retryAfter > now)) return candidate;
+    if (candidate && candidate.id !== currentId && hasValidNumber(candidate) && candidate.status === 'linked' && !(candidate.retryAfter > now)) {
+      return candidate;
+    }
   }
   return null;
 }
 // Best linked number to run automatically: keep the current one when healthy, else the first in priority order.
 function pickAutoSession(sessions, activeId, now = Date.now()) {
-  const ok = (s) => s && s.status === 'linked' && !(s.retryAfter > now);
+  const ok = (s) => s && hasValidNumber(s) && s.status === 'linked' && !(s.retryAfter > now);
   const active = sessions.find(s => s.id === activeId);
   if (ok(active)) return active;
   const ready = sessions.find(ok);
   if (ready) return ready;
   // Every linked number is cooling down after a soft error: use one anyway rather than sit idle.
-  const linked = (s) => s && s.status === 'linked';
+  const linked = (s) => s && hasValidNumber(s) && s.status === 'linked';
   return linked(active) ? active : (sessions.find(linked) || null);
 }
 
