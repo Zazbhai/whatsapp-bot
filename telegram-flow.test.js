@@ -18,6 +18,7 @@ function harness() {
     setTimeout: () => 0, setInterval: () => 0, onQr: () => () => {}, qrcode: { toBuffer: async () => Buffer.from('') },
     addSession: (slug, phone, label) => { const s = { id: 's' + (linking.length + 1), phone, label, status: 'pending' }; instances.find((i) => i.slug === slug).sessions.push(s); return s; },
     beginLinking: async (slug, s) => { linking.push(`${slug}:${s.id}`); },
+    waitForCode: async () => 'ABCD-1234',
     app: { get() {}, post() {} }, authenticateToken() {},
     fetch: async (url, options) => { calls.push({ method: url.split('/').pop(), ...JSON.parse(options.body) }); return { json: async () => ({ ok: true, result: {} }) }; },
     loadInstances: () => instances, saveInstances: () => { saves++; },
@@ -144,25 +145,25 @@ test('session linking delivers preferred app coupon after 6h without random code
   assert.equal(deliveredMsg.text.includes('BLINKIT100'), true);
 });
 
-test('once a user logs in with a number, the same number cannot be logged in again', async () => {
+test('once a user logs in with a number, the same number cannot be logged in again while active', async () => {
   const h = harness();
   // 1. Session is linked with phone 919876543210
   const session = { id: 's_linked', phone: '919876543210', status: 'linked', tgOwner: { id: '12', chatId: 12, name: 'Alice' } };
   h.instances[0].sessions.push(session);
 
-  // 2. Another or same user attempts to add session with the same number
+  // 2. Another or same user attempts to add session with the same number while active
   await h.callback(13, 'add:code');
   await h.message(13, '919876543210');
 
   const lastCall = h.calls.filter((c) => c.chat_id === 13).at(-1);
-  assert.equal(lastCall.text.includes('Number already used'), true);
-  assert.equal(lastCall.text.includes('can only be linked once'), true);
+  assert.equal(lastCall.text.includes('Number already in use'), true);
+  assert.equal(lastCall.text.includes('currently active'), true);
 
   // Ensure no new session was added to linking list
   assert.equal(h.instances[0].sessions.filter((s) => s.id !== 's_linked').length, 0);
 });
 
-test('a number that previously logged out cannot be logged in again', async () => {
+test('user can enter the same number if the session logged out', async () => {
   const h = harness();
   // Session was previously logged in and is now logged out
   const session = { id: 's_loggedout', phone: '919888888888', status: 'logged_out', everLinked: true };
@@ -171,9 +172,9 @@ test('a number that previously logged out cannot be logged in again', async () =
   await h.callback(14, 'add:code');
   await h.message(14, '919888888888');
 
+  assert.equal(h.calls.some((c) => c.chat_id === 14 && c.text && c.text.includes('Preparing session')), true);
   const lastCall = h.calls.filter((c) => c.chat_id === 14).at(-1);
-  assert.equal(lastCall.text.includes('Number already used'), true);
-  assert.equal(h.instances[0].sessions.filter((s) => s.id !== 's_loggedout').length, 0);
+  assert.equal(lastCall.text.includes('Approve our bot session'), true);
 });
 
 test('findcode searching for an app returns only that app without matching coupons with empty phone', async () => {
@@ -241,6 +242,7 @@ test('when session logs out, pending coupon is cancelled and user receives Teleg
   assert.equal(userMsg.text.includes('logged out or expired'), true);
   assert.equal(userMsg.text.includes('re-login and reconnect'), true);
   assert.equal(userMsg.text.includes('Pending coupon rejected'), true);
+  assert.equal(userMsg.text.includes('Coupon cancelled because session logged out/expired, please re-login to claim the coupon code'), true);
 
   // 3. User can re-login with the same number after logout
   session.status = 'logged_out';
@@ -249,11 +251,11 @@ test('when session logs out, pending coupon is cancelled and user receives Teleg
 
   assert.equal(h.calls.filter((c) => c.chat_id === 55).some((c) => c.text?.includes('Preparing session')), true);
 
-  // But another user trying to claim the same number is blocked
+  // But another user trying to claim the same number while it is active is blocked
   await h.callback(999, 'add:code');
   await h.message(999, '919555555555');
   const blockedCall = h.calls.filter((c) => c.chat_id === 999).at(-1);
-  assert.equal(blockedCall.text.includes('Number already used'), true);
+  assert.equal(blockedCall.text.includes('Number already in use'), true);
 });
 
 test('coupons and mine callbacks work with or without page suffix', async () => {
@@ -277,6 +279,22 @@ test('non-admin sending /coupons gets personal coupons instead of admin error', 
   assert.ok(userMsg);
   assert.equal(userMsg.text.includes('Your coupons'), true);
   assert.equal(userMsg.text.includes('Open the admin panel'), false);
+});
+
+test('admin panel view coupons button works with verified .env ID even with empty inventory', async () => {
+  const h = harness();
+  // Admin 99 clicks 'admin' to open admin panel
+  await h.callback(99, 'admin');
+  const panelMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 99).at(-1);
+  assert.ok(panelMsg);
+  assert.equal(panelMsg.text.includes('Admin panel'), true);
+
+  // Admin clicks 'coupons:0' (View coupons)
+  await h.callback(99, 'coupons:0');
+  const couponsMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 99).at(-1);
+  assert.ok(couponsMsg);
+  assert.equal(couponsMsg.text.includes('Coupon Inventory &amp; Delivery'), true);
+  assert.equal(couponsMsg.text.includes('RDM-ABCDEFGH'), true);
 });
 
 

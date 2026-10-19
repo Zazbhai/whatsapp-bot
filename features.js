@@ -692,8 +692,79 @@ module.exports = function setupFeatures(ctx) {
   // 2. TELEGRAM APK UPDATES (long polling — no public URL needed)
   // ───────────────────────────────────────────────────────────
   const tg = { username: '', lastUpload: null, error: '' };
-  const tgToken = () => process.env.TELEGRAM_BOT_TOKEN || '';
-  const tgAdmins = () => (process.env.TELEGRAM_ADMIN_IDS || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const getEnvAdminIds = () => {
+    let ids = '';
+    try {
+      const candidates = [
+        path.join(__dirname, '.env'),
+        path.join(process.cwd(), '.env'),
+        path.join(typeof dataDir === 'string' ? path.dirname(dataDir) : __dirname, '.env')
+      ];
+      for (const c of candidates) {
+        if (fs.existsSync(c)) {
+          const content = fs.readFileSync(c, 'utf8');
+          const lines = content.split(/\r?\n/);
+          for (const line of lines) {
+            const m = line.match(/^\s*(?:export\s+)?TELEGRAM_ADMIN_IDS?\s*=\s*(.*)$/i);
+            if (m) {
+              ids = m[1].trim().replace(/^['"]|['"]$/g, '');
+              break;
+            }
+          }
+          if (ids) break;
+        }
+      }
+    } catch (_) {}
+    if (!ids) {
+      ids = process.env.TELEGRAM_ADMIN_IDS || process.env.TELEGRAM_ADMIN_ID || '';
+    }
+    return ids;
+  };
+  const tgToken = () => {
+    let tok = process.env.TELEGRAM_BOT_TOKEN || '';
+    if (!tok) {
+      try {
+        const candidates = [
+          path.join(__dirname, '.env'),
+          path.join(process.cwd(), '.env')
+        ];
+        for (const c of candidates) {
+          if (fs.existsSync(c)) {
+            const content = fs.readFileSync(c, 'utf8');
+            const lines = content.split(/\r?\n/);
+            for (const line of lines) {
+              const m = line.match(/^\s*(?:export\s+)?TELEGRAM_BOT_TOKEN\s*=\s*(.*)$/i);
+              if (m) {
+                tok = m[1].trim().replace(/^['"]|['"]$/g, '');
+                break;
+              }
+            }
+            if (tok) break;
+          }
+        }
+      } catch (_) {}
+      if (tok) process.env.TELEGRAM_BOT_TOKEN = tok;
+    }
+    return tok;
+  };
+  const tgAdmins = () => {
+    const raw = getEnvAdminIds();
+    if (raw && process.env.TELEGRAM_ADMIN_IDS !== raw) {
+      process.env.TELEGRAM_ADMIN_IDS = raw;
+    }
+    return raw.split(',').map((x) => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  };
+  function isTgAdmin(from) {
+    if (!from) return false;
+    const admins = tgAdmins();
+    if (!admins.length) return false;
+    const idStr = String(typeof from === 'object' && from ? (from.id ?? '') : from).trim().toLowerCase();
+    const userStr = String(typeof from === 'object' && from && from.username ? from.username : '').trim().replace(/^@/, '').toLowerCase();
+    return admins.some((a) => {
+      const clean = a.replace(/^@/, '').toLowerCase();
+      return clean === idStr || (userStr && clean === userStr);
+    });
+  }
   function telegramStatus() {
     return { configured: !!tgToken(), username: tg.username, admins: tgAdmins().length, lastUpload: tg.lastUpload, error: tg.error };
   }
@@ -723,7 +794,7 @@ module.exports = function setupFeatures(ctx) {
   const esc = tui.escapeHtml;
   const replyHome = (m) => tgReply(m.chat.id,
     `<b>💚 WA Bot Hub</b>\n\n👋 Hello, ${esc(m.from.first_name || 'there')}!\n\n📱 Add your WhatsApp number to our bot server.\n🎁 Receive a redeem code after the session connects.\n\n<b>🔐 Only link a number you own.</b> Linking authorizes our service to send messages from your number. You can revoke access in WhatsApp → Linked devices.`,
-    tui.homeKeyboard(tgAdmins().includes(String(m.from.id))));
+    tui.homeKeyboard(isTgAdmin(m.from)));
 
   // ── Telegram: anyone can add a WhatsApp session, gets a redeem code ──
   const tgFlow = {}; // chatId -> { step, slug }
@@ -746,20 +817,11 @@ module.exports = function setupFeatures(ctx) {
     if (d.length < 7) return false;
     const insts = loadInstances();
     for (const inst of insts) {
-      if ((inst.linkedNumbers || []).some((n) => digits(n) === d)) {
-        const ownedLoggedOut = (inst.sessions || []).some((s) => s.phone && digits(s.phone) === d && s.tgOwner && String(s.tgOwner.id) === String(allowOwnerId) && s.status === 'logged_out');
-        if (!ownedLoggedOut) return true;
-      }
       for (const s of (inst.sessions || [])) {
         if (excludeSessionId && s.id === excludeSessionId) continue;
         if (s.phone && digits(s.phone) === d) {
-          if (s.status === 'linked' || s.status === 'pairing') {
-            return true;
-          }
-          if (s.status === 'logged_out' || s.everLinked) {
-            if (allowOwnerId && s.tgOwner && String(s.tgOwner.id) === String(allowOwnerId)) {
-              continue;
-            }
+          // Block if the session number is currently active (not logged out)
+          if (s.status !== 'logged_out') {
             return true;
           }
         }
@@ -833,13 +895,13 @@ module.exports = function setupFeatures(ctx) {
     // 2. Notify the user's Telegram if this session has a Telegram owner
     if (s.tgOwner && s.tgOwner.chatId && typeof tgReply === 'function') {
       const phoneDisplay = s.phone ? `+${esc(s.phone)}` : (s.label ? esc(s.label) : 'WhatsApp session');
-      const couponNote = hadPendingCoupon
-        ? '\n\n❌ <b>Pending coupon rejected:</b> Your scheduled 6-hour coupon delivery has been cancelled because the session disconnected before reaching 6 hours.'
+      const couponNote = !s.redeemCode
+        ? '\n\n❌ <b>Pending coupon rejected:</b> Coupon cancelled because session logged out/expired, please re-login to claim the coupon code.'
         : '';
 
       tgReply(
         s.tgOwner.chatId,
-        `<b>⚠️ WhatsApp session logged out</b>\n\n📱 <b>${phoneDisplay}</b> has been logged out or expired in WhatsApp.${couponNote}\n\nPlease tap <b>📱 Add session</b> below to re-login and reconnect your number.`,
+        `<b>⚠️ WhatsApp session logged out</b>\n\n📱 <b>${phoneDisplay}</b> has been logged out or expired in WhatsApp.${couponNote}\n\nPlease tap <b>📱 Add session</b> below to re-login and reconnect your number to claim your coupon code.`,
         tui.keyboard([tui.button('📱 Re-login / Add session', 'add')], [tui.button('🏠 Main menu', 'home')])
       );
 
@@ -1070,11 +1132,13 @@ module.exports = function setupFeatures(ctx) {
   }
 
   async function sendCodeList(m, admin, filter = 'all', page = 0) {
+    const chatId = (m && m.chat && m.chat.id) || (m && m.from && m.from.id);
+    const fromId = m && m.from && m.from.id;
     const records = allCodes().filter((r) => admin
       ? true
-      : String(r.deliveredTo || r.tgUserId) === String(m.from.id));
+      : String(r.deliveredTo || r.tgUserId) === String(fromId));
     const view = tui.codePage(records, page, admin ? 'coupons' : 'mine', admin);
-    return tgReply(m.chat.id, view.text, view.reply_markup);
+    return tgReply(chatId, view.text, view.reply_markup);
   }
 
   async function showCode(m, code, admin) {
@@ -1159,7 +1223,7 @@ module.exports = function setupFeatures(ctx) {
       await tgReply(chatId, '<b>📱 Add a WhatsApp session</b>\n\nHow do you want to connect your number?\n\n📷 <b>QR code</b> — scan a code with your phone.\n🔢 <b>Pairing code</b> — type an 8-letter code on your phone.\n\n🔐 You are approving a linked session on our server, not signing in on your phone. Our service will be able to send messages from your number. Only continue with a number you own.', tui.keyboard([tui.button('📷 QR code', 'add:qr'), tui.button('🔢 Pairing code', 'add:code')], [tui.button('✖️ Cancel', 'cancel')]));
       return true;
     }
-    if (/^\/cancel\b/i.test(text)) { delete tgFlow[chatId]; await tgReply(chatId, '✖️ Request cancelled.', tui.homeKeyboard(tgAdmins().includes(fromId))); return true; }
+    if (/^\/cancel\b/i.test(text)) { delete tgFlow[chatId]; await tgReply(chatId, '✖️ Request cancelled.', tui.homeKeyboard(isTgAdmin(m.from))); return true; }
     if (/^\/mycodes\b/i.test(text)) { delete tgFlow[chatId]; await sendCodeList(m, false); return true; }
     const f = tgFlow[chatId];
     if (!f || f.step !== 'phone' || !text || text.startsWith('/')) return false;
@@ -1169,7 +1233,7 @@ module.exports = function setupFeatures(ctx) {
     if (!inst) { delete tgFlow[chatId]; await tgReply(chatId, '⚠️ This bot is no longer available.', tui.backKeyboard()); return true; }
     if (isNumberAlreadyLoggedIn(phone, null, fromId)) {
       delete tgFlow[chatId];
-      await tgReply(chatId, `⚠️ <b>Number already used</b>\n\nThe WhatsApp number <code>+${esc(phone)}</code> has already been logged in previously.\n\nEach phone number can only be linked once. Please use a different WhatsApp number.`, tui.keyboard([tui.button('📱 Try with another number', 'add')], [tui.button('🏠 Main menu', 'home')]));
+      await tgReply(chatId, `⚠️ <b>Number already in use</b>\n\nThe WhatsApp number <code>+${esc(phone)}</code> is currently active on our bot server.\n\nYou cannot link a number that is already active. If you wish to re-login with this number, please wait until the current session logs out or disconnects.`, tui.keyboard([tui.button('📱 Try with another number', 'add')], [tui.button('🏠 Main menu', 'home')]));
       return true;
     }
     delete tgFlow[chatId];
@@ -1250,8 +1314,11 @@ module.exports = function setupFeatures(ctx) {
   async function handleTelegramCallback(q) {
     const m = q.message && { ...q.message, from: q.from };
     const data = String(q.data || '');
-    const admin = tgAdmins().includes(String(q.from.id));
-    await tgCall('answerCallbackQuery', { callback_query_id: q.id, ...(!m || m.chat.type !== 'private' ? { text: 'Open this bot in a private chat.', show_alert: true } : !tui.canUseCallback(data, admin) ? { text: 'Admins only.', show_alert: true } : {}) });
+    const admin = isTgAdmin(q.from);
+    await tgCall('answerCallbackQuery', {
+      callback_query_id: q.id,
+      ...(!m || m.chat.type !== 'private' ? { text: 'Open this bot in a private chat.', show_alert: true } : !tui.canUseCallback(data, admin) ? { text: 'Admins only.', show_alert: true } : {})
+    }).catch((e) => console.warn('[TELEGRAM] answerCallbackQuery failed:', e.message));
     if (!m || m.chat.type !== 'private' || !tui.canUseCallback(data, admin)) return;
     delete tgFlow[m.chat.id];
     if (data === 'home') return replyHome(m);
@@ -1342,7 +1409,7 @@ module.exports = function setupFeatures(ctx) {
   async function handleTelegramMessage(m) {
     const fromId = String(m.from && m.from.id);
     const chatId = m.chat.id;
-    const isAdmin = tgAdmins().includes(fromId);
+    const isAdmin = isTgAdmin(m.from);
     const text = (m.text || '').trim();
     if (m.chat.type !== 'private') {
       if (text.startsWith('/')) return tgReply(chatId, '🔐 Open this bot in a private chat to use the menu.');

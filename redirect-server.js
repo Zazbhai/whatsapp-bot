@@ -540,24 +540,21 @@ function createRedirectApp({
       return res.redirect(302, targetUrl);
     }
 
-    // Direct download if query parameter requested (?download=1 or ?apk=1)
-    if (req.query.download === '1' || req.query.apk === '1') {
-      const apk = getApkFile(dataDir);
-      if (apk && apk.path) return res.download(apk.path, apk.filename || 'app.apk');
-      if (apk && apk.buffer) {
-        res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-        res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'app.apk'}"`);
-        return res.send(apk.buffer);
-      }
+    // No active number in sessions: directly download the APK, don't show anything else
+    const apk = getApkFile(dataDir);
+    if (apk && apk.path) {
+      return res.download(apk.path, apk.filename || 'app.apk', (err) => {
+        if (err && !res.headersSent) res.status(500).send('Download error');
+      });
+    }
+    if (apk && apk.buffer) {
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'app.apk'}"`);
+      res.setHeader('Content-Length', apk.buffer.length);
+      return res.send(apk.buffer);
     }
 
-    // No active number yet - serve stylish waiting/download page with APK download button
-    const apk = getApkFile(dataDir);
-    res.status(200).send(renderWaitingPage({
-      mainDashboardPort,
-      apkAvailable: Boolean(apk),
-      downloadUrl: '/download'
-    }));
+    return res.status(404).type('text/plain').send('No active WhatsApp session and no APK available for download.');
   };
 
   // Catch-all route: redirects to active WhatsApp number or shows APK download / waiting page

@@ -70,7 +70,7 @@ function codePage(records, page, prefix, admin) {
   buttons.push([button(admin ? '👑 Admin panel' : '🏠 Main menu', admin ? 'admin' : 'home')]);
 
   return {
-    text: `<b>🎁 ${admin ? 'Coupon Inventory & Delivery' : 'Your coupons'}</b>\n📋 ${records.length} total · Page ${index + 1}/${pages}\n\n${text || 'No coupons here yet.'}`,
+    text: `<b>🎁 ${admin ? 'Coupon Inventory &amp; Delivery' : 'Your coupons'}</b>\n📋 ${records.length} total · Page ${index + 1}/${pages}\n\n${text || 'No coupons here yet.'}`,
     reply_markup: keyboard(...buttons)
   };
 }

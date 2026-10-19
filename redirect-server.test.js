@@ -128,16 +128,44 @@ test('redirect web application redirects to active whatsapp number on port', asy
     assert.equal(statusData.phone, '918949446687');
     assert.equal(statusData.url, 'https://wa.me/918949446687');
 
-    // 4. Test when bot has NO active phone
+    // 4. Test when bot has NO active phone and no APK
     activePhone = null;
     const res4 = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
-    assert.equal(res4.status, 200);
-    const html = await res4.text();
-    assert.ok(html.includes('Connecting to WhatsApp'));
-    assert.ok(html.includes('Download APK'));
-    assert.ok(html.includes('http-equiv="refresh"'));
+    assert.equal(res4.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('when no number is logged in, redirect app directly downloads APK on root without showing anything else', async () => {
+  const fs = require('fs');
+  const path = require('path');
+  const tmpData = path.join(__dirname, 'test_apk_direct_' + Date.now());
+  fs.mkdirSync(tmpData, { recursive: true });
+  fs.writeFileSync(path.join(tmpData, 'latest_apk_primary.apk'), 'my-direct-apk-binary');
+
+  try {
+    const app = createRedirectApp({
+      getActiveNumber: () => null,
+      dataDir: tmpData
+    });
+
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('content-type'), 'application/vnd.android.package-archive');
+      assert.ok(res.headers.get('content-disposition')?.includes('attachment'));
+      const body = await res.text();
+      assert.equal(body, 'my-direct-apk-binary');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    fs.rmSync(tmpData, { recursive: true, force: true });
   }
 });
 
