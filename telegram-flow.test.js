@@ -256,5 +256,28 @@ test('when session logs out, pending coupon is cancelled and user receives Teleg
   assert.equal(blockedCall.text.includes('Number already used'), true);
 });
 
+test('coupons and mine callbacks work with or without page suffix', async () => {
+  const h = harness();
+  await h.message(99, '/addcoupon Blinkit BLINKIT99');
+  await h.callback(99, 'coupons');
+  const adminMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 99).at(-1);
+  assert.ok(adminMsg);
+  assert.equal(adminMsg.text.includes('BLINKIT99'), true);
+
+  await h.callback(12, 'mine');
+  const userMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 12).at(-1);
+  assert.ok(userMsg);
+  assert.equal(userMsg.text.includes('Your coupons'), true);
+});
+
+test('non-admin sending /coupons gets personal coupons instead of admin error', async () => {
+  const h = harness();
+  await h.message(12, '/coupons');
+  const userMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 12).at(-1);
+  assert.ok(userMsg);
+  assert.equal(userMsg.text.includes('Your coupons'), true);
+  assert.equal(userMsg.text.includes('Open the admin panel'), false);
+});
+
 
 

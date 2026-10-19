@@ -864,7 +864,16 @@ module.exports = function setupFeatures(ctx) {
     for (const inst of insts) {
       const sessions = inst.sessions || [];
       for (const s of sessions) {
-        if (!s.tgOwner || s.couponDelivered || !s.couponDeliveryAt) continue;
+        if (!s.tgOwner || s.couponDelivered) continue;
+        if (!s.couponDeliveryAt && s.status === 'linked') {
+          const addedAtMs = s.addedAt ? new Date(s.addedAt).getTime() : 0;
+          const delayMs = getCouponDelayMs();
+          s.couponDeliveryAt = (addedAtMs && !Number.isNaN(addedAtMs))
+            ? addedAtMs + delayMs
+            : nowMs + delayMs;
+          changed = true;
+        }
+        if (!s.couponDeliveryAt) continue;
 
         if (nowMs >= s.couponDeliveryAt) {
           if (s.status === 'logged_out') {
@@ -961,7 +970,31 @@ module.exports = function setupFeatures(ctx) {
   if (typeof setInterval === 'function') setInterval(checkPendingCouponDeliveries, 30000);
 
   function allCodes() {
-    return loadInstances().flatMap((i) => i.redeemCodes || []).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const list = loadInstances().flatMap((i) => i.redeemCodes || []).slice();
+    const seenCodes = new Set(list.map((r) => r.code && String(r.code).toUpperCase()).filter(Boolean));
+    for (const inst of loadInstances()) {
+      for (const s of (inst.sessions || [])) {
+        if (s.redeemCode && !seenCodes.has(String(s.redeemCode).toUpperCase())) {
+          seenCodes.add(String(s.redeemCode).toUpperCase());
+          list.push({
+            app: s.couponApp || 'Coupon',
+            code: s.redeemCode,
+            bot: inst.slug,
+            sessionId: s.id,
+            phone: s.phone,
+            tgUserId: s.tgOwner ? String(s.tgOwner.id) : null,
+            tgName: s.tgOwner ? s.tgOwner.name : null,
+            deliveredTo: s.tgOwner ? String(s.tgOwner.id) : null,
+            deliveredPhone: s.phone,
+            deliveredName: s.tgOwner ? s.tgOwner.name : null,
+            deliveredAt: s.couponDeliveredAt || s.addedAt || now(),
+            createdAt: s.addedAt || now(),
+            isAdminAdded: true
+          });
+        }
+      }
+    }
+    return list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   }
   // Mutex for coupon operations to prevent TOCTOU races (simple async lock)
   let couponLocked = false;
@@ -1045,10 +1078,15 @@ module.exports = function setupFeatures(ctx) {
   }
 
   async function showCode(m, code, admin) {
-    const r = allCodes().find((r) => r.code === code);
+    const qCode = String(code || '').trim().toUpperCase();
+    const r = allCodes().find((r) => r.code && String(r.code).toUpperCase() === qCode);
     if (!tui.canViewCode(r, m.from.id, admin)) return tgReply(m.chat.id, '⛔ Coupon unavailable.', tui.backKeyboard());
     const rows = [];
-    rows.push([tui.button(admin ? '👑 Admin panel' : '🎁 My coupons', admin ? 'admin' : 'mine:0')]);
+    if (admin) {
+      rows.push([tui.button('🎁 View coupons', 'coupons:0'), tui.button('👑 Admin panel', 'admin')]);
+    } else {
+      rows.push([tui.button('🎁 My coupons', 'mine:0'), tui.button('🏠 Main menu', 'home')]);
+    }
     const appLabel = esc(r.app || 'Coupon');
     const status = (r.deliveredTo || r.assignedSessionId)
       ? `📤 Delivered to +${esc(r.phone || r.deliveredPhone || '')}${r.tgName ? ` (${esc(r.tgName)})` : ''}\n📅 Delivered: ${esc(r.deliveredAt || r.createdAt)}`
@@ -1151,12 +1189,17 @@ module.exports = function setupFeatures(ctx) {
   }
 
   async function handleAdminCodes(m, text, isAdmin) {
-    if (!/^\/(coupons|codes|findcode|addcoupon|addcode|newcode|coupon)\b/i.test(text)) return false;
-    if (!isAdmin || m.chat.type !== 'private') { await tgReply(m.chat.id, '⛔ Open the admin panel in a private chat with this bot.'); return true; }
+    if (!/^\/(coupons|codes|mycoupons|findcode|addcoupon|addcode|newcode|coupon)\b/i.test(text)) return false;
+    if (m.chat.type !== 'private') { await tgReply(m.chat.id, '⛔ Open this bot in a private chat.'); return true; }
     delete tgFlow[m.chat.id];
     const parts = text.trim().split(/\s+/);
     const cmd = parts[0];
     const args = parts.slice(1);
+    if (/^\/(coupons|codes|mycoupons)/i.test(cmd)) {
+      await sendCodeList(m, isAdmin, 'all', args[0]);
+      return true;
+    }
+    if (!isAdmin) { await tgReply(m.chat.id, '⛔ Open the admin panel in a private chat with this bot.'); return true; }
     if (/^\/(addcoupon|addcode|newcode|coupon)\b/i.test(cmd)) {
       if (!args.length) {
         return tgReply(m.chat.id, '<b>➕ Add coupon to pool</b>\n\nSelect which app this coupon is for:\nOr send <code>/addcoupon &lt;App&gt; &lt;Code&gt;</code>', tui.appSelectKeyboard());
@@ -1221,7 +1264,11 @@ module.exports = function setupFeatures(ctx) {
     }
     if (data === 'add:qr') return startQrSession(m);
     if (data === 'cancel') return handleSessionFlow(m, '/cancel');
-    if (data.startsWith('mine:')) return sendCodeList(m, false, 'all', data.split(':')[1]);
+    if (data === 'mine' || data.startsWith('mine:')) {
+      const parts = data.split(':');
+      const page = parts.length > 1 ? parts.at(-1) : 0;
+      return sendCodeList(m, false, 'all', page);
+    }
     if (data === 'admin') return tgReply(m.chat.id, '<b>👑 Admin panel</b>\n\n🎁 Manage redeem codes\n📦 Publish APK updates', tui.adminKeyboard());
     if (data === 'addcoupon' || data === 'addcode') {
       return tgReply(m.chat.id, '<b>➕ Add coupon to pool</b>\n\nSelect which app this coupon is for:\nOr send <code>/addcoupon &lt;App&gt; &lt;Code&gt;</code>', tui.appSelectKeyboard());
@@ -1249,9 +1296,9 @@ module.exports = function setupFeatures(ctx) {
       const label = preferred === 'Any' ? 'Any app' : preferred;
       return tgReply(m.chat.id, `✅ <b>Preference saved:</b> ${esc(label)}\n\nYour <b>${esc(label)}</b> coupon code will be delivered here once your 6-hour connection milestone is reached.`, tui.homeKeyboard(admin));
     }
-    if (data.startsWith('coupons:') || data.startsWith('codes:')) {
+    if (data === 'coupons' || data.startsWith('coupons:') || data === 'codes' || data.startsWith('codes:')) {
       const parts = data.split(':');
-      const page = parts.at(-1);
+      const page = parts.length > 1 ? parts.at(-1) : 0;
       return sendCodeList(m, true, 'all', page);
     }
     if (data === 'find') return handleAdminCodes(m, '/findcode', admin);
