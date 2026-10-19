@@ -48,6 +48,9 @@ module.exports = function setupFeatures(ctx) {
 
   const hasPhone = (s) => Boolean(s && s.phone && String(s.phone).trim().length > 0);
 
+  // Background linker registry — must be declared before ensureSessions() since it's used inside
+  const linkers = {};
+
   function ensureSessions(inst) {
     if (!inst) return [];
     if (!Array.isArray(inst.sessions)) {
@@ -180,7 +183,14 @@ module.exports = function setupFeatures(ctx) {
   function waitForCode(slug, id, ms = 90000) {
     return new Promise((resolve, reject) => {
       const key = `${slug}:${id}`;
-      const t = setTimeout(() => reject(new Error('WhatsApp did not return a pairing code in time. Try again.')), ms);
+      const t = setTimeout(() => {
+        // Clean up leaked codeWaiters entry on timeout
+        if (codeWaiters[key]) {
+          codeWaiters[key] = codeWaiters[key].filter(fn => fn !== clearTimeout);
+          delete codeWaiters[key];
+        }
+        reject(new Error('WhatsApp did not return a pairing code in time. Try again.'));
+      }, ms);
       (codeWaiters[key] = codeWaiters[key] || []).push((c) => { clearTimeout(t); resolve(c); });
     });
   }
@@ -215,7 +225,7 @@ module.exports = function setupFeatures(ctx) {
       markSession(slug, s.id, { status: 'logged_out', pairingCode: null, lastError: 'Number already logged in previously' });
       emitSessions(slug);
       if (client) { try { client.destroy(); } catch (_) {} }
-      if (s.tgOwner && s.tgOwner.chatId) {
+      if (s.tgOwner && s.tgOwner.chatId && typeof tgReply === 'function') {
         tgReply(s.tgOwner.chatId, `⚠️ <b>Login rejected: Number already used</b>\n\nYour WhatsApp number <code>+${esc(resolvedPhone)}</code> has already been logged in previously.\n\nEach phone number can only be linked once. This session has been disconnected.`, tui.keyboard([tui.button('📱 Try with another number', 'add')], [tui.button('🏠 Main menu', 'home')]));
       }
       return;
@@ -277,7 +287,6 @@ module.exports = function setupFeatures(ctx) {
   }
 
   // Background linker: links a backup number while the main one keeps working.
-  const linkers = {};
   function startLinker(slug, s) {
     const key = `${slug}:${s.id}`;
     if (linkers[key]) { try { linkers[key].destroy(); } catch (_) {} delete linkers[key]; }
@@ -307,7 +316,7 @@ module.exports = function setupFeatures(ctx) {
         logInstanceEvent(slug, 'system', `Rejected duplicate login for +${resolvedPhone}. Number already logged in previously.`);
         markSession(slug, s.id, { status: 'logged_out', pairingCode: null, lastError: 'Number already logged in previously' });
         stop();
-        if (s.tgOwner && s.tgOwner.chatId) {
+        if (s.tgOwner && s.tgOwner.chatId && typeof tgReply === 'function') {
           tgReply(s.tgOwner.chatId, `⚠️ <b>Login rejected: Number already used</b>\n\nYour WhatsApp number <code>+${esc(resolvedPhone)}</code> has already been logged in previously.\n\nEach phone number can only be linked once. This session has been disconnected.`, tui.keyboard([tui.button('📱 Try with another number', 'add')], [tui.button('🏠 Main menu', 'home')]));
         }
         return;
@@ -332,16 +341,25 @@ module.exports = function setupFeatures(ctx) {
     emitSessions(slug);
   }
 
+  // Prevent concurrent restarts per slug
+  const restartPromises = {};
+
   async function restartMainWith(slug, id) {
-    const cur = activeClients[slug];
-    if (cur) {
-      if (clientStates[slug]) clientStates[slug].manualStop = true;
-      delete activeClients[slug];
-      try { await cur.destroy(); } catch (_) {}
-      if (clientStates[slug]) clientStates[slug].manualStop = false;
-    }
-    setActive(slug, id);
-    initClient(slug, id);
+    // Guard against concurrent restarts
+    if (restartPromises[slug]) return restartPromises[slug];
+    const p = (async () => {
+      const cur = activeClients[slug];
+      if (cur) {
+        if (clientStates[slug]) clientStates[slug].manualStop = true;
+        delete activeClients[slug];
+        try { await cur.destroy(); } catch (_) {}
+        if (clientStates[slug]) clientStates[slug].manualStop = false;
+      }
+      setActive(slug, id);
+      initClient(slug, id);
+    })();
+    restartPromises[slug] = p;
+    try { await p; } finally { delete restartPromises[slug]; }
   }
 
   // Start linking a session: through the main engine if nothing is online, otherwise in the background.
@@ -945,15 +963,40 @@ module.exports = function setupFeatures(ctx) {
   function allCodes() {
     return loadInstances().flatMap((i) => i.redeemCodes || []).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   }
-  function setCodeUsed(code, used) {
-    const insts = loadInstances();
-    for (const i of insts) {
-      const r = (i.redeemCodes || []).find((x) => x.code === code);
-      if (r) { r.used = used; r.usedAt = used ? now() : null; saveInstances(insts); return r; }
-    }
-    return null;
+  // Mutex for coupon operations to prevent TOCTOU races (simple async lock)
+  let couponLocked = false;
+  const couponWaiters = [];
+
+  function acquireCouponLock() {
+    if (!couponLocked) { couponLocked = true; return Promise.resolve(); }
+    return new Promise(resolve => couponWaiters.push(resolve));
   }
-  function addCouponCode(app, customCode, adminInfo) {
+  function releaseCouponLock() {
+    if (couponWaiters.length > 0) {
+      const next = couponWaiters.shift();
+      next();
+    } else {
+      couponLocked = false;
+    }
+  }
+
+  async function setCodeUsed(code, used) {
+    await acquireCouponLock();
+    try {
+      const insts = loadInstances();
+      for (const i of insts) {
+        const r = (i.redeemCodes || []).find((x) => x.code === code);
+        if (r) { r.used = used; r.usedAt = used ? now() : null; saveInstances(insts); return r; }
+      }
+      return null;
+    } finally { releaseCouponLock(); }
+  }
+  async function addCouponCode(app, customCode, adminInfo) {
+    await acquireCouponLock();
+    try { return _addCouponCode(app, customCode, adminInfo); }
+    finally { releaseCouponLock(); }
+  }
+  function _addCouponCode(app, customCode, adminInfo) {
     const slug = sessionBotSlug();
     const insts = loadInstances();
     const inst = (slug && insts.find((i) => i.slug === slug)) || insts[0];
@@ -1125,7 +1168,7 @@ module.exports = function setupFeatures(ctx) {
         code = args.slice(1).join(' ');
       }
       const name = [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || m.from.username || String(m.from.id);
-      const res = addCouponCode(app, code, { id: m.from.id, name });
+      const res = await addCouponCode(app, code, { id: m.from.id, name });
       if (!res) { await tgReply(m.chat.id, '⚠️ Could not create coupon. Ensure a bot is configured.', tui.adminKeyboard()); return true; }
       if (res.error === 'exists') {
         await tgReply(m.chat.id, `⚠️ Coupon <code>${esc(res.code)}</code> already exists! Please choose another code.`, tui.keyboard([tui.button('➕ Try another', 'addcoupon')], [tui.button('👑 Admin panel', 'admin')]));
@@ -1237,15 +1280,15 @@ module.exports = function setupFeatures(ctx) {
 
   // Dashboard API for redeem codes
   app.get('/api/redeem-codes', authenticateToken, (req, res) => res.json(allCodes()));
-  app.post('/api/redeem-codes', authenticateToken, (req, res) => {
-    const resAdd = addCouponCode(req.body.app, req.body.code, { id: 'dashboard', name: 'Dashboard' });
+  app.post('/api/redeem-codes', authenticateToken, async (req, res) => {
+    const resAdd = await addCouponCode(req.body.app, req.body.code, { id: 'dashboard', name: 'Dashboard' });
     if (!resAdd) return res.status(400).json({ error: 'No bot configured' });
     if (resAdd.error === 'exists') return res.status(409).json({ error: 'Coupon code already exists' });
     if (resAdd.error === 'no_code') return res.status(400).json({ error: 'Coupon code required' });
     res.json(resAdd.record);
   });
-  app.post('/api/redeem-codes/:code/used', authenticateToken, (req, res) => {
-    const r = setCodeUsed(req.params.code.toUpperCase(), req.body.used !== false);
+  app.post('/api/redeem-codes/:code/used', authenticateToken, async (req, res) => {
+    const r = await setCodeUsed(req.params.code.toUpperCase(), req.body.used !== false);
     r ? res.json(r) : res.status(404).json({ error: 'Not found' });
   });
 

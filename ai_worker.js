@@ -20,10 +20,19 @@ if (fs.existsSync(envPath)) {
 
 process.on('message', async (data) => {
   const { systemPrompt, userMessage, history, apiKeysRegistry, apiKeysRoundRobin } = data;
-  
+
   // Local copies of state
   let localRoundRobin = apiKeysRoundRobin || 0;
-  const localRegistry = JSON.parse(JSON.stringify(apiKeysRegistry || {}));
+  const rawRegistry = apiKeysRegistry || {};
+
+  // Validate registry entries before using them
+  const localRegistry = {};
+  for (const [k, v] of Object.entries(rawRegistry)) {
+    if (v && typeof v.key === 'string' && typeof v.provider === 'string') {
+      localRegistry[k] = v;
+    }
+  }
+
   const failoverErrors = [];
 
   function safeExit(payload, exitCode = 0) {
@@ -47,19 +56,16 @@ process.on('message', async (data) => {
     if (activeKeys.length === 0) {
       return null;
     }
-    
+
     // Separate by provider priority
     const otherKeys = activeKeys.filter(k => k.provider !== 'huggingface');
     const hfKeys = activeKeys.filter(k => k.provider === 'huggingface');
-    
+
     // Pick from OpenRouter/Groq first (priority), then HuggingFace
     const pool = otherKeys.length > 0 ? otherKeys : hfKeys;
-    
-    // Round-robin with random jitter: ensures different users hitting simultaneously get different keys
-    const offset = localRoundRobin + Math.floor(Math.random() * pool.length);
-    const index = offset % pool.length;
-    localRoundRobin = (localRoundRobin + 1) % 1000000;
-    
+
+    // Unbiased random selection (avoids modulo bias from compound offset)
+    const index = Math.floor(Math.random() * pool.length);
     return pool[index];
   }
 
@@ -135,7 +141,12 @@ process.on('message', async (data) => {
         throw error;
       }
 
-      const responseJson = await response.json();
+      let responseJson;
+      try {
+        responseJson = await response.json();
+      } catch {
+        throw new Error(`Non-JSON response: HTTP ${response.status}`);
+      }
       let content = responseJson?.choices?.[0]?.message?.content;
       if (typeof content !== 'string' || !content.trim()) {
         throw new Error('Empty AI response content');

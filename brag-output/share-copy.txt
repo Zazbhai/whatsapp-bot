@@ -1,0 +1,2 @@
+WA Bot Hub: multi-instance WhatsApp automation at scale. Deploy unlimited numbers on one server, auto-rotate sessions when numbers go offline, manage everything from Telegram — add sessions, upload APKs, distribute coupons with AI-powered replies. One server, zero downtime.
+github.com/Zazbhai/whatsapp-bot

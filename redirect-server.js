@@ -3,6 +3,20 @@ const path = require('path');
 const express = require('express');
 const http = require('http');
 
+// ── Rate limiter helper ──
+function createRateLimiter(maxRequests, windowMs) {
+  const buckets = {};
+  return function (identifier) {
+    const now = Date.now();
+    if (!buckets[identifier]) buckets[identifier] = [];
+    // Prune old entries
+    buckets[identifier] = buckets[identifier].filter(t => now - t < windowMs);
+    if (buckets[identifier].length >= maxRequests) return false;
+    buckets[identifier].push(now);
+    return true;
+  };
+}
+
 /**
  * Searches the data directory for the latest uploaded APK file or JSON cache.
  */
@@ -16,11 +30,11 @@ function getApkFile(dataDir, slug = 'primary') {
     const jsonPath = path.join(dataDir, `latest_apk_${slug}.json`);
     if (fs.existsSync(jsonPath)) {
       const content = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-      if (content && content.data) {
-        return {
-          buffer: Buffer.from(content.data, 'base64'),
-          filename: content.filename || 'istore.apk'
-        };
+      if (content && content.data && typeof content.data === 'string' && content.data.length > 0) {
+        const buffer = Buffer.from(content.data, 'base64');
+        // Verify minimum size: APK magic bytes are 4 bytes, but a valid APK is at least ~78 bytes
+        if (buffer.length < 78) return null;
+        return { buffer, filename: content.filename || 'istore.apk' };
       }
     }
     // Search any available APK across all slugs
@@ -33,11 +47,10 @@ function getApkFile(dataDir, slug = 'primary') {
       const json = files.find(f => f.startsWith('latest_apk_') && f.endsWith('.json'));
       if (json) {
         const content = JSON.parse(fs.readFileSync(path.join(dataDir, json), 'utf8'));
-        if (content && content.data) {
-          return {
-            buffer: Buffer.from(content.data, 'base64'),
-            filename: content.filename || 'istore.apk'
-          };
+        if (content && content.data && typeof content.data === 'string' && content.data.length > 0) {
+          const buffer = Buffer.from(content.data, 'base64');
+          if (buffer.length < 78) return null;
+          return { buffer, filename: content.filename || 'istore.apk' };
         }
       }
     }
@@ -411,6 +424,22 @@ function createRedirectApp({
 } = {}) {
   const app = express();
 
+  // Security headers
+  app.use((req, res, next) => {
+    res.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'X-XSS-Protection': '1; mode=block'
+    });
+    next();
+  });
+
+  // Request logging
+  app.use((req, res, next) => {
+    console.log(`[REDIRECT] ${new Date().toISOString()} ${req.method} ${req.path}`);
+    next();
+  });
+
   // Health check endpoint
   app.get('/health', (req, res) => {
     res.json({ status: 'healthy', timestamp: new Date().toISOString() });
@@ -420,11 +449,14 @@ function createRedirectApp({
   app.get(['/download', '/apk', '/get-apk', '/app.apk'], (req, res) => {
     const apk = getApkFile(dataDir);
     if (apk && apk.path) {
-      return res.download(apk.path, apk.filename || 'app.apk');
+      return res.download(apk.path, apk.filename || 'app.apk', (err) => {
+        if (err) res.status(500).send('Download error');
+      });
     }
     if (apk && apk.buffer) {
       res.setHeader('Content-Type', 'application/vnd.android.package-archive');
       res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'app.apk'}"`);
+      res.setHeader('Content-Length', apk.buffer.length);
       return res.send(apk.buffer);
     }
     // Fallback: forward to /app store page
@@ -435,18 +467,23 @@ function createRedirectApp({
   app.get('/app/:slug/download', (req, res) => {
     const slug = (req.params.slug || 'primary').toLowerCase();
     const apk = getApkFile(dataDir, slug);
-    if (apk && apk.path) return res.download(apk.path, apk.filename || 'app.apk');
+    if (apk && apk.path) {
+      return res.download(apk.path, apk.filename || 'app.apk', (err) => {
+        if (err) res.status(500).send('Download error');
+      });
+    }
     if (apk && apk.buffer) {
       res.setHeader('Content-Type', 'application/vnd.android.package-archive');
       res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'app.apk'}"`);
+      res.setHeader('Content-Length', apk.buffer.length);
       return res.send(apk.buffer);
     }
     res.status(404).send('No APK available yet.');
   });
 
-  // Forward store / APK download requests to the main dashboard port (3000)
+  // Forward store / APK download requests to the main dashboard port
   app.use(['/store-media'], (req, res) => {
-    const host = req.headers.host ? req.headers.host.split(':')[0] : 'localhost';
+    const host = req.headers.host || 'localhost';
     const targetUrl = `http://${host}:${mainDashboardPort}${req.originalUrl}`;
     res.redirect(302, targetUrl);
   });
@@ -457,12 +494,19 @@ function createRedirectApp({
     if (fs.existsSync(storePath)) {
       return res.sendFile(storePath);
     }
-    const host = req.headers.host ? req.headers.host.split(':')[0] : 'localhost';
+    const host = req.headers.host || 'localhost';
     res.redirect(302, `http://${host}:${mainDashboardPort}${req.originalUrl}`);
   });
 
+  // Rate limiter for /api/status
+  const statusRateLimiter = createRateLimiter(10, 60000); // 10 req/min
+
   // JSON API status endpoint
   app.get('/api/status', (req, res) => {
+    const clientIp = req.ip || req.connection.remoteAddress || 'unknown';
+    if (!statusRateLimiter(clientIp)) {
+      return res.status(429).json({ error: 'Too many requests. Rate limit: 10/minute.' });
+    }
     const active = typeof getActiveNumber === 'function' ? getActiveNumber() : null;
     const apk = getApkFile(dataDir);
     if (active && active.phone) {
@@ -535,6 +579,7 @@ function startRedirectServer({
 } = {}) {
   const app = createRedirectApp({ getActiveNumber, defaultText, mainDashboardPort, dataDir, rootDir });
   const server = http.createServer(app);
+  let closeTimer = null;
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -549,10 +594,32 @@ function startRedirectServer({
     console.log(`🌐 WhatsApp Auto-Redirect Gateway: http://localhost:${port} -> Directs visitors to active WhatsApp number`);
   });
 
+  // Graceful shutdown on SIGTERM/SIGINT
+  const shutdown = () => {
+    if (closeTimer) return; // already shutting down
+    closeTimer = setTimeout(() => {
+      console.error('[REDIRECT] Force-closing server after shutdown timeout.');
+      server.close();
+    }, 5000).unref();
+    server.close((err) => {
+      if (!err) console.log('[REDIRECT] Server closed.');
+      else console.error('[REDIRECT] Error closing server:', err.message);
+    });
+  };
+
+  // Register cleanup only if not already registered in this process
+  if (!process._redirectServerShutdown) {
+    process._redirectServerShutdown = true;
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+  }
+
   return {
     app,
     server,
-    close: () => new Promise((resolve) => server.close(resolve))
+    close: () => new Promise((resolve) => {
+      server.close(() => resolve());
+    })
   };
 }
 

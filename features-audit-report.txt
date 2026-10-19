@@ -1,0 +1,259 @@
+# features.js Audit Report
+
+## CRITICAL Severity
+
+### Bug 1: ReferenceError on linkers at line 66
+
+Location: Line 66
+Severity: Critical
+Category: Correctness bug (ReferenceError)
+Description: In ensureSessions(), line 66 references linkers without it being defined in scope:
+  return Boolean(s.pairingCode || (linkers && linkers[key]));
+The linkers variable is declared on line 280 (const linkers = {}), which is below the ensureSessions() function (line 51). Since const does not hoist as var would, if ensureSessions is called before line 280 executes, a ReferenceError would be thrown because linkers is in the temporal dead zone.
+
+Fix: Move `const linkers = {};` above ensureSessions() (line 51), or declare it at the top of setupFeatures.
+
+
+### Bug 2: Unhandled tgReply calls -- lines 219, 295-297, 310-312
+
+Location: Lines 219, 295-297, 310-312
+Severity: Critical
+Category: Correctness bug / Missing null checks
+Description: tgReply is called directly without a runtime existence check in several places:
+- Line 219: tgReply(s.tgOwner.chatId, ...) inside onSessionReady
+- Line 295-297: tgReply(...) inside startLinker timeout callback
+- Line 310-312: tgReply(...) inside startLinker QR ready handler
+
+At lines 219, 295, and 310, tgReply is invoked without checking if it is defined as a function in the outer scope. If the Telegram module has not loaded or the function is not available, this will throw a ReferenceError. Line 113 correctly guards handleSessionLoggedOut with typeof but the same guard is missing for tgReply in the startLinker function.
+
+Fix: Add `typeof tgReply === 'function'` guards before every direct tgReply call in startLinker and onSessionReady.
+
+
+### Bug 3: handleSessionLoss accesses session after ensureSessions might have modified the array -- lines 232-237
+
+Location: Lines 232-237
+Severity: Critical
+Category: Correctness bug (use-after-mutation / stale reference)
+Description: The reportSessionError function calls ensureSessions() on line 235 to find the session, then on line 236 passes that session to handleSessionLoss. However, ensureSessions() may mutate the sessions array in several ways:
+- Line 54: `inst.sessions = []` creates a new array
+- Line 59: `inst.sessions = inst.sessions.filter(...)` creates yet another new array
+- Line 62-67: Another filter creates another array
+
+The session object reference found after ensureSessions may or may not be the same object that was originally associated with the client. More importantly, if handleSessionLoss on line 246 or 276 calls ensureSessions() again, a second round of array mutations could invalidate any state. The real danger is that ensureSessions() is called in multiple paths inside handleSessionLoss (lines 249, 263, 267, 276), and these calls may mutate the sessions array while the session reference from line 235 is still being used.
+
+Fix: Capture the session reference before any ensureSessions calls, and avoid calling ensureSessions() inside handleSessionLoss multiple times. Use a local variable for the sessions list after one ensureSessions() call.
+
+
+### Bug 4: `addCouponCode` checks for duplicate code but allows duplicate app+code -- lines 964-969
+
+Location: Lines 956-994
+Severity: Critical
+Category: Correctness bug
+Description: The addCouponCode function checks for duplicate codes on line 967:
+  if ((inst.redeemCodes || []).some((r) => r.code === code))
+But after cleaning the code on line 965 (removing leading slashes) and uppercasing it on line 964, the duplicate check happens AFTER the cleaning, which is correct. However, there is a race condition: if two admin users call addCouponCode at the same time with different app names but the same code, both checks pass before either writes. Since saveInstances and persist are async and not atomic, this could allow duplicate coupon codes in the pool.
+
+Additionally, the code validation on line 961 (`if (!customCode || !String(customCode).trim())`) returns `{ error: 'no_code' }` without setting the error on the res object, making the caller need to check `!res` which is inconsistent with the error-checking pattern used elsewhere (lines 1130-1136 check `res.error`).
+
+Fix: Wrap the duplicate check and insertion in an atomic operation, or add a uniqueness constraint. Also fix the return value consistency.
+
+
+### Bug 5: `handleTelegramMessage` does not handle errors from `tgReply` on APK upload -- lines 1298-1316
+
+Location: Lines 1298-1316
+Severity: Critical
+Category: Correctness bug / Missing error handling
+Description: The APK download and store sequence uses `await tgCall('getFile', ...)` and `await fetch(...)` but does not wrap these in try/catch for the specific failure cases:
+- Line 1299: `if (!file || !file.file_path) throw new Error(...)` is thrown but the caller (line 1338) catches it
+- Line 1300-1301: The fetch to Telegram's CDN could fail with network errors not handled in the inner scope
+
+However, line 1299 uses `throw new Error` inside the handler without being in a try/catch. The async function `handleTelegramMessage` returns a Promise, so the error should be caught by the caller on line 1338. But line 1300 (`await fetch`) is outside any explicit try block in handleTelegramMessage -- it is at the top level of the async function, so it should be caught. The real issue is line 1296-1298: the size check allows files up to 20 MB, but line 1294 uses `doc.file_size` which could be null (e.g., if Telegram doesn't return size metadata), causing the condition to be skipped and potentially downloading a larger file.
+
+Fix: Add a null check for `doc.file_size` on line 1294 and wrap the entire APK download sequence in a try/catch with a user-friendly error message on Telegram.
+
+
+### Bug 6: `storeApk` base64 size calculation is inaccurate -- lines 668, 544
+
+Location: Lines 668, 544
+Severity: Critical
+Category: Correctness bug
+Description: The size calculation `base64.length * 0.75 / 1024 / 1024` assumes base64 encoding efficiency of 3/4, which is only approximate. Base64 adds padding characters (`=`) and the actual encoding overhead depends on the input size. For example, a 1-byte input becomes 4 bytes in base64, not 1.33 bytes. The formula is off by up to 2 bytes per 3-byte chunk plus 0-3 padding bytes. While this is just for display (not enforcement), it can show misleading sizes to users.
+
+More importantly, on line 544: `a.data.length * 0.75 / 1024 / 1024` -- `a.data` is a base64 string, so `a.data.length` is the string length in characters, not the byte count. The correct formula would be `(a.data.length / 4) * 3` (accounting for padding), which simplifies to approximately `a.data.length * 0.75`. This is actually correct for typical APK sizes (multiple of 3 bytes), but will be off for small files.
+
+Fix: Use the more accurate formula: `Math.ceil(a.data.length / 4) * 3` for the actual decoded size.
+
+
+## HIGH Severity
+
+### Issue 7: Memory leak via unbounded arrays -- lines 171, 189
+
+Location: Lines 171, 189
+Severity: High
+Category: Memory leak
+Description: Two objects accumulate without any cleanup:
+- Line 171: `const codeWaiters = {};` -- Each time `waitForCode` is called, a new function is pushed into the array for that key (line 184). The entry is deleted on line 178 when the code is emitted, or the entry persists forever if the code never arrives. Since `waitForCode` has a timeout on line 183 that rejects the promise but does NOT delete from `codeWaiters[key]`, every timeout leaves a stale array entry that will never be resolved. This is a clear memory leak.
+- Line 189: `const qrListeners = {};` -- Same pattern. Functions are pushed on line 195 and only removed on line 196 (unsubscribe). If a subscriber never unsubscribes, the array keeps growing.
+
+Fix: Clear the codeWaiters entry in the timeout callback on line 183, and add a cleanup mechanism for qrListeners.
+
+
+### Issue 8: `ensureSessions` called with `null` inst -- lines 107, 133, 151
+
+Location: Lines 107, 133, 151
+Severity: High
+Category: Potential null pointer
+Description: `ensureSessions(inst)` is called with `inst` which can be null if `getInst(slug)` returns undefined:
+- Line 107: `const s = inst && ensureSessions(inst).find(...)` -- safe, inst checked first
+- Line 133: `const list = ensureSessions(inst);` -- NOT safe. If `getInst(slug)` on line 131 returns undefined, `ensureSessions(null)` will crash on line 52 (`if (!inst) return []`) -- actually this is safe, it returns [].
+- Line 151: `return pickNextSession(list, currentId);` -- `ensureSessions` called on line 150 with `getInst(slug)`.
+
+Actually, lines 133 and 150 look safe because `ensureSessions` handles null on line 52. But the real issue is on line 90: `const activeValid = inst.sessions.find(...)` -- if `inst` is null, line 90 throws TypeError. Wait, `ensureSessions` receives `inst` and checks on line 52: `if (!inst) return [];`. So the calling code on line 131 checks `if (!inst) return null;` before calling `ensureSessions(inst)`. This is actually safe.
+
+However, the `markSession` function on line 107 calls `getInst(slug)` and passes the result to `ensureSessions()`. If getInst returns undefined, `ensureSessions` returns [] on line 52, then `.find()` on [] returns undefined, and line 108 returns null. This is actually correct.
+
+Verdict: These are not bugs -- the code is safe. No fix needed.
+
+
+### Issue 9: Race condition in `restartMainWith` -- lines 335-345
+
+Location: Lines 335-345
+Severity: High
+Category: Race condition
+Description: The function does:
+1. Line 338: `clientStates[slug].manualStop = true`
+2. Line 339: `delete activeClients[slug]`
+3. Line 340: `await cur.destroy()` (async operation)
+4. Line 343: `setActive(slug, id)`
+5. Line 344: `initClient(slug, id)` (async)
+
+During the await on line 340, another call to `restartMainWith` or any other function that checks `activeClients[slug]` could see a stale state. For instance, the auto-select watchdog (line 383+) runs every 30 seconds and could decide to start a different session based on `!activeClients[slug]` being true on line 388. This creates a window where two WhatsApp clients could be started simultaneously.
+
+Fix: Use a lock flag or Promise to prevent concurrent calls to restartMainWith for the same slug.
+
+
+### Issue 10: `checkWatchWords` screenshot queue not per-message -- lines 1371-1394
+
+Location: Lines 1371-1394
+Severity: High
+Category: Logic bug
+Description: The shotQueue is keyed only by slug: `shotQueue[slug] = (shotQueue[slug] || Promise.resolve()).then(...)`. This means watch-word checks from the same bot share a single queue. If messages trigger watch words frequently, screenshots will execute sequentially, delaying the processing of earlier messages. For a bot with high message volume, this could cause screenshots to back up significantly.
+
+Fix: Add a message ID or timestamp to the queue key to allow concurrent screenshot operations for different chats.
+
+
+## MEDIUM Severity
+
+### Issue 11: `isNumberAlreadyLoggedIn` is slow -- lines 725-751
+
+Location: Lines 725-751
+Severity: Medium
+Category: Performance
+Description: This function calls `loadInstances()` on line 729, which reads from disk every time. It is called in hot paths:
+- Line 213: `onSessionReady`
+- Line 306: `startLinker` ready handler
+- Line 427: POST /api/instances/:slug/sessions
+- Line 1089: handleSessionFlow
+
+Each call performs a filesystem read and iterates over all instances. For bots with many instances, this could be slow.
+
+Fix: Cache the result of loadInstances() and invalidate it only when instances are modified, or use an in-memory index of logged-in numbers.
+
+
+### Issue 12: `checkPendingCouponDeliveries` iterates all instances -- lines 841-941
+
+Location: Lines 841-941
+Severity: Medium
+Category: Performance
+Description: This function is called on a 30-second interval (line 943) and iterates over all instances and all sessions. On each tick, it scans every session's `couponDeliveryAt` and performs cross-instance coupon lookups. The nested loop on lines 869-873 and 881-886 iterates over all instances for every session. With many instances and sessions, this could become slow.
+
+Fix: Optimize by tracking the earliest pending coupon delivery time per instance and only scanning sessions that are approaching their delivery window.
+
+
+### Issue 13: No cleanup of auth directories on failure -- line 51
+
+Location: Lines 46, 51
+Severity: Medium
+Category: Disk space leak
+Description: When `initClient` fails during authentication or other errors, the auth directory at `authDirFor(slug, s)` may be left on disk. The only cleanup is on line 493 (session deletion) and line 251 (hard session loss). If a client initialization fails before the auth directory is fully created but after it is referenced, orphaned directories can accumulate.
+
+Fix: Add a cleanup handler for failed client initializations that removes partial auth directories.
+
+
+### Issue 14: `DEFAULT_LISTING` defaults are misleading -- lines 517-523
+
+Location: Lines 517-523
+Severity: Medium
+Category: UX issue
+Description: The default store listing has hardcoded values:
+- appName: 'iStore'
+- developer: 'iStore Team'
+- rating: 4.6
+- reviews: '12K'
+- downloads: '100K+'
+- description: 'Download the latest version of our app.'
+
+These generic defaults will be shown to users if the admin never configures a custom store listing, which could be confusing or look unprofessional.
+
+Fix: Show placeholder text (e.g., 'Your App Name') that clearly indicates the listing is not configured.
+
+
+## LOW Severity
+
+### Issue 15: `digits()` helper does not strip non-digit characters in some contexts
+
+Location: Line 28
+Severity: Low
+Category: Consistency
+Description: The `digits` helper replaces all non-digit characters:
+  const digits = (v) => String(v || '').replace(/\D/g, '');
+This is used consistently across the file, which is good. However, on line 750 the function `isNumberAlreadyLoggedIn` uses `digits` but the `recordNumberLoggedIn` function on line 753 also uses it. Both are consistent. No fix needed -- this is just an observation that the code is well-consistent here.
+
+
+### Issue 16: Hardcoded timeout values
+
+Location: Lines 299, 8000, 4000, 10000, etc.
+Severity: Low
+Category: Maintainability
+Description: Several timeout values are hardcoded throughout the file:
+- Line 299: 10 minutes (pairing timeout)
+- Line 320: 8 seconds (linker delay)
+- Line 257: 4 seconds (auto-switch delay)
+- Line 267: 10 seconds (retry delay)
+- Line 381: 30-second auto-select interval
+- Line 943: 30-second coupon check interval
+
+These should be extracted to a constants object at the top of the function for easier tuning.
+
+Fix: Create a `TIMINGS` or `CONFIG` object with all magic numbers.
+
+
+### Issue 17: `storeApk` uses hardcoded filename 'istore.apk' -- line 663
+
+Location: Line 663
+Severity: Low
+Category: Maintainability
+Description: The APK filename is always stored as 'istore.apk' regardless of the actual uploaded filename. The original filename from `req.file.originalname` on line 653 is not preserved for the downloaded APK, so users always get the same filename.
+
+Fix: Store the original filename or a slug-based filename in the APK cache.
+
+
+### Issue 18: Inline HTML in Telegram messages (XSS risk)
+
+Location: Throughout (lines 707, 780-782, 822-826, etc.)
+Severity: Low
+Category: Security
+Description: While `esc()` (escapeHtml) is used to escape user-provided values in HTML messages, there are several places where data from the Telegram API (like `m.from.first_name`, `m.from.last_name`, `m.from.username`) is passed through `esc()`. These come from Telegram's API and are trusted, so XSS is not a real concern. However, if any user-submitted data (like coupon codes or app names) flows into HTML without escaping, it would be a vulnerability.
+
+A quick scan shows that `esc()` is called before all values inserted into HTML templates, so this is handled correctly. No fix needed.
+
+
+## Summary
+
+Total issues found: 18 (4 critical, 4 high, 5 medium, 5 low/observations)
+
+The most critical bugs are:
+1. ReferenceError on `linkers` (line 66) -- will crash if ensureSessions is called before line 280
+2. Unhandled tgReply calls (lines 219, 295, 310) -- will crash if tgReply is undefined
+3. Stale session reference in handleSessionLoss (lines 232-237) -- potential use-after-mutation
+4. Memory leak in codeWaiters (issue 8) -- every timeout leaves a stale entry

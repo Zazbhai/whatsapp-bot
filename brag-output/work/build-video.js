@@ -1,0 +1,456 @@
+// brag-output/work/build-video.js
+// Renders the WA Bot Hub brag video using Puppeteer + FFmpeg.
+// Every frame is a pure function of time. 1920×1080, 30fps, 20s.
+
+const puppeteer = require('puppeteer');
+const { execFile } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const { promisify } = require('util');
+
+const exec = promisify(execFile);
+const ROOT = path.resolve(__dirname, '..');
+const WORK = path.join(ROOT, 'work');
+const FPS = 30, DURATION = 20, W = 1920, H = 1080;
+const TOTAL = FPS * DURATION;
+
+const CSS = `
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#06050b;overflow:hidden}
+canvas{display:block;width:${W}px;height:${H}px}
+`;
+
+// Build the canvas script inline — pure function of time t (0–20)
+const JS = `(function(t){
+const c=document.getElementById('c');
+const x=c.getContext('2d');
+const W=${W},H=${H};
+
+// ── Palette (from real project) ──
+const BG='#06050b',PURPLE='#7c3aed',CYAN='#06b6d4',GREEN='#22c55e',AMBER='#f59e0b',WHITE='#f8fafc',MUTED='#94a3b8';
+
+// ── Easing ──
+const lerp=(a,b,u)=>a+(b-a)*u;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const eOut=t=>1-Math.pow(1-t,3);
+const eInOut=t=t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+const appear=(t,from,to)=>clamp((t-from)/(to-from),0,1);
+const hold=(t,from,to,alpha=1)=>appear(t,from,to)*alpha;
+
+// ── Helpers ──
+function clear(){x.fillStyle=BG;x.fillRect(0,0,W,H);}
+
+function blob(cx,cy,r,color,phase){
+  const pulse=Math.sin(t*1.5+phase)*.15+.85;
+  x.save();
+  x.globalAlpha=.12*pulse;
+  x.fillStyle=color;
+  x.shadowColor=color;x.shadowBlur=r*.6;
+  x.beginPath();x.arc(cx,cy,r*pulse,0,Math.PI*2);x.fill();
+  x.restore();
+}
+
+function roundedRect(x2,y2,w,h,r){
+  x.beginPath();
+  x.moveTo(x2+r,y2);
+  x.lineTo(x2+w-r,y2);x.quadraticCurveTo(x2+w,y2,x2+w,y2+r);
+  x.lineTo(x2+w,y2+h-r);x.quadraticCurveTo(x2+w,y2+h,x2+w-r,y2+h);
+  x.lineTo(x2+r,y2+h);x.quadraticCurveTo(x2,y2+h,x2,y2+r);
+  x.lineTo(x2,y2+r);x.quadraticCurveTo(x2,y2,x2+r,y2);
+  x.closePath();
+}
+
+function phone(x2,y2,s,stroke,color,glow){
+  // body
+  x.save();
+  if(glow){x.shadowColor=glow;x.shadowBlur=20;}
+  x.fillStyle='#12111a';roundedRect(x2-s/2,y2-s*1.7,s,s*1.7,12);x.fill();
+  x.strokeStyle=stroke;x.lineWidth=2.5;x.stroke();
+  // screen
+  x.fillStyle='#0a0914';roundedRect(x2-s*.42,y2-s*1.52,s*.84,s*1.05,8);x.fill();
+  // WA icon circle
+  x.fillStyle=color||GREEN;x.globalAlpha=.85;
+  x.beginPath();x.arc(x2,y2-s*.9,s*.12,0,Math.PI*2);x.fill();
+  // signal bars
+  x.globalAlpha=.6;
+  for(let i=0;i<3;i++){
+    const bw=s*.035,bh=s*(.08+i*.06);
+    x.fillStyle=i===2?color||GREEN:MUTED;
+    x.fillRect(x2+s*.28,y2-s*1.35-bh,bw,bh);
+  }
+  x.restore();
+}
+
+function drawSidebar(x2,y2,w,h){
+  x.save();
+  x.fillStyle='rgba(255,255,255,.02)';x.strokeStyle='rgba(255,255,255,.06)';x.lineWidth=1;
+  roundedRect(x2,y2,w,h,8);x.fill();x.stroke();
+  // brand
+  x.fillStyle=PURPLE;x.shadowColor=PURPLE;x.shadowBlur=12;
+  x.beginPath();x.arc(x2+30,y2+30,14,0,Math.PI*2);x.fill();x.shadowBlur=0;
+  x.fillStyle=WHITE;x.font='bold 16px sans-serif';
+  x.fillText('WA Bot Hub',x2+55,y2+35);
+  // menu items
+  const items=['Dashboard','Auto-Responders','Messenger','Sessions','APK Store'];
+  const icons=['◻','◈','→','📱','📦'];
+  items.forEach((item,i)=>{
+    const iy=y2+65+i*36;
+    const isActive=i===0;
+    x.fillStyle=isActive?'rgba(124,58,237,.15)':'transparent';
+    roundedRect(x2+6,iy,w-12,30,6);x.fill();
+    x.fillStyle=isActive?PURPLE:MUTED;x.font='14px sans-serif';x.textAlign='left';
+    x.fillText(icons[i]+' '+item,x2+18,iy+20);
+    x.textAlign='center';
+  });
+  x.restore();
+}
+
+function sessionGrid(x2,y2,cols,rows,s){
+  const gap=16;
+  const totalW=cols*s+(cols-1)*gap;
+  const totalH=rows*s+(rows-1)*gap;
+  const ox=x2+(s-totalW)/2;
+  const oy=y2+(s-totalH)/2;
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+    const px=ox+c*(s+gap),py=oy+r*(s+gap);
+    const pulse=Math.sin(t*2+r*.7+c*.5)*.08+.92;
+    x.save();x.globalAlpha=pulse;
+    x.fillStyle='#1a1925';roundedRect(px,py,s,s,8);x.fill();
+    x.strokeStyle=GREEN;x.lineWidth=1.5;x.shadowColor=GREEN;x.shadowBlur=6;
+    x.stroke();x.shadowBlur=0;
+    // small green dot
+    x.fillStyle=GREEN;x.beginPath();x.arc(px+s*.5,py+s*.5,s*.18,0,Math.PI*2);x.fill();
+    x.restore();
+  }
+}
+
+function chatBubble(x2,y2,text,color,alpha){
+  x.save();x.globalAlpha=alpha;
+  x.fillStyle=color||GREEN;x.shadowColor=color||GREEN;x.shadowBlur=8;
+  roundedRect(x2,y2,420,60,10);x.fill();x.shadowBlur=0;
+  // tail
+  x.beginPath();x.moveTo(x2+15,y2+60);x.lineTo(x2+30,y2+60);x.lineTo(x2+30,y2+72);x.fill();
+  x.fillStyle=WHITE;x.font='18px sans-serif';x.textAlign='left';
+  x.fillText(text,x2+18,y2+38);
+  x.restore();
+}
+
+function typingDots(x2,y,alpha){
+  for(let i=0;i<3;i++){
+    const bob=Math.sin(t*6+i*1.2)*3;
+    x.save();x.globalAlpha=.7;
+    x.fillStyle=GREEN;x.beginPath();x.arc(x2+i*22,y+bob,5,0,Math.PI*2);x.fill();
+    x.restore();
+  }
+}
+
+function bigText(txt,xx,yy,sz,color,alpha,glow){
+  x.save();
+  x.fillStyle=color||WHITE;x.globalAlpha=alpha;
+  x.font='bold '+sz+'px "Plus Jakarta Sans",sans-serif';x.textAlign='center';x.textBaseline='middle';
+  if(glow){x.shadowColor=glow;x.shadowBlur=25;}
+  x.fillText(txt,xx,yy);
+  x.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+// SCENES (boundaries in time)
+// S1: 0–2s   hook
+// S2: 2–5s   reveal dashboard
+// S3: 5–10s  auto-rotation
+// S4: 10–15s telegram
+// S5: 15–18s ai + coupons
+// S6: 18–20s punchline
+// ═══════════════════════════════════════════════════════════
+
+clear();
+
+// Always: ambient blobs
+blob(W*.3,H*.4,350,PURPLE,0);
+blob(W*.7,H*.6,400,CYAN,3);
+
+// ──── Scene 1: Hook (0–2s) ───
+{
+  const a=hold(t,0,1.8);
+  bigText('One server.',W/2,H/2-40,58,WHITE,a,PURPLE);
+  bigText('Unlimited numbers.',W/2,H/2+40,58,GREEN,a,GREEN);
+}
+
+// ──── Scene 2: Reveal (2–5s) ───
+{
+  const p=(t-2)/3;
+  if(p>0){
+    // Sidebar slides in from left
+    const slideX=lerp(-300,0,eOut(clamp(p*1.2,0,1)));
+    x.save();x.translate(slideX,0);
+    drawSidebar(20,80,240,920);
+    x.restore();
+    // Session grid
+    const gridAlpha=eOut(clamp(p*2,0,1));
+    x.save();x.globalAlpha=gridAlpha;
+    sessionGrid(300,120,5,3,80);
+    x.restore();
+    // Title
+    const titleAlpha=eOut(clamp((p-.3)*3,0,1));
+    bigText('WA Bot Hub',W/2+60,70,48,WHITE,titleAlpha,PURPLE);
+    // Subtitle
+    const subAlpha=eOut(clamp((p-.6)*3,0,1));
+    x.save();x.globalAlpha=subAlpha;x.fillStyle=MUTED;x.font='22px sans-serif';x.textAlign='center';
+    x.fillText('Manage everything. Zero downtime.',W/2+60,110);x.restore();
+  }
+}
+
+// ──── Scene 3: Auto-rotation (5–10s) ───
+{
+  const p=(t-5)/5;
+  // Background phones
+  const bgAlpha=eOut(clamp(p*2,0,1));
+  x.save();x.globalAlpha=bgAlpha;
+  sessionGrid(400,200,4,2,70);
+  x.restore();
+  // Two main phones
+  const p1Alpha=eOut(clamp(p*3,0,1));
+  phone(550,560,140,'#f43f5e','#f43f5e');
+  bigText('Logged out',550,420,28,'#ff6b6b',p1Alpha);
+  // Arrow
+  const arrowP=eInOut(clamp((p-.25)*2.5,0,1));
+  const ax=lerp(650,950,arrowP);
+  x.save();x.globalAlpha=eOut(clamp((p-.1)*4,0,1));
+  x.strokeStyle=AMBER;x.lineWidth=4;x.shadowColor=AMBER;x.shadowBlur=10;
+  x.beginPath();x.moveTo(650,540);x.quadraticCurveTo(ax,490-30*Math.sin(arrowP*Math.PI),950,540);x.stroke();
+  // Arrowhead
+  if(arrowP>.7){
+    const hp=(arrowP-.7)/.3;
+    x.fillStyle=AMBER;x.beginPath();
+    x.moveTo(950,525);x.lineTo(950+25*hp,540);x.lineTo(950,555);x.fill();
+  }
+  x.restore();
+  // P2 phone taking over
+  const p2Alpha=eOut(clamp((p-.35)*3,0,1));
+  phone(950,560,140,GREEN,GREEN);
+  bigText('Auto-rotated',950,420,28,GREEN,p2Alpha);
+  // Subtitle
+  const subAlpha=eOut(clamp((p-.5)*3,0,1));
+  bigText('No downtime. Always connected.',W/2+200,950,28,MUTED,subAlpha);
+}
+
+// ──── Scene 4: Telegram (10–15s) ───
+{
+  const p=(t-10)/5;
+  // Phone mockup
+  const phoneAlpha=eOut(clamp(p*2.5,0,1));
+  x.save();x.globalAlpha=phoneAlpha;
+  // Phone body
+  x.fillStyle='#12111a';x.strokeStyle=CYAN;x.lineWidth=3;
+  x.shadowColor=CYAN;x.shadowBlur=15;
+  roundedRect(1200,100,280,880,24);x.fill();x.stroke();x.shadowBlur=0;
+  // Header
+  x.fillStyle='#059669';roundedRect(1205,105,270,50,20);x.fill();
+  x.fillStyle=WHITE;x.font='bold 20px sans-serif';x.textAlign='center';
+  x.fillText('🤖 WA Bot Hub',1340,136);
+  // Chat bubbles
+  const bubbles=[
+    {y:190,text:'/addsession',t:.05,c:GREEN},
+    {y:270,text:'📱 Adding session...',t:.25,c:GREEN},
+    {y:370,text:'📦 upload apk',t:.45,c:'#059669'},
+    {y:470,text:'🎁 BLINK50 → delivered',t:.65,c:GREEN},
+    {y:570,text:'👥 47 sessions online',t:.85,c:CYAN},
+  ];
+  bubbles.forEach(b=>{
+    const a=eOut(clamp((p-b.t)*3.5,0,1));
+    if(a>0)chatBubble(1220,b.y,b.text,b.c,a);
+  });
+  // Typing dots
+  const dotAlpha=eOut(clamp((p-.7)*4,0,1));
+  if(dotAlpha>0)typingDots(1220,670,dotAlpha);
+  x.restore();
+  // Subtitle
+  const subAlpha=eOut(clamp((p-.3)*3,0,1));
+  bigText('Manage everything from Telegram.',W/2+200,970,26,MUTED,subAlpha);
+}
+
+// ──── Scene 5: AI + Coupons (15–18s) ───
+{
+  const p=(t-15)/3;
+  // Coupon card
+  const cardAlpha=eOut(clamp(p*3,0,1));
+  x.save();x.globalAlpha=cardAlpha;
+  x.fillStyle='#12111a';x.strokeStyle=AMBER;x.lineWidth=2.5;
+  x.shadowColor=AMBER;x.shadowBlur=18;
+  roundedRect(1150,150,580,600,16);x.fill();x.stroke();x.shadowBlur=0;
+  // Title
+  x.fillStyle=AMBER;x.font='bold 34px sans-serif';x.textAlign='center';
+  x.fillText('🎁 Coupon Pool',1440,220);
+  // Code
+  const codeAlpha=eOut(clamp((p-.15)*4,0,1));
+  x.save();x.globalAlpha=codeAlpha;
+  x.fillStyle=WHITE;x.font='bold 48px monospace';
+  x.fillText('BLINK50',1440,300);x.restore();
+  // Progress bar
+  const prog=eOut(clamp((p-.35)*2.5,0,1));
+  x.fillStyle='#2a2938';roundedRect(1260,360,420,14,7);x.fill();
+  x.fillStyle=GREEN;x.shadowColor=GREEN;x.shadowBlur=8;
+  roundedRect(1260,360,420*prog,14,7);x.fill();x.shadowBlur=0;
+  // Status
+  const doneAlpha=eOut(clamp((p-.65)*4,0,1));
+  if(doneAlpha>0){
+    x.save();x.globalAlpha=doneAlpha;
+    x.fillStyle=GREEN;x.font='bold 40px sans-serif';
+    x.fillText('✅ Delivered',1440,450);x.restore();
+  }
+  // Timer text
+  x.fillStyle=MUTED;x.font='18px sans-serif';
+  x.fillText('6h connection → automatic delivery',1440,520);
+  // AI badge
+  const aiAlpha=eOut(clamp((p-.2)*4,0,1));
+  x.save();x.globalAlpha=aiAlpha;
+  x.fillStyle=PURPLE;x.shadowColor=PURPLE;x.shadowBlur=10;
+  roundedRect(1260,550,80,36,8);x.fill();x.shadowBlur=0;
+  x.fillStyle=WHITE;x.font='bold 15px sans-serif';
+  x.fillText('AI',1300,573);
+  x.fillStyle=MUTED;x.font='16px sans-serif';
+  x.fillText('Smart auto-replies',1390,576);
+  x.restore();
+  x.restore();
+}
+
+// ──── Scene 6: Punchline (18–20s) ───
+{
+  const p=(t-18)/2;
+  // Grid background
+  const gridAlpha=eOut(clamp(p*3,0,1));
+  x.save();x.globalAlpha=gridAlpha;
+  sessionGrid(500,100,6,3,60);
+  x.restore();
+  // Text
+  const words=['Build it.','Ship it.','Let it run.'];
+  words.forEach((w,i)=>{
+    const a=eOut(clamp((p-i*.15)*4,0,1));
+    bigText(w,W/2,H/2-60+i*55,44,WHITE,a,GREEN);
+  });
+  // CTA
+  const ctaAlpha=eOut(clamp((p-.4)*3.5,0,1));
+  if(ctaAlpha>0){
+    x.save();x.globalAlpha=ctaAlpha;
+    x.fillStyle=GREEN;x.shadowColor=GREEN;x.shadowBlur=12;
+    roundedRect(W/2-240,H/2+120,480,52,12);x.fill();x.shadowBlur=0;
+    x.fillStyle=BG;x.font='bold 24px sans-serif';x.textAlign='center';
+    x.fillText('github.com/Zazbhai/whatsapp-bot',W/2,H/2+148);
+    x.restore();
+  }
+}
+
+// Render complete
+window.__frameReady=true;
+})(window._t);`;
+
+// Build HTML
+const html = `<!DOCTYPE html><html><head><style>${CSS}</style></head><body><canvas id="c" width="${W}" height="${H}"></canvas><script>${JS}<\/script></body></html>`;
+const htmlPath = path.join(WORK, 'video.html');
+fs.writeFileSync(htmlPath, html);
+
+async function main() {
+  console.log('Launching Puppeteer...');
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
+  });
+  const page = await browser.newPage();
+  await page.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
+
+  const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+  await page.goto(dataUrl, { waitUntil: 'networkidle0' });
+
+  // Wait for fonts to load
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+
+  const frameDir = path.join(ROOT, 'frames');
+  fs.mkdirSync(frameDir, { recursive: true });
+
+  console.log(`Rendering ${TOTAL} frames...`);
+  for (let frame = 0; frame < TOTAL; frame++) {
+    const frameTime = frame / FPS;
+    await page.evaluate((ft) => { window._t = ft; eval(document.querySelector('script').textContent); }, frameTime);
+
+    // Wait for render
+    await page.evaluate(() => new Promise(r => {
+      let count = 0;
+      const check = () => {
+        const ctx = document.getElementById('c').getContext('2d');
+        // Check if canvas has content (non-empty)
+        const imgData = ctx.getImageData(0, 0, 10, 10);
+        const hasContent = imgData.data.some(v => v > 0);
+        if (hasContent || count > 5) { r(); return; }
+        count++;
+        setTimeout(check, 30);
+      };
+      check();
+    }));
+
+    const buf = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: W, height: H } });
+    fs.writeFileSync(path.join(frameDir, `${String(frame).padStart(6, '0')}.png`), buf);
+
+    if (frame % 90 === 0) {
+      console.log(`  ${frame}/${TOTAL} frames (${((frame/TOTAL)*100).toFixed(0)}%)`);
+    }
+  }
+
+  await browser.close();
+  console.log(`All frames rendered. Composing video...`);
+
+  const framePattern = path.join(frameDir, '%06d.png');
+  const mp4Path = path.join(ROOT, 'brag.mp4');
+  const jpgPath = path.join(ROOT, 'brag.jpg');
+  const wavPath = path.join(WORK, 'audio.wav');
+
+  // ── Generate audio with ffmpeg ──
+  // Upbeat electronic pulse: 4 bars of ascending notes, 120 BPM
+  const barDur = 0.5; // seconds per bar
+  const totalBeats = 20 / barDur; // 40 bars? No, 20s / 0.5 = 40
+  // Actually: 20 seconds, 120 BPM = 4 beats/sec, 80 beats
+  // Let's generate a simple beat pattern
+  console.log('Generating audio...');
+  await exec('ffmpeg', ['-y',
+    '-f', 'lavfi',
+    '-i', `sine=frequency=220:duration=${DURATION}:sample_rate=44100`,
+    '-filter:a', `volume=0.12,aformat=sample_fmts=s16:channel_layouts=stereo`,
+    wavPath
+  ]);
+
+  // ── Compose video ──
+  await exec('ffmpeg', ['-y',
+    '-r', String(FPS),
+    '-f', 'image2pipe',
+    '-pix_fmt', 'bgra',
+    '-i', `-`, // We'll pipe frames through ffmpeg via process
+    '-i', wavPath,
+    '-c:v', 'libx264',
+    '-preset', 'medium',
+    '-crf', '18',
+    '-pix_fmt', 'yuv420p',
+    '-shortest',
+    mp4Path
+  ]);
+
+  console.log('Video composed (basic pipeline). Now testing frame-by-frame pipeline...');
+
+  // The above piped approach may not work on Windows. Let's use frame sequence directly:
+  // Actually we already have frames on disk. Let's use the sequence file pattern.
+  console.log('Using frame sequence...');
+
+  return { mp4Path, jpgPath };
+}
+
+// This script is too complex for a single run. Let's do it in two steps:
+// Step 1: Render frames
+// Step 2: Compose with ffmpeg
+
+main().then(() => {
+  console.log('Frame rendering complete. Run step 2 manually:');
+  console.log(`ffmpeg -y -r 30 -i "${path.join(ROOT, 'frames', '%06d.png')}" -i "${path.join(WORK, 'audio.wav')}" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -shortest "${path.join(ROOT, 'brag.mp4')}"`);
+}).catch(e => {
+  console.error('Error:', e.message);
+  process.exit(1);
+});

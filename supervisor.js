@@ -2,8 +2,12 @@ const { spawn } = require('child_process');
 const path = require('path');
 
 const serverPath = path.join(__dirname, 'server.js');
-const restartDelayMs = Number(process.env.BOT_RESTART_DELAY_MS || 5000);
-const maxRestarts = Number(process.env.BOT_MAX_RESTARTS || 0);
+const restartDelayMs = Number.isFinite(Number(process.env.BOT_RESTART_DELAY_MS))
+  ? Number(process.env.BOT_RESTART_DELAY_MS)
+  : 5000;
+const maxRestarts = Number.isFinite(Number(process.env.BOT_MAX_RESTARTS))
+  ? Number(process.env.BOT_MAX_RESTARTS)
+  : 0;
 
 let child = null;
 let restartCount = 0;
@@ -27,7 +31,8 @@ function startBot() {
     }
 
     restartCount++;
-    const reachedLimit = maxRestarts > 0 && restartCount > maxRestarts;
+    // Off-by-one fix: >= instead of > so limit is enforced correctly
+    const reachedLimit = maxRestarts > 0 && restartCount >= maxRestarts;
     console.error(`[SUPERVISOR] Bot crashed/exited with code ${code} (signal: ${signal || 'none'}).`);
 
     if (reachedLimit) {
@@ -35,8 +40,10 @@ function startBot() {
       process.exit(code || 1);
     }
 
-    console.log(`[SUPERVISOR] Restarting in ${restartDelayMs}ms...`);
-    setTimeout(startBot, restartDelayMs);
+    // Exponential backoff: double delay each restart, cap at 2 minutes
+    const backoffDelay = Math.min(restartDelayMs * Math.pow(2, restartCount - 1), 120000);
+    console.log(`[SUPERVISOR] Restarting in ${backoffDelay}ms (attempt ${restartCount})...`);
+    setTimeout(startBot, backoffDelay);
   });
 
   child.on('error', (err) => {

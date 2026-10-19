@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
+const { exec, fork } = require('child_process');
 
 // Load environment variables manually from .env (bulletproof, zero native dependency install risks)
 const envPath = path.join(__dirname, '.env');
@@ -637,7 +638,6 @@ function checkAndSetVoiceNoteDemand(slug, senderNumber, msg) {
 }
 
 async function handleVoiceTtsReply(slug, msg, text, voiceName) {
-  const { exec } = require('child_process');
   const tempId = Math.random().toString(36).substring(7);
   const textFilePath = path.join(uploadDir, `tts_text_${slug}_${tempId}.txt`);
   const wavPath = path.join(uploadDir, `tts_${slug}_${tempId}.wav`);
@@ -2467,7 +2467,6 @@ function releaseApiKey(keyObj) {
 
 // Native LLM Requester with parallel model racing, random key rotation, and 24-hr cooldown run in a child process (multiprocessing)
 async function generateAIResponse(slug, userMessage, history = [], isRetry = false, senderNumber = '') {
-  const { fork } = require('child_process');
   const inst = getInstanceBySlug(slug);
   const systemPrompt = buildSystemPrompt(inst, isRetry);
   if (!systemPrompt) {
@@ -2592,8 +2591,6 @@ function getHuggingFaceTokens() {
 
 // Voice Note Transcription engine — uses Hugging Face speech-to-text inference API
 async function transcribeAudio(slug, media) {
-  const { exec } = require('child_process');
-  
   // Extract and filter Hugging Face tokens
   const tokens = getHuggingFaceTokens();
   if (tokens.length === 0) {
@@ -4352,7 +4349,6 @@ server.listen(PORT, () => {
   }
 
   // Check if FFmpeg is installed
-  const { exec } = require('child_process');
   exec('ffmpeg -version', (err) => {
     if (err) {
       console.warn('\n⚠️  [WARN] FFmpeg was not found in the system PATH.');
@@ -4360,6 +4356,17 @@ server.listen(PORT, () => {
       console.warn('   To fix this: install FFmpeg on your system and make sure it is in your system PATH.\n');
     }
   });
+
+  // Periodic auto-mute: run every 10 minutes to check and auto-mute users
+  // who have been inactive beyond the configured cooldown window
+  const autoMuteInterval = setInterval(async () => {
+    try {
+      const instances = loadInstances();
+      await Promise.allSettled(instances.map((i) => checkAndAutoMuteUsers(i.slug)));
+    } catch (err) {
+      console.error('[SYSTEM] Auto-mute interval error:', err.message);
+    }
+  }, 10 * 60 * 1000).unref();
 });
 
 // =============================================================
