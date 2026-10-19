@@ -1134,10 +1134,19 @@ module.exports = function setupFeatures(ctx) {
   async function sendCodeList(m, admin, filter = 'all', page = 0) {
     const chatId = (m && m.chat && m.chat.id) || (m && m.from && m.from.id);
     const fromId = m && m.from && m.from.id;
-    const records = allCodes().filter((r) => admin
+    const all = allCodes();
+    let records = all.filter((r) => admin
       ? true
       : String(r.deliveredTo || r.tgUserId) === String(fromId));
-    const view = tui.codePage(records, page, admin ? 'coupons' : 'mine', admin);
+    const allServices = admin
+      ? [...new Set(all.map((r) => (r.app || 'General').trim()).filter(Boolean))]
+      : [];
+    if (admin && filter && filter !== 'all') {
+      const qFilter = String(filter).trim().toUpperCase();
+      records = records.filter((r) => r.app && String(r.app).trim().toUpperCase() === qFilter);
+    }
+    const prefix = admin ? (filter && filter !== 'all' ? `coupons:app:${filter}` : 'coupons') : 'mine';
+    const view = tui.codePage(records, page, prefix, admin, filter, allServices);
     return tgReply(chatId, view.text, view.reply_markup);
   }
 
@@ -1260,7 +1269,21 @@ module.exports = function setupFeatures(ctx) {
     const cmd = parts[0];
     const args = parts.slice(1);
     if (/^\/(coupons|codes|mycoupons)/i.test(cmd)) {
-      await sendCodeList(m, isAdmin, 'all', args[0]);
+      if (isAdmin) {
+        let filter = 'all';
+        let page = 0;
+        if (args[0]) {
+          if (/^\d+$/.test(args[0])) {
+            page = Number.parseInt(args[0], 10) || 0;
+          } else {
+            filter = args[0];
+            page = args[1] ? Number.parseInt(args[1], 10) || 0 : 0;
+          }
+        }
+        await sendCodeList(m, true, filter, page);
+      } else {
+        await sendCodeList(m, false, 'all', args[0]);
+      }
       return true;
     }
     if (!isAdmin) { await tgReply(m.chat.id, '⛔ Open the admin panel in a private chat with this bot.'); return true; }
@@ -1288,7 +1311,6 @@ module.exports = function setupFeatures(ctx) {
       await tgReply(m.chat.id, `<b>✅ Coupon created!</b>\n\n🏪 App: <b>${esc(res.record.app)}</b>\n🎁 Code: <code>${esc(res.record.code)}</code>\n🟢 Status: Available in pool\n📅 Created: ${esc(res.record.createdAt)}\n\nThis coupon will be delivered to connected sessions after 6 hours.`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('➕ Add another', 'addcoupon')], [tui.button('👑 Admin panel', 'admin')]));
       return true;
     }
-    if (/^\/(coupons|codes)/i.test(cmd)) { await sendCodeList(m, true, 'all', args[0]); return true; }
     if (/^\/findcode/i.test(cmd)) {
       const arg = args.join(' ');
       if (!arg) { tgFlow[m.chat.id] = { step: 'find' }; await tgReply(m.chat.id, '<b>🔎 Find a coupon</b>\nSend a coupon code, app name, full phone number or Telegram user ID.', tui.cancelKeyboard()); return true; }
@@ -1365,8 +1387,15 @@ module.exports = function setupFeatures(ctx) {
     }
     if (data === 'coupons' || data.startsWith('coupons:') || data === 'codes' || data.startsWith('codes:')) {
       const parts = data.split(':');
-      const page = parts.length > 1 ? parts.at(-1) : 0;
-      return sendCodeList(m, true, 'all', page);
+      let filter = 'all';
+      let page = 0;
+      if (parts[1] === 'app' && parts[2]) {
+        filter = parts[2];
+        page = parts[3] ? Number.parseInt(parts[3], 10) || 0 : 0;
+      } else {
+        page = parts.length > 1 ? Number.parseInt(parts.at(-1), 10) || 0 : 0;
+      }
+      return sendCodeList(m, true, filter, page);
     }
     if (data === 'find') return handleAdminCodes(m, '/findcode', admin);
     if (data.startsWith('detail:')) return showCode(m, data.slice(7), admin);

@@ -297,5 +297,48 @@ test('admin panel view coupons button works with verified .env ID even with empt
   assert.equal(couponsMsg.text.includes('RDM-ABCDEFGH'), true);
 });
 
+test('view coupons shows all coupons added by admin grouped for each added service like blinkit and bigbasket', async () => {
+  const h = harness();
+  // Admin adds Blinkit coupons
+  await h.message(99, '/addcoupon Blinkit BLINK50');
+  await h.message(99, '/addcoupon Blinkit BLINK100');
+  // Admin adds BigBasket coupon
+  await h.message(99, '/addcoupon BigBasket BB2026');
+
+  // Admin opens view coupons
+  await h.callback(99, 'coupons:0');
+  const msg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 99).at(-1);
+  assert.ok(msg);
+  // Verify both services have their sections
+  assert.equal(msg.text.includes('Blinkit'), true);
+  assert.equal(msg.text.includes('BigBasket'), true);
+  // Verify coupons are listed under their services
+  assert.equal(msg.text.includes('BLINK50'), true);
+  assert.equal(msg.text.includes('BLINK100'), true);
+  assert.equal(msg.text.includes('BB2026'), true);
+  // Verify status
+  assert.equal(msg.text.includes('Available in pool'), true);
+
+  // Verify service filter buttons exist in the keyboard
+  const buttons = msg.reply_markup.inline_keyboard.flat();
+  const filterBlinkit = buttons.find((b) => b.callback_data === 'coupons:app:Blinkit:0');
+  const filterBigBasket = buttons.find((b) => b.callback_data === 'coupons:app:BigBasket:0');
+  assert.ok(filterBlinkit, 'Blinkit filter button should exist');
+  assert.ok(filterBigBasket, 'BigBasket filter button should exist');
+
+  // Admin clicks filter for Blinkit
+  await h.callback(99, 'coupons:app:Blinkit:0');
+  const blinkitMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 99).at(-1);
+  assert.equal(blinkitMsg.text.includes('BLINK50'), true);
+  assert.equal(blinkitMsg.text.includes('BLINK100'), true);
+  assert.equal(blinkitMsg.text.includes('BB2026'), false);
+
+  // Admin filters via command /coupons BigBasket
+  await h.message(99, '/coupons BigBasket');
+  const bbMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 99).at(-1);
+  assert.equal(bbMsg.text.includes('BB2026'), true);
+  assert.equal(bbMsg.text.includes('BLINK50'), false);
+});
+
 
 

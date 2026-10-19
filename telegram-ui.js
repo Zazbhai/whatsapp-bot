@@ -48,34 +48,143 @@ function pageOf(records, page, size = 5) {
   return { rows: records.slice(index * size, (index + 1) * size), index, pages };
 }
 
-function codePage(records, page, prefix, admin) {
-  const { rows, index, pages } = pageOf(records, page);
-  const text = rows.map((r) => {
-    const appLabel = escapeHtml(r.app || 'Coupon');
-    const codeLabel = escapeHtml(r.code);
-    if (admin) {
-      const status = (r.deliveredTo || r.assignedSessionId)
-        ? `📤 Delivered to +${escapeHtml(r.phone || r.deliveredPhone || '')}${r.tgName ? ` (${escapeHtml(r.tgName)})` : ''}`
-        : '🟢 Available in pool';
-      return `🏪 <b>${appLabel}</b>: <code>${codeLabel}</code>\n   ${status}`;
-    }
-    return `🏪 <b>${appLabel}</b>: <code>${codeLabel}</code>\n📱 +${escapeHtml(r.phone || '')}${r.deliveredAt ? ` · 📅 ${escapeHtml(String(r.deliveredAt).slice(0, 10))}` : ''}`;
-  }).join('\n\n');
+function getAppEmoji(app) {
+  const norm = String(app || '').trim().toLowerCase();
+  if (norm.includes('blinkit')) return '⚡';
+  if (norm.includes('bigbasket') || norm.includes('bb')) return '🛒';
+  if (norm.includes('zepto')) return '🚀';
+  if (norm.includes('swiggy')) return '🍔';
+  if (norm.includes('zomato')) return '🍕';
+  if (norm.includes('amazon')) return '🛍️';
+  if (norm.includes('flipkart')) return '📦';
+  if (norm.includes('myntra')) return '👗';
+  if (norm.includes('uber') || norm.includes('ola')) return '🚖';
+  if (norm.includes('domino')) return '🍕';
+  if (norm.includes('kfc') || norm.includes('mcdonald')) return '🍟';
+  return '🏪';
+}
 
-  const buttons = rows.map((r) => [button(`🎁 ${r.app ? r.app + ': ' : ''}${r.code}`, `detail:${r.code}`)]);
+function codePage(records, page, prefix, admin, filter = 'all', allServices = []) {
+  const pageSize = admin ? 25 : 5;
+  const { rows, index, pages } = pageOf(records, page, pageSize);
+
+  let text = '';
+  if (admin) {
+    if (!rows.length) {
+      text = 'No coupons here yet.';
+    } else {
+      const groups = new Map();
+      for (const r of rows) {
+        const app = (r.app || 'General').trim();
+        if (!groups.has(app)) groups.set(app, []);
+        groups.get(app).push(r);
+      }
+
+      const sections = [];
+      for (const [app, items] of groups.entries()) {
+        const emoji = getAppEmoji(app);
+        const inPool = items.filter((x) => !x.deliveredTo && !x.assignedSessionId).length;
+        const delivered = items.length - inPool;
+        const stats = items.length === 1
+          ? (inPool ? '1 in pool' : '1 delivered')
+          : `${items.length} coupons · ${inPool} in pool, ${delivered} delivered`;
+
+        const lines = items.map((r) => {
+          const codeLabel = escapeHtml(r.code);
+          const isDelivered = Boolean(r.deliveredTo || r.assignedSessionId);
+          let status = '🟢 Available in pool';
+          if (isDelivered) {
+            const phone = r.deliveredPhone || (r.phone && r.phone !== 'Admin Created' ? r.phone : '');
+            const phoneStr = phone ? `+${escapeHtml(phone)}` : '';
+            const nameStr = r.tgName || r.deliveredName ? ` (${escapeHtml(r.tgName || r.deliveredName)})` : '';
+            status = `📤 Delivered to ${phoneStr}${nameStr}`.replace(/\s+/g, ' ').trim();
+          }
+          return `• <code>${codeLabel}</code> — ${status}`;
+        });
+
+        sections.push(`${emoji} <b>${escapeHtml(app)}</b> (${stats})\n${lines.join('\n')}`);
+      }
+      text = sections.join('\n\n');
+    }
+  } else {
+    text = rows.map((r) => {
+      const emoji = getAppEmoji(r.app);
+      const appLabel = escapeHtml(r.app || 'Coupon');
+      const codeLabel = escapeHtml(r.code);
+      return `${emoji} <b>${appLabel}</b>: <code>${codeLabel}</code>\n📱 +${escapeHtml(r.phone || '')}${r.deliveredAt ? ` · 📅 ${escapeHtml(String(r.deliveredAt).slice(0, 10))}` : ''}`;
+    }).join('\n\n');
+  }
+
+  const buttons = [];
+
+  const distinctServices = (allServices && allServices.length)
+    ? allServices
+    : [...new Set(records.map((r) => (r.app || 'General').trim()).filter(Boolean))];
+
+  if (admin && distinctServices.length > 1) {
+    const filterRows = [];
+    let currentRow = [];
+    if (filter && filter !== 'all') {
+      currentRow.push(button('🌐 All Services', 'coupons:0'));
+    }
+    for (const s of distinctServices.slice(0, 4)) {
+      if (filter && filter.toLowerCase() === s.toLowerCase()) continue;
+      currentRow.push(button(`${getAppEmoji(s)} ${s}`, `coupons:app:${s}:0`));
+      if (currentRow.length === 2) {
+        filterRows.push(currentRow);
+        currentRow = [];
+      }
+    }
+    if (currentRow.length) filterRows.push(currentRow);
+    buttons.push(...filterRows);
+  }
+
+  if (admin) {
+    for (let i = 0; i < rows.length; i += 2) {
+      const row = [button(`🎁 ${rows[i].app ? rows[i].app + ': ' : ''}${rows[i].code}`, `detail:${rows[i].code}`)];
+      if (i + 1 < rows.length) {
+        row.push(button(`🎁 ${rows[i + 1].app ? rows[i + 1].app + ': ' : ''}${rows[i + 1].code}`, `detail:${rows[i + 1].code}`));
+      }
+      buttons.push(row);
+    }
+  } else {
+    for (const r of rows) {
+      buttons.push([button(`🎁 ${r.app ? r.app + ': ' : ''}${r.code}`, `detail:${r.code}`)]);
+    }
+  }
+
   const nav = [];
   if (index > 0) nav.push(button('⬅️ Previous', `${prefix}:${index - 1}`));
   if (index + 1 < pages) nav.push(button('Next ➡️', `${prefix}:${index + 1}`));
   if (nav.length) buttons.push(nav);
-  buttons.push([button(admin ? '👑 Admin panel' : '🏠 Main menu', admin ? 'admin' : 'home')]);
+
+  if (admin) {
+    buttons.push([button('➕ Add coupon', 'addcoupon'), button('👑 Admin panel', 'admin')]);
+  } else {
+    buttons.push([button('🏠 Main menu', 'home')]);
+  }
+
+  const totalCount = records.length;
+  const inPoolCount = records.filter((r) => !r.deliveredTo && !r.assignedSessionId).length;
+  const deliveredCount = totalCount - inPoolCount;
+
+  let title = `<b>🎁 ${admin ? 'Coupon Inventory &amp; Delivery' : 'Your coupons'}</b>`;
+  if (admin && filter && filter !== 'all') {
+    title = `<b>🎁 ${getAppEmoji(filter)} ${escapeHtml(filter)} Coupons</b>`;
+  }
+
+  let subtitle = `📋 ${records.length} total · Page ${index + 1}/${pages}`;
+  if (admin) {
+    subtitle = `📋 ${totalCount} total · 🟢 ${inPoolCount} in pool · 📤 ${deliveredCount} delivered · Page ${index + 1}/${pages}`;
+  }
 
   return {
-    text: `<b>🎁 ${admin ? 'Coupon Inventory &amp; Delivery' : 'Your coupons'}</b>\n📋 ${records.length} total · Page ${index + 1}/${pages}\n\n${text || 'No coupons here yet.'}`,
+    text: `${title}\n${subtitle}\n\n${text || 'No coupons here yet.'}`,
     reply_markup: keyboard(...buttons)
   };
 }
 
 module.exports = {
   escapeHtml, button, keyboard, homeKeyboard, backKeyboard, cancelKeyboard,
-  adminKeyboard, appSelectKeyboard, userPrefAppKeyboard, canViewCode, canUseCallback, pageOf, codePage
+  adminKeyboard, appSelectKeyboard, userPrefAppKeyboard, canViewCode, canUseCallback, pageOf, getAppEmoji, codePage
 };
