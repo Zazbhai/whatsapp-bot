@@ -618,7 +618,7 @@
             <div style="display: flex; align-items: center; gap: 10px;">
                <i data-lucide="volume-x" style="color: #ff9500; width: 24px; height: 24px;"></i>
                <div>
-                 <h3 style="margin: 0;">Auto-Muted Users</h3>
+                 <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">Auto-Muted Users <span id="auto-muted-users-count" class="badge" style="background: rgba(255,149,0,0.15); color: #ff9500; font-size: 0.72rem; padding: 2px 8px; border-radius: 12px; font-weight: 600;">0</span></h3>
                  <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Users automatically muted/ignored after the threshold limit. Admins can unmute them here.</p>
                </div>
             </div>
@@ -630,7 +630,7 @@
           <div style="margin-top: 15px;">
             <div id="auto-muted-users-list" style="display: flex; flex-direction: column; gap: 8px;">
               <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0; text-align: center; padding: 12px;">
-                Click <strong>Refresh</strong> to load auto-muted users.
+                Loading auto-muted users...
               </p>
             </div>
           </div>
@@ -642,7 +642,7 @@
             <div style="display: flex; align-items: center; gap: 10px;">
                <i data-lucide="ban" style="color: #ff3b30; width: 24px; height: 24px;"></i>
                <div>
-                 <h3 style="margin: 0;">Blocked Users</h3>
+                 <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">Blocked Users <span id="blocked-users-count" class="badge" style="background: rgba(255,59,48,0.15); color: #ff3b30; font-size: 0.72rem; padding: 2px 8px; border-radius: 12px; font-weight: 600;">0</span></h3>
                  <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Permanently blocked — bot ignores all messages from them forever. Admin can unblock here.</p>
                </div>
             </div>
@@ -699,7 +699,7 @@
             <div style="display: flex; align-items: center; gap: 10px;">
                <i data-lucide="volume-x" style="color: #ff9f0a; width: 24px; height: 24px;"></i>
                <div>
-                 <h3 style="margin: 0;">Spam Muted Users</h3>
+                 <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">Spam Muted Users <span id="spam-muted-users-count" class="badge" style="background: rgba(255,159,10,0.15); color: #ff9f0a; font-size: 0.72rem; padding: 2px 8px; border-radius: 12px; font-weight: 600;">0</span></h3>
                  <p style="font-size: 0.75rem; color: var(--text-muted); margin: 2px 0 0 0;">Users temporarily muted for 10 minutes due to spam. Auto-responders still work for them; AI replies are paused.</p>
                </div>
             </div>
@@ -724,7 +724,7 @@
             <!-- Muted users list -->
             <div id="muted-users-list" style="display: flex; flex-direction: column; gap: 8px;">
               <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0; text-align: center; padding: 12px;">
-                Click <strong>Refresh</strong> to load currently muted users.
+                Loading currently muted users...
               </p>
             </div>
           </div>
@@ -1062,23 +1062,41 @@
       <!-- TAB: API KEYS MANAGEMENT -->
       <section class="tab-pane" id="tab-keys">
         <!-- Key Metrics Counts -->
-        <div class="dashboard-grid" style="grid-template-columns: repeat(2, 1fr); gap: 20px;">
-          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 20px; padding: 20px;">
-            <div class="stat-icon" style="background: rgba(124, 58, 237, 0.1); color: var(--primary); margin-bottom: 0; width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
-              <i data-lucide="key" style="width: 24px; height: 24px;"></i>
+        <div class="dashboard-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 16px; padding: 16px;">
+            <div class="stat-icon" style="background: rgba(124, 58, 237, 0.1); color: var(--primary); margin-bottom: 0; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+              <i data-lucide="key" style="width: 20px; height: 20px;"></i>
             </div>
             <div>
-              <div class="stat-number" id="keys-or-count" style="font-size: 2rem; margin-bottom: 0; line-height: 1;">0</div>
-              <div class="stat-label" style="margin-top: 4px; font-weight: 600;">OpenRouter Key(s)</div>
+              <div class="stat-number" id="keys-total-count" style="font-size: 1.8rem; margin-bottom: 0; line-height: 1;">0</div>
+              <div class="stat-label" style="margin-top: 4px; font-weight: 600; font-size: 0.8rem;">Total Active Key(s)</div>
             </div>
           </div>
-          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 20px; padding: 20px;">
-            <div class="stat-icon" style="background: rgba(34, 197, 94, 0.1); color: var(--whatsapp); margin-bottom: 0; width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
-              <i data-lucide="key" style="width: 24px; height: 24px;"></i>
+          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 16px; padding: 16px;">
+            <div class="stat-icon" style="background: rgba(124, 58, 237, 0.1); color: var(--primary); margin-bottom: 0; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+              <i data-lucide="cpu" style="width: 20px; height: 20px;"></i>
             </div>
             <div>
-              <div class="stat-number" id="keys-hf-count" style="font-size: 2rem; margin-bottom: 0; line-height: 1;">0</div>
-              <div class="stat-label" style="margin-top: 4px; font-weight: 600;">Hugging Face Token(s)</div>
+              <div class="stat-number" id="keys-or-count" style="font-size: 1.8rem; margin-bottom: 0; line-height: 1;">0</div>
+              <div class="stat-label" style="margin-top: 4px; font-weight: 600; font-size: 0.8rem;">OpenRouter Key(s)</div>
+            </div>
+          </div>
+          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 16px; padding: 16px;">
+            <div class="stat-icon" style="background: rgba(37, 99, 235, 0.1); color: #2563eb; margin-bottom: 0; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+              <i data-lucide="zap" style="width: 20px; height: 20px;"></i>
+            </div>
+            <div>
+              <div class="stat-number" id="keys-other-count" style="font-size: 1.8rem; margin-bottom: 0; line-height: 1;">0</div>
+              <div class="stat-label" style="margin-top: 4px; font-weight: 600; font-size: 0.8rem;">Groq / Gemini / Others</div>
+            </div>
+          </div>
+          <div class="glass-card stat-box" style="flex-direction: row; align-items: center; gap: 16px; padding: 16px;">
+            <div class="stat-icon" style="background: rgba(34, 197, 94, 0.1); color: var(--whatsapp); margin-bottom: 0; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+              <i data-lucide="layers" style="width: 20px; height: 20px;"></i>
+            </div>
+            <div>
+              <div class="stat-number" id="keys-hf-count" style="font-size: 1.8rem; margin-bottom: 0; line-height: 1;">0</div>
+              <div class="stat-label" style="margin-top: 4px; font-weight: 600; font-size: 0.8rem;">Hugging Face Token(s)</div>
             </div>
           </div>
         </div>
@@ -1093,9 +1111,23 @@
               <div class="form-group" style="margin-bottom: 15px;">
                 <label for="key-provider" style="font-weight: 600;">API Provider</label>
                 <select id="key-provider" required style="width: 100%; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); outline: none;">
-                  <option value="openrouter">OpenRouter / Groq (sk-or-...)</option>
-                  <option value="huggingface">Hugging Face (hf_...)</option>
+                  <option value="auto">⚡ Auto-Detect Provider</option>
+                  <option value="openrouter">OpenRouter (Free Tier - sk-or-...)</option>
+                  <option value="groq">Groq (Ultra-Fast 30 RPM - gsk_...)</option>
+                  <option value="gemini">Google Gemini (1,500 RPD Free - AIza...)</option>
+                  <option value="mistral">Mistral AI (Free Tier)</option>
+                  <option value="cohere">Cohere (1,000/mo Free)</option>
+                  <option value="nvidia">NVIDIA NIM (1,000 Free Req - nvapi-...)</option>
+                  <option value="zhipu">Zhipu AI / Z AI (GLM-4 Flash Free)</option>
+                  <option value="kilo">Kilo Code (Free Gateway)</option>
+                  <option value="siliconflow">SiliconFlow (Free Tier)</option>
+                  <option value="llm7">LLM7.io (Free Tier - llm7-...)</option>
+                  <option value="modelscope">ModelScope (Free Inference)</option>
+                  <option value="huggingface">Hugging Face (Serverless Router - hf_...)</option>
                 </select>
+                <span id="provider-hint" class="input-tip" style="margin-top: 6px; display: block; font-size: 0.75rem; color: var(--text-muted);">
+                  Curated free LLM providers with automatic failover and load-balancing.
+                </span>
               </div>
 
               <div class="form-group" style="margin-bottom: 20px;">
@@ -1130,9 +1162,20 @@
               <div>
                 <h4 style="margin-bottom: 10px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); display: flex; align-items: center; gap: 8px;">
                   <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--primary);"></span>
-                  OpenRouter / Groq Keys
+                  OpenRouter Keys
                 </h4>
                 <div id="or-keys-list" style="display: flex; flex-direction: column; gap: 8px;">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
+
+              <!-- Other Free LLM Providers List (Groq, Gemini, Mistral, Cohere, Nvidia, etc.) -->
+              <div>
+                <h4 style="margin-bottom: 10px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); display: flex; align-items: center; gap: 8px;">
+                  <span style="width: 6px; height: 6px; border-radius: 50%; background: #2563eb;"></span>
+                  Groq, Gemini &amp; Other Free LLM APIs
+                </h4>
+                <div id="other-keys-list" style="display: flex; flex-direction: column; gap: 8px;">
                   <!-- Dynamically populated -->
                 </div>
               </div>

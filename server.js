@@ -3,6 +3,14 @@ const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
 const { exec, fork } = require('child_process');
+const {
+  PROVIDERS,
+  normalizeProviderId,
+  detectProviderFromKey,
+  getProvider,
+  getEnvVarForProvider,
+  loadAllApiKeys
+} = require('./llm-providers');
 
 // Load environment variables manually from .env (bulletproof, zero native dependency install risks)
 const envPath = path.join(__dirname, '.env');
@@ -650,7 +658,12 @@ async function handleVoiceTtsReply(slug, msg, text, voiceName) {
     fs.writeFileSync(textFilePath, text, 'utf8');
 
     // Determine the Python executable path from environment config
-    let pythonPath = process.env.PYTHON_PATH || '';
+    let pythonPath = (process.env.PYTHON_PATH || '').trim();
+    // If a custom path was specified but does not exist on disk, fall back to system default
+    if (pythonPath && (pythonPath.includes('/') || pythonPath.includes('\\')) && !fs.existsSync(pythonPath)) {
+      console.warn(`[TTS] Configured PYTHON_PATH "${pythonPath}" does not exist on disk. Falling back to system default.`);
+      pythonPath = '';
+    }
     if (!pythonPath) {
       pythonPath = process.platform === 'win32' ? 'python' : 'python3';
     }
@@ -705,8 +718,9 @@ async function handleVoiceTtsReply(slug, msg, text, voiceName) {
 
 const incomingProcessingQueues = {};
 const outgoingSendQueues = {};
-const INCOMING_PROCESSING_CONCURRENCY = Number(process.env.INCOMING_PROCESSING_CONCURRENCY || 3);
-const OUTGOING_SEND_GAP_MS = Number(process.env.OUTGOING_SEND_GAP_MS || 1200);
+const INCOMING_PROCESSING_CONCURRENCY = Number(process.env.INCOMING_PROCESSING_CONCURRENCY || 1);
+const OUTGOING_SEND_GAP_MS = Number(process.env.OUTGOING_SEND_GAP_MS || 2000);
+const MESSAGE_STEP_DELAY_MS = Number(process.env.MESSAGE_STEP_DELAY_MS || 2000);
 
 function enqueueLimitedTask(queueMap, key, task, concurrency = 1) {
   if (!queueMap[key]) {
@@ -745,10 +759,22 @@ function enqueueIncomingProcessing(slug, task) {
   return enqueueLimitedTask(
     incomingProcessingQueues,
     slug,
-    () => Promise.race([
-      task(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Incoming processing task timeout exceeded")), 120000))
-    ]),
+    async () => {
+      let timeoutId;
+      try {
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("Incoming processing task timeout exceeded")), 120000);
+          if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
+        });
+        const result = await Promise.race([task(), timeoutPromise]);
+        return result;
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+        if (MESSAGE_STEP_DELAY_MS > 0) {
+          await new Promise(resolve => setTimeout(resolve, MESSAGE_STEP_DELAY_MS));
+        }
+      }
+    },
     Math.max(1, INCOMING_PROCESSING_CONCURRENCY)
   );
 }
@@ -1731,8 +1757,10 @@ function parseAIResponse(raw) {
   function isThoughtOrLeak(t) {
     if (!t) return true;
     const str = t.trim();
+    if (str.includes('"type":"reasoning.encrypted"') || str.startsWith('{"type":"reasoning')) return true;
     if (/^(?:\*{0,2}(?:Thinking\s+Process|Thought\s+Process|Thinking|Thought|Reasoning|Analysis|Internal\s+Thinking|Internal\s+Notes|Reflection)\*{0,2}\s*:?)/i.test(str)) return true;
     if (/^(?:Here(?:'s| is) (?:a|my|the) thinking process|Let(?:'s| me) (?:think|analyze|break down|examine|consider)|To respond to the user|In this scenario, the user)/i.test(str)) return true;
+    if (/^(?:We need (?:to )?respond|I need to respond|User asks|User is asking|The user wants|Need perhaps)/i.test(str)) return true;
     if (/(?:CRITICAL RETRY WARNING|CRITICAL CONTEXT RULE|ORDER DETECTION RULES|must not include thought process|output only the direct response|previous response was rejected)/i.test(str)) return true;
     const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
     const thoughtBulletCount = lines.filter(l => /^[-*•]\s*(?:user is|user asked|i should|i need|must not|constraints|system prompt|previous response|they're just|they are just)/i.test(l)).length;
@@ -1908,7 +1936,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   }
 
   const incomingText = msg.body.toLowerCase().trim();
-  const aiHandlesApk = instConfig && instConfig.aiEnabled && (process.env.LLM_API_KEYS || process.env.LLM_API_KEY || process.env.HF_TOKENS || process.env.HF_TOKEN);
+  const aiHandlesApk = instConfig && instConfig.aiEnabled && hasAnyAiKeyConfigured();
 
   // 3. Fast APK keyword path
   const isApkKeyword = incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk';
@@ -2075,7 +2103,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
     } else {
       const reason = !instConfig || !instConfig.aiEnabled
         ? `AI replies are turned OFF for bot "${slug}". Turn on "AI Smart Auto-Responder" in this bot's settings.`
-        : 'no AI keys found in .env (LLM_API_KEYS or HF_TOKENS).';
+        : 'no AI keys found in .env (configure OpenRouter, Groq, Gemini, or other providers in Dashboard / API Keys).';
       logInstanceEvent(slug, 'error', `No reply sent to +${senderNumber}: no rule matched and ${reason}`);
     }
   }
@@ -2371,7 +2399,7 @@ async function processGlobalAIQueue() {
 }
 
 // =============================================================
-// CONCURRENT API KEY REGISTRY WITH FAILOVER & COOLDOWN (Hugging Face + OpenRouter + Groq)
+// CONCURRENT API KEY REGISTRY WITH FAILOVER & COOLDOWN (Multi-Provider: OpenRouter, Groq, Gemini, Mistral, Cohere, etc.)
 // =============================================================
 // Global registry of all keys: keyString -> { provider, key }
 let apiKeysRegistry = {};
@@ -2379,49 +2407,22 @@ let apiKeysRoundRobin = 0; // Round-robin counter for even distribution
 const exhaustedKeysRegistry = new Set();
 
 function initApiKeysRegistry() {
-  apiKeysRegistry = {};
-
-  // 1. Load HuggingFace keys
-  const hfKeysStr = process.env.HF_TOKENS || process.env.HF_TOKEN || '';
-  const hfKeys = hfKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
-
-  // 2. Load OpenRouter/Groq keys
-  const orKeysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
-  const orKeys = orKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
-
-  const allEnvKeys = new Set([...hfKeys, ...orKeys]);
+  apiKeysRegistry = loadAllApiKeys(process.env, exhaustedKeysRegistry);
 
   // Clean up exhausted keys that are no longer in env
+  const allCurrentKeys = new Set(Object.keys(loadAllApiKeys(process.env, new Set())));
   for (const key of exhaustedKeysRegistry) {
-    if (!allEnvKeys.has(key)) {
+    if (!allCurrentKeys.has(key)) {
       exhaustedKeysRegistry.delete(key);
     }
   }
 
-  hfKeys.forEach(key => {
-    if (!exhaustedKeysRegistry.has(key)) {
-      apiKeysRegistry[key] = {
-        provider: 'huggingface',
-        key
-      };
-    }
-  });
-
-  const provider = process.env.LLM_PROVIDER || 'openrouter';
-  orKeys.forEach(key => {
-    if (!exhaustedKeysRegistry.has(key)) {
-      apiKeysRegistry[key] = {
-        provider,
-        key
-      };
-    }
-  });
-  
   // Log total keys loaded
   const totalKeys = Object.keys(apiKeysRegistry).length;
+  const anonCount = Object.values(apiKeysRegistry).filter(k => k.isAnonymous || (k.key && k.key.endsWith(':anonymous'))).length;
   const hfCount = Object.values(apiKeysRegistry).filter(k => k.provider === 'huggingface').length;
-  const otherCount = totalKeys - hfCount;
-  console.log(`[SYSTEM] API Key Registry initialized: ${otherCount} OpenRouter/Groq key(s), ${hfCount} HuggingFace key(s) (Exhausted: ${exhaustedKeysRegistry.size})`);
+  const otherCount = totalKeys - hfCount - anonCount;
+  console.log(`[SYSTEM] API Key Registry initialized: ${anonCount} zero-key free provider(s) (Priority 1), ${otherCount} cloud LLM key(s), ${hfCount} HuggingFace key(s) (Exhausted: ${exhaustedKeysRegistry.size})`);
 }
 
 function initApiKeysRegistryIfEmpty() {
@@ -2430,12 +2431,15 @@ function initApiKeysRegistryIfEmpty() {
   }
 }
 
+function hasAnyAiKeyConfigured() {
+  initApiKeysRegistryIfEmpty();
+  return Object.keys(apiKeysRegistry).length > 0;
+}
+
 // Initialize the API keys registry on startup
 initApiKeysRegistry();
 
-// Pick a random key from the active pool, excluding already-attempted keys for this request.
-// Uses round-robin base offset + random jitter so different users get different keys even
-// when requests arrive at the same time.
+// Pick a random key from the active pool, prioritizing zero-key free models first!
 function pickRandomKey(attemptedKeys = new Set()) {
   initApiKeysRegistryIfEmpty();
   
@@ -2445,12 +2449,23 @@ function pickRandomKey(attemptedKeys = new Set()) {
     return null;
   }
   
-  // Separate by provider priority
-  const otherKeys = activeKeys.filter(k => k.provider !== 'huggingface');
-  const hfKeys = activeKeys.filter(k => k.provider === 'huggingface');
-  
-  // Pick from OpenRouter/Groq first (priority), then HuggingFace
-  const pool = otherKeys.length > 0 ? otherKeys : hfKeys;
+  // Separate by provider priority:
+  // Priority 0: Zero-key anonymous free providers (OVHcloud, LLM7, Kilo)
+  const zeroKeyPool = activeKeys.filter(k => k.isAnonymous || (k.key && k.key.endsWith(':anonymous')));
+  // Priority 1: Cloud API keys (OpenRouter, Groq, Gemini, Mistral, etc.)
+  const cloudKeyPool = activeKeys.filter(k => !zeroKeyPool.includes(k) && k.provider !== 'huggingface');
+  // Priority 2: Hugging Face keys
+  const hfKeyPool = activeKeys.filter(k => k.provider === 'huggingface');
+
+  // Try zero-key free models first!
+  let pool = zeroKeyPool;
+  if (pool.length === 0) {
+    pool = cloudKeyPool.length > 0 ? cloudKeyPool : hfKeyPool;
+  }
+
+  if (pool.length === 0) {
+    return null;
+  }
   
   // Round-robin with random jitter: ensures different users hitting simultaneously get different keys
   const offset = apiKeysRoundRobin + Math.floor(Math.random() * pool.length);
@@ -4102,15 +4117,24 @@ function updateEnvKey(envVarName, newKeysArray) {
   }
 
   // Remove singular variable to keep .env clean and prevent duplication
-  const singularVar = envVarName === 'LLM_API_KEYS' ? 'LLM_API_KEY' : 'HF_TOKEN';
-  const singularRegex = new RegExp(`^\\s*${singularVar}\\s*=.*$`, 'm');
-  if (singularRegex.test(content)) {
-    content = content.replace(singularRegex, '');
+  const singularMap = {
+    'LLM_API_KEYS': 'LLM_API_KEY',
+    'HF_TOKENS': 'HF_TOKEN',
+    'OPENROUTER_API_KEYS': 'OPENROUTER_API_KEY',
+    'GROQ_API_KEYS': 'GROQ_API_KEY',
+    'GEMINI_API_KEYS': 'GEMINI_API_KEY'
+  };
+  const singularVar = singularMap[envVarName];
+  if (singularVar) {
+    const singularRegex = new RegExp(`^\\s*${singularVar}\\s*=.*$`, 'm');
+    if (singularRegex.test(content)) {
+      content = content.replace(singularRegex, '');
+    }
+    delete process.env[singularVar];
   }
   
   fs.writeFileSync(envPath, content, 'utf8');
   process.env[envVarName] = newValue;
-  delete process.env[singularVar];
   
   // Reload registry
   initApiKeysRegistry();
@@ -4118,32 +4142,64 @@ function updateEnvKey(envVarName, newKeysArray) {
 
 // API Keys Manager Endpoints
 app.get('/api/keys', authenticateToken, (req, res) => {
-  const hfKeysStr = process.env.HF_TOKENS || process.env.HF_TOKEN || '';
-  const hfKeys = hfKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
-
-  const orKeysStr = process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '';
-  const orKeys = orKeysStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
-
   const maskKey = (key) => {
     if (key.length <= 12) return '***';
     return key.substring(0, 8) + '...' + key.substring(key.length - 4);
   };
 
-  const mapKeys = (keysList) => {
+  const mapKeys = (keysList, provId) => {
     return keysList.map(key => ({
       id: crypto.createHash('sha256').update(key).digest('hex'),
       masked: maskKey(key),
+      provider: provId,
       isExhausted: exhaustedKeysRegistry.has(key)
     }));
   };
 
-  res.json({
-    openrouter: mapKeys(orKeys),
-    huggingface: mapKeys(hfKeys),
-    counts: {
-      openrouter: orKeys.length,
-      huggingface: hfKeys.length
+  const providersData = {};
+  const counts = { total: 0 };
+
+  // 1. Gather keys for each provider from its dedicated envVar
+  for (const [pId, pObj] of Object.entries(PROVIDERS)) {
+    const raw = process.env[pObj.envVar] || '';
+    const keys = raw.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean).filter(k => !k.includes('your_token_here') && !k.includes('your_api_key_here'));
+    providersData[pId] = mapKeys(keys, pId);
+    counts[pId] = keys.length;
+    counts.total += keys.length;
+  }
+
+  // 2. Also incorporate any legacy/generic LLM_API_KEYS not already claimed
+  const genericLlmKeys = (process.env.LLM_API_KEYS || process.env.LLM_API_KEY || '').split(/[\s,;]+/).map(k => k.trim()).filter(Boolean).filter(k => !k.includes('your_token_here') && !k.includes('your_api_key_here'));
+  const defaultProvider = normalizeProviderId(process.env.LLM_PROVIDER || 'openrouter');
+
+  genericLlmKeys.forEach(k => {
+    let exists = false;
+    for (const pList of Object.values(providersData)) {
+      if (pList.some(item => item.id === crypto.createHash('sha256').update(k).digest('hex'))) {
+        exists = true;
+        break;
+      }
     }
+    if (!exists) {
+      const pId = detectProviderFromKey(k) || defaultProvider;
+      if (!providersData[pId]) providersData[pId] = [];
+      providersData[pId].push({
+        id: crypto.createHash('sha256').update(k).digest('hex'),
+        masked: maskKey(k),
+        provider: pId,
+        isExhausted: exhaustedKeysRegistry.has(k)
+      });
+      counts[pId] = (counts[pId] || 0) + 1;
+      counts.total++;
+    }
+  });
+
+  res.json({
+    // Direct backward compatibility for dashboard
+    openrouter: providersData.openrouter || [],
+    huggingface: providersData.huggingface || [],
+    providers: providersData,
+    counts
   });
 });
 
@@ -4154,9 +4210,9 @@ app.post('/api/keys/reset-exhausted', authenticateToken, (req, res) => {
 });
 
 app.post('/api/keys', authenticateToken, (req, res) => {
-  const { key, provider } = req.body;
-  if (!key || !provider) {
-    return res.status(400).json({ error: 'Key and provider are required.' });
+  let { key, provider } = req.body;
+  if (!key) {
+    return res.status(400).json({ error: 'Key is required.' });
   }
 
   const trimmedKey = key.trim();
@@ -4164,24 +4220,31 @@ app.post('/api/keys', authenticateToken, (req, res) => {
     return res.status(400).json({ error: 'Key cannot be empty.' });
   }
 
-  const lowerProvider = provider.toLowerCase();
-  if (lowerProvider !== 'openrouter' && lowerProvider !== 'huggingface') {
-    return res.status(400).json({ error: 'Invalid provider. Must be "openrouter" or "huggingface".' });
+  // Auto-detect provider if unspecified or requested as auto
+  if (!provider || provider === 'auto') {
+    provider = detectProviderFromKey(trimmedKey) || 'openrouter';
+  } else {
+    provider = normalizeProviderId(provider);
   }
 
-  const envVar = lowerProvider === 'openrouter' ? 'LLM_API_KEYS' : 'HF_TOKENS';
+  const providerObj = getProvider(provider);
+  if (!providerObj) {
+    return res.status(400).json({ error: 'Invalid provider.' });
+  }
+
+  const envVar = providerObj.envVar;
   const currentStr = process.env[envVar] || '';
   const currentKeys = currentStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
 
   if (currentKeys.includes(trimmedKey)) {
-    return res.status(409).json({ error: 'Key already exists.' });
+    return res.status(409).json({ error: 'Key already exists for provider ' + providerObj.name + '.' });
   }
 
   currentKeys.push(trimmedKey);
   
   try {
     updateEnvKey(envVar, currentKeys);
-    res.status(201).json({ message: 'Key added successfully.' });
+    res.status(201).json({ message: `Key registered successfully for ${providerObj.name}.`, provider: providerObj.id });
   } catch (error) {
     res.status(500).json({ error: 'Failed to save key: ' + error.message });
   }
@@ -4189,31 +4252,50 @@ app.post('/api/keys', authenticateToken, (req, res) => {
 
 app.delete('/api/keys', authenticateToken, (req, res) => {
   const { id, provider } = req.body;
-  if (!id || !provider) {
-    return res.status(400).json({ error: 'Key id and provider are required.' });
+  if (!id) {
+    return res.status(400).json({ error: 'Key id is required.' });
   }
 
-  const lowerProvider = provider.toLowerCase();
-  if (lowerProvider !== 'openrouter' && lowerProvider !== 'huggingface') {
-    return res.status(400).json({ error: 'Invalid provider.' });
+  let targetEnvVar = null;
+  let targetKeys = null;
+  let targetIndex = -1;
+
+  // Build candidate env vars list
+  const possibleEnvVars = [];
+  if (provider) {
+    const norm = normalizeProviderId(provider);
+    const pObj = getProvider(norm);
+    if (pObj && !possibleEnvVars.includes(pObj.envVar)) {
+      possibleEnvVars.push(pObj.envVar);
+    }
+  }
+  possibleEnvVars.push('LLM_API_KEYS', 'HF_TOKENS');
+  for (const p of Object.values(PROVIDERS)) {
+    if (!possibleEnvVars.includes(p.envVar)) {
+      possibleEnvVars.push(p.envVar);
+    }
   }
 
-  const envVar = lowerProvider === 'openrouter' ? 'LLM_API_KEYS' : 'HF_TOKENS';
-  const currentStr = process.env[envVar] || '';
-  const currentKeys = currentStr.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+  for (const envVar of possibleEnvVars) {
+    const raw = process.env[envVar] || '';
+    const keys = raw.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+    const idx = keys.findIndex(k => crypto.createHash('sha256').update(k).digest('hex') === id);
+    if (idx !== -1) {
+      targetEnvVar = envVar;
+      targetKeys = keys;
+      targetIndex = idx;
+      break;
+    }
+  }
 
-  const targetIndex = currentKeys.findIndex(key => {
-    return crypto.createHash('sha256').update(key).digest('hex') === id;
-  });
-
-  if (targetIndex === -1) {
+  if (targetIndex === -1 || !targetEnvVar) {
     return res.status(404).json({ error: 'Key not found.' });
   }
 
-  currentKeys.splice(targetIndex, 1);
+  targetKeys.splice(targetIndex, 1);
 
   try {
-    updateEnvKey(envVar, currentKeys);
+    updateEnvKey(targetEnvVar, targetKeys);
     res.json({ message: 'Key removed successfully.' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to remove key: ' + error.message });

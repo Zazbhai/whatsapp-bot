@@ -261,5 +261,49 @@ test('patchClient retries inject when execution context is destroyed by navigati
   assert.equal(calls, 2);
 });
 
+test('enqueueIncomingProcessing processes messages one by one sequentially with inter-message delay', async () => {
+  const qStart = source.indexOf('const incomingProcessingQueues = {};');
+  const qEnd = source.indexOf('function enqueueWhatsAppSend', qStart);
+  assert.ok(qStart > -1 && qEnd > -1, 'Queue snippet must exist in server.js');
+
+  const context = {
+    console,
+    Date,
+    Set,
+    setTimeout,
+    clearTimeout,
+    process: { env: { INCOMING_PROCESSING_CONCURRENCY: '1', MESSAGE_STEP_DELAY_MS: '60' } }
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(qStart, qEnd), context);
+
+  const events = [];
+  let task1EndTime = 0;
+  let task2StartTime = 0;
+
+  const p1 = context.enqueueIncomingProcessing('test-slug', async () => {
+    events.push('task1-start');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    events.push('task1-end');
+    task1EndTime = Date.now();
+    return 'result1';
+  });
+
+  const p2 = context.enqueueIncomingProcessing('test-slug', async () => {
+    task2StartTime = Date.now();
+    events.push('task2-start');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    events.push('task2-end');
+    return 'result2';
+  });
+
+  const [res1, res2] = await Promise.all([p1, p2]);
+  assert.equal(res1, 'result1');
+  assert.equal(res2, 'result2');
+  assert.deepEqual(events, ['task1-start', 'task1-end', 'task2-start', 'task2-end']);
+  assert.ok(task2StartTime >= task1EndTime + 40, `Task 2 should start after Task 1 ends plus inter-message delay (delay was ${task2StartTime - task1EndTime}ms)`);
+});
+
+
 
 

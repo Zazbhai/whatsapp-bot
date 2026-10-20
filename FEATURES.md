@@ -68,3 +68,36 @@ A dedicated web service running on `http://localhost:3001` (configured via `REDI
 - **Pre-filled Message Support**: Forward any text message, e.g. `http://localhost:3001/?text=Hello%20Support` -> `https://wa.me/<active_number>?text=Hello%20Support`.
 - **Status API**: `GET /api/status` returns `{ ok: true, active: true, phone: "...", url: "https://wa.me/..." }`.
 - **Waiting Screen**: If no number is online or linked yet, visitors see a modern real-time connection screen that polls and automatically forwards them the moment a number becomes ready.
+
+## Free Multi-Provider LLM APIs (OpenRouter, Groq, Gemini & More)
+
+Integrated permanent free-tier LLM providers from [awesome-free-llm-apis](https://github.com/mnfst/awesome-free-llm-apis) for auto-replies with parallel model racing and automatic failover:
+
+| Provider | Key Prefix | Free Tier Allowance | Curated Free Models |
+|---|---|---|---|
+| **OpenRouter** | `sk-or-` | Permanent free models | `meta-llama/llama-3.3-70b-instruct:free`, `google/gemma-2-9b-it:free`, `deepseek/deepseek-r1:free`, `nvidia/nemotron-3-super-120b-a12b:free`, `openrouter/free` |
+| **Groq** | `gsk_` | 30 RPM ultra-fast | `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `gemma2-9b-it`, `qwen/qwen3.8-27b` |
+| **Google Gemini** | `AIza` | 1,500 req/day free | `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-3.5-flash` |
+| **Mistral AI** | Any | Free mode / $10/mo credit | `mistral-small-latest`, `codestral-latest`, `open-mistral-7b`, `ministral-8b-2512` |
+| **Cohere** | Any | 1,000 req/mo free trial | `command-r-08-2024`, `command-r-plus-08-2024`, `c4ai-aya-expanse-32b` |
+| **NVIDIA NIM** | `nvapi-` | 1,000 free requests | `meta/llama-3.3-70b-instruct`, `nvidia/llama-3.1-nemotron-70b-instruct` |
+| **Zhipu AI (GLM)** | Any | Permanent free Flash | `glm-4.7-flash`, `glm-4.5-flash`, `glm-4-flash` |
+| **Kilo Code** | Any | Free gateway | `openrouter/free`, `nvidia/nemotron-3-super-120b-a12b:free`, `qwen/qwen3.8-27b:free` |
+| **SiliconFlow** | Any | Free tier | `Qwen/Qwen2.5-7B-Instruct`, `deepseek-ai/DeepSeek-V3` |
+| **LLM7.io** | `llm7-` | Free tier | `gpt-oss:20b`, `mistral-Nemo-Instruct-2407` |
+| **ModelScope** | Any | Free inference | `Qwen/Qwen2.5-72B-Instruct`, `Qwen/Qwen3.5-27B` |
+| **Hugging Face** | `hf_` | Serverless router | `deepseek-ai/DeepSeek-V3`, `Qwen/Qwen2.5-72B-Instruct` |
+
+### Key Features
+- **Auto-Detection**: Pasting any key into the dashboard automatically identifies the provider based on its prefix.
+- **Failover & Load-Balancing**: Add multiple keys across different providers. The bot will load-balance across active keys and failover if one hits rate limits (HTTP 429) or quota errors.
+- **Dedicated Environment Variables**: Supported in `.env` as `OPENROUTER_API_KEYS`, `GROQ_API_KEYS`, `GEMINI_API_KEYS`, `MISTRAL_API_KEYS`, `COHERE_API_KEYS`, `NVIDIA_API_KEYS`, etc., while maintaining 100% backwards compatibility with `LLM_API_KEYS` and `HF_TOKENS`.
+
+## Sequential Message Processing & Anti-Ban Pacing
+
+To protect WhatsApp numbers and provide natural human-like cadence:
+- **Strictly Sequential (1-by-1)**: Incoming messages are processed sequentially one by one (`INCOMING_PROCESSING_CONCURRENCY=1`), preventing parallel reply races across multiple users.
+- **2-Second Inter-Message Pause**: After answering one message, the processing engine waits exactly 2 seconds (`MESSAGE_STEP_DELAY_MS=2000`) before dequeueing and answering the next message.
+- **Outgoing Dispatch Gap**: A minimum 2-second spacing (`OUTGOING_SEND_GAP_MS=2000`) is enforced between all outgoing WhatsApp message sends.
+
+

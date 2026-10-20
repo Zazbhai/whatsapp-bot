@@ -57,33 +57,30 @@ process.on('message', async (data) => {
       return null;
     }
 
-    // Separate by provider priority
-    const otherKeys = activeKeys.filter(k => k.provider !== 'huggingface');
-    const hfKeys = activeKeys.filter(k => k.provider === 'huggingface');
+    // Separate by provider priority:
+    // Priority 0: Zero-key anonymous free providers (OVHcloud, LLM7.io, Kilo Code)
+    const zeroKeyPool = activeKeys.filter(k => k.isAnonymous || (k.key && k.key.endsWith(':anonymous')));
+    // Priority 1: Cloud API keys (OpenRouter, Groq, Gemini, Mistral, etc.)
+    const cloudKeyPool = activeKeys.filter(k => !zeroKeyPool.includes(k) && k.provider !== 'huggingface');
+    // Priority 2: Hugging Face keys
+    const hfKeyPool = activeKeys.filter(k => k.provider === 'huggingface');
 
-    // Pick from OpenRouter/Groq first (priority), then HuggingFace
-    const pool = otherKeys.length > 0 ? otherKeys : hfKeys;
+    // Pick from Zero-key free models FIRST as requested!
+    let pool = zeroKeyPool;
+    if (pool.length === 0) {
+      pool = cloudKeyPool.length > 0 ? cloudKeyPool : hfKeyPool;
+    }
+
+    if (pool.length === 0) {
+      return null;
+    }
 
     // Unbiased random selection (avoids modulo bias from compound offset)
     const index = Math.floor(Math.random() * pool.length);
     return pool[index];
   }
 
-  const hfModels = [
-    process.env.HF_MODEL || 'deepseek-ai/DeepSeek-V3',
-    'deepseek-ai/DeepSeek-V3',
-    'Qwen/Qwen2.5-72B-Instruct'
-  ];
-
-  const openrouterModels = [
-    process.env.LLM_MODEL || 'openrouter/free',
-    'openrouter/free'
-  ];
-
-  const groqModels = [
-    process.env.LLM_MODEL || 'mixtral-8x7b-32768',
-    'mixtral-8x7b-32768'
-  ];
+  const { getProvider, getModelsForProvider } = require('./llm-providers');
 
   const delay = (ms, signal) => new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
@@ -98,30 +95,20 @@ process.on('message', async (data) => {
     signal?.addEventListener('abort', onAbort);
   });
 
-  async function tryModel(url, apiKey, model, abortSignal, attempt = 1) {
+  async function tryModel(providerConfig, apiKey, model, abortSignal, attempt = 1) {
     try {
-      const requestPayload = {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...history,
-          { role: 'user', content: userMessage }
-        ],
-        max_tokens: 500
-      };
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        ...history,
+        { role: 'user', content: userMessage }
+      ];
+      const requestPayload = providerConfig.buildPayload(model, messages, 500);
+      const headers = providerConfig.headers(apiKey);
 
-      if (url.includes('openrouter.ai')) {
-        // Exclude reasoning tokens from OpenRouter responses (prevents thinking models from leaking thoughts)
-        requestPayload.reasoning = { exclude: true };
-      }
-
-      const response = await fetch(url, {
+      const response = await fetch(providerConfig.url, {
         signal: abortSignal,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
+        headers,
         body: JSON.stringify(requestPayload)
       });
 
@@ -147,20 +134,26 @@ process.on('message', async (data) => {
       } catch {
         throw new Error(`Non-JSON response: HTTP ${response.status}`);
       }
-      let content = responseJson?.choices?.[0]?.message?.content;
+      let content = providerConfig.extractContent(responseJson);
       if (typeof content !== 'string' || !content.trim()) {
         throw new Error('Empty AI response content');
       }
-      return { content: content.trim(), model };
+      const trimmed = content.trim();
+      if (trimmed.includes('"type":"reasoning.encrypted"') || trimmed.startsWith('{"type":"reasoning')) {
+        throw new Error('Model returned encrypted reasoning tokens instead of assistant message');
+      }
+      return { content: trimmed, model };
     } catch (err) {
-      const isTransient = err.status === 429 || [500, 502, 503, 504].includes(err.status);
+      const isRateLimited = err.status === 429;
+      const isBlockedKey = isRateLimited && (localRegistry[apiKey]?.isAnonymous || (err.retryAfter && err.retryAfter > 15));
+      const isTransient = ([500, 502, 503, 504].includes(err.status) || (isRateLimited && !isBlockedKey)) && !isBlockedKey;
       const isAborted = abortSignal?.aborted || err.name === 'AbortError';
 
       if (isTransient && !isAborted && attempt < 3) {
         let waitTime = attempt * 2000;
         if (err.status === 429) {
           // Extra backoff and random jitter for HTTP 429 Rate Limit to prevent synchronized retries
-          waitTime = attempt * 3000 + Math.floor(Math.random() * 2000);
+          waitTime = attempt * 2000 + Math.floor(Math.random() * 1500);
         }
         if (err.retryAfter) {
           waitTime = Math.min(err.retryAfter * 1000, 10000);
@@ -168,7 +161,7 @@ process.on('message', async (data) => {
         console.warn(`[AI Worker] Model ${model} encountered transient error (${err.status}). Retrying attempt ${attempt + 1}/3 after ${waitTime}ms...`);
         
         await delay(waitTime, abortSignal);
-        return tryModel(url, apiKey, model, abortSignal, attempt + 1);
+        return tryModel(providerConfig, apiKey, model, abortSignal, attempt + 1);
       }
       throw err;
     }
@@ -206,21 +199,12 @@ process.on('message', async (data) => {
     }
     const activeApiKey = keyObj.key;
     const provider = keyObj.provider;
+    const providerConfig = getProvider(provider);
+    const authKey = keyObj.apiKey || (String(activeApiKey).endsWith(':anonymous') ? 'anonymous' : activeApiKey);
     
     attemptedKeys.add(activeApiKey);
     
-    let models = [];
-    let url = '';
-    if (provider === 'huggingface') {
-      url = 'https://router.huggingface.co/v1/chat/completions';
-      models = hfModels;
-    } else if (provider === 'groq') {
-      url = 'https://api.groq.com/openai/v1/chat/completions';
-      models = groqModels;
-    } else {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      models = openrouterModels;
-    }
+    let models = getModelsForProvider(provider, process.env);
     models = [...new Set(models)];
 
     let keyExhausted = false;
@@ -241,7 +225,7 @@ process.on('message', async (data) => {
           await delay(idx * 1000, controller.signal);
         }
 
-        return tryModel(url, activeApiKey, model, controller.signal)
+        return tryModel(providerConfig, authKey, model, controller.signal)
           .then(result => {
             controllers.forEach((c, i) => { if (i !== idx) c.abort(); });
             timeouts.forEach(t => clearTimeout(t));
@@ -252,8 +236,9 @@ process.on('message', async (data) => {
             
             if (err.status) {
               const isKeyError = [401, 402, 403].includes(err.status);
+              const isRateLimitedKey = err.status === 429 && (localRegistry[activeApiKey]?.isAnonymous || (err.retryAfter && err.retryAfter > 15));
               const isQuotaMsg = /quota|exhausted|insufficient|credit|balance|daily limit|monthly limit/i.test(err.responseText || '');
-              if (isKeyError || isQuotaMsg) {
+              if (isKeyError || isRateLimitedKey || isQuotaMsg) {
                 keyExhausted = true;
                 controllers.forEach(c => c.abort());
                 timeouts.forEach(t => clearTimeout(t));

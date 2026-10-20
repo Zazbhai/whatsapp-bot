@@ -1511,10 +1511,12 @@ module.exports = function setupFeatures(ctx) {
       console.log(`[TELEGRAM] Listening for APK uploads as @${me.username}`);
     } catch (e) { tg.error = e.message; console.error('[TELEGRAM]', e.message); }
     let offset = 0;
+    let conflictCount = 0;
     for (;;) {
       try {
         const updates = await tgCall('getUpdates', { offset, timeout: 50, allowed_updates: ['message', 'callback_query'] });
         tg.error = '';
+        conflictCount = 0;
         for (const u of updates) {
           offset = u.update_id + 1;
           if (u.callback_query) {
@@ -1529,7 +1531,15 @@ module.exports = function setupFeatures(ctx) {
         }
       } catch (e) {
         tg.error = e.message;
-        await new Promise((r) => setTimeout(r, 5000));
+        const isConflict = String(e.message).toLowerCase().includes('conflict') || String(e.message).toLowerCase().includes('terminated');
+        if (isConflict) {
+          conflictCount++;
+          const waitSec = Math.min(10 * conflictCount, 60);
+          console.warn(`[TELEGRAM] ⚠️ Conflict: Another instance is polling with this token. Retrying in ${waitSec}s (attempt ${conflictCount})...`);
+          await new Promise((r) => setTimeout(r, waitSec * 1000));
+        } else {
+          await new Promise((r) => setTimeout(r, 5000));
+        }
       }
     }
   }

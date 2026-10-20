@@ -264,6 +264,9 @@ function switchTab(tabName) {
       pageTitle.textContent = 'Auto-Responders';
       pageSubtitle.textContent = 'Configure keywords, triggers, and automated workflows.';
       fetchRules();
+      loadAutoMutedUsers();
+      loadBlockedUsers();
+      loadMutedUsers();
       break;
     case 'messenger':
       pageTitle.textContent = 'Manual Messenger';
@@ -285,7 +288,7 @@ function switchTab(tabName) {
       break;
     case 'keys':
       pageTitle.textContent = 'API Keys Management';
-      pageSubtitle.textContent = 'Add, remove, and view API keys for Hugging Face and OpenRouter.';
+      pageSubtitle.textContent = 'Add, remove, and view API keys for OpenRouter, Groq, Gemini, Hugging Face, and more free providers.';
       fetchApiKeys();
       break;
   }
@@ -1464,6 +1467,9 @@ async function syncActiveInstanceData() {
     allRules = data.rules || [];
     if (activeTab === 'responders') {
       renderRules();
+      loadAutoMutedUsers();
+      loadBlockedUsers();
+      loadMutedUsers();
     } else if (activeTab === 'users') {
       fetchUsers();
     }
@@ -1736,6 +1742,9 @@ async function loadMutedUsers() {
   try {
     const res = await apiFetch(`/api/instances/${activeInstanceSlug}/muted-users`);
     const data = await res.json();
+    const countBadge = document.getElementById('spam-muted-users-count');
+    if (countBadge) countBadge.textContent = data.muted ? data.muted.length : 0;
+
     if (!data.muted || data.muted.length === 0) {
       list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">✅ No users are currently spam-muted.</p>';
       return;
@@ -1813,6 +1822,9 @@ async function loadBlockedUsers() {
   try {
     const res = await apiFetch(`/api/instances/${activeInstanceSlug}/ignored-users`);
     const data = await res.json();
+    const countBadge = document.getElementById('blocked-users-count');
+    if (countBadge) countBadge.textContent = data.ignored ? data.ignored.length : 0;
+
     if (!data.ignored || data.ignored.length === 0) {
       list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">✅ No users are permanently blocked.</p>';
       return;
@@ -1891,6 +1903,8 @@ async function loadAutoMutedUsers() {
     
     // Filter only muted users (isMuted is true)
     const mutedUsers = (data.users || []).filter(u => u.isMuted);
+    const countBadge = document.getElementById('auto-muted-users-count');
+    if (countBadge) countBadge.textContent = mutedUsers.length;
     
     if (mutedUsers.length === 0) {
       list.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;text-align:center;padding:12px;">✅ No users are currently auto-muted.</p>';
@@ -2020,6 +2034,11 @@ async function init() {
     
     // 2. Synchronize selected engine details
     await syncActiveInstanceData();
+    if (activeTab === 'responders') {
+      loadAutoMutedUsers();
+      loadBlockedUsers();
+      loadMutedUsers();
+    }
 
     // 3. Start dashboard stats auto-refresh polling loop
     if (dashboardUsersInterval) clearInterval(dashboardUsersInterval);
@@ -2314,15 +2333,57 @@ if (usersSearchInput) {
 }
 
 // ── API Keys Management Panel ───────────────────────────────────
+const PROVIDER_METAS = {
+  openrouter: { name: 'OpenRouter', color: 'var(--primary)', bg: 'rgba(124,58,237,0.08)', border: 'rgba(124,58,237,0.2)' },
+  groq: { name: 'Groq', color: '#f97316', bg: 'rgba(249,115,22,0.08)', border: 'rgba(249,115,22,0.2)' },
+  gemini: { name: 'Google Gemini', color: '#2563eb', bg: 'rgba(37,99,235,0.08)', border: 'rgba(37,99,235,0.2)' },
+  mistral: { name: 'Mistral AI', color: '#ea580c', bg: 'rgba(234,88,12,0.08)', border: 'rgba(234,88,12,0.2)' },
+  cohere: { name: 'Cohere', color: '#0d9488', bg: 'rgba(13,148,136,0.08)', border: 'rgba(13,148,136,0.2)' },
+  nvidia: { name: 'NVIDIA NIM', color: '#16a34a', bg: 'rgba(22,163,74,0.08)', border: 'rgba(22,163,74,0.2)' },
+  zhipu: { name: 'Zhipu AI (GLM)', color: '#0891b2', bg: 'rgba(8,145,178,0.08)', border: 'rgba(8,145,178,0.2)' },
+  kilo: { name: 'Kilo Code', color: '#6366f1', bg: 'rgba(99,102,241,0.08)', border: 'rgba(99,102,241,0.2)' },
+  siliconflow: { name: 'SiliconFlow', color: '#3b82f6', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)' },
+  llm7: { name: 'LLM7.io', color: '#8b5cf6', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.2)' },
+  modelscope: { name: 'ModelScope', color: '#06b6d4', bg: 'rgba(6,182,212,0.08)', border: 'rgba(6,182,212,0.2)' },
+  huggingface: { name: 'Hugging Face', color: 'var(--whatsapp)', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)' }
+};
+
+function getProviderMeta(providerId) {
+  const norm = (providerId || 'openrouter').toLowerCase();
+  return PROVIDER_METAS[norm] || {
+    name: providerId ? providerId.toUpperCase() : 'Unknown',
+    color: '#a855f7',
+    bg: 'rgba(168,85,247,0.08)',
+    border: 'rgba(168,85,247,0.2)'
+  };
+}
+
+function detectFrontendProvider(key) {
+  if (!key) return null;
+  const k = key.trim();
+  if (k.startsWith('sk-or-')) return 'openrouter';
+  if (k.startsWith('gsk_')) return 'groq';
+  if (k.startsWith('AIza')) return 'gemini';
+  if (k.startsWith('nvapi-')) return 'nvidia';
+  if (k.startsWith('hf_')) return 'huggingface';
+  if (k.startsWith('llm7-')) return 'llm7';
+  return null;
+}
+
 async function fetchApiKeys() {
+  const totalCount = document.getElementById('keys-total-count');
   const orCount = document.getElementById('keys-or-count');
+  const otherCount = document.getElementById('keys-other-count');
   const hfCount = document.getElementById('keys-hf-count');
+
   const orList = document.getElementById('or-keys-list');
+  const otherList = document.getElementById('other-keys-list');
   const hfList = document.getElementById('hf-keys-list');
 
   if (!orList || !hfList) return;
 
   orList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:12px;">Loading...</p>';
+  if (otherList) otherList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:12px;">Loading...</p>';
   hfList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:12px;">Loading...</p>';
 
   try {
@@ -2330,60 +2391,81 @@ async function fetchApiKeys() {
     if (!res.ok) throw new Error('Failed to fetch keys');
     const data = await res.json();
 
-    // Update counts
-    if (orCount) orCount.textContent = data.counts.openrouter;
-    if (hfCount) hfCount.textContent = data.counts.huggingface;
+    const counts = data.counts || {};
+    const providers = data.providers || {};
 
-    // Render OpenRouter List
-    if (data.openrouter.length === 0) {
-      orList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No OpenRouter keys configured.</p>';
-    } else {
-      orList.innerHTML = data.openrouter.map(k => {
-        const bg = k.isExhausted ? 'rgba(255,149,0,0.08)' : 'rgba(124,58,237,0.05)';
-        const border = k.isExhausted ? 'rgba(255,149,0,0.25)' : 'rgba(124,58,237,0.15)';
-        const iconColor = k.isExhausted ? '#ff9500' : 'var(--primary)';
-        const badgeHtml = k.isExhausted 
-          ? `<span class="badge" style="background:rgba(255,149,0,0.15);color:#ff9500;padding:2px 8px;border-radius:20px;font-size:0.7rem;margin-left:8px;font-weight:600;border:1px solid rgba(255,149,0,0.2);">Exhausted/Muted</span>`
-          : '';
-        return `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:${bg};border:1px solid ${border};border-radius:8px;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <i data-lucide="${k.isExhausted ? 'alert-circle' : 'key'}" style="width:14px;height:14px;color:${iconColor};"></i>
-              <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
-              ${badgeHtml}
-            </div>
-            <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="openrouter" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
-              <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
-            </button>
-          </div>
-        `;
-      }).join('');
+    // Update stat counts
+    if (totalCount) totalCount.textContent = counts.total || (counts.openrouter || 0) + (counts.huggingface || 0);
+    if (orCount) orCount.textContent = counts.openrouter || 0;
+    if (hfCount) hfCount.textContent = counts.huggingface || 0;
+    if (otherCount) {
+      let otherTotal = 0;
+      for (const [p, c] of Object.entries(counts)) {
+        if (p !== 'openrouter' && p !== 'huggingface' && p !== 'total') {
+          otherTotal += c;
+        }
+      }
+      otherCount.textContent = otherTotal;
     }
 
-    // Render Hugging Face List
-    if (data.huggingface.length === 0) {
+    const renderKeyCard = (k, defaultProvider) => {
+      const pId = k.provider || defaultProvider;
+      const meta = getProviderMeta(pId);
+      const bg = k.isExhausted ? 'rgba(255,149,0,0.08)' : meta.bg;
+      const border = k.isExhausted ? 'rgba(255,149,0,0.25)' : meta.border;
+      const iconColor = k.isExhausted ? '#ff9500' : meta.color;
+      
+      const badgeHtml = k.isExhausted 
+        ? `<span class="badge" style="background:rgba(255,149,0,0.15);color:#ff9500;padding:2px 8px;border-radius:20px;font-size:0.7rem;margin-left:8px;font-weight:600;border:1px solid rgba(255,149,0,0.2);">Exhausted/Muted</span>`
+        : '';
+
+      const providerBadge = `<span style="font-size:0.72rem;font-weight:600;color:${meta.color};background:rgba(255,255,255,0.03);padding:2px 6px;border-radius:6px;border:1px solid ${meta.border};">${escapeHtml(meta.name)}</span>`;
+
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:${bg};border:1px solid ${border};border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <i data-lucide="${k.isExhausted ? 'alert-circle' : 'key'}" style="width:14px;height:14px;color:${iconColor};"></i>
+            ${providerBadge}
+            <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
+            ${badgeHtml}
+          </div>
+          <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="${pId}" data-provider-name="${escapeHtml(meta.name)}" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;" title="Remove this key">
+            <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
+          </button>
+        </div>
+      `;
+    };
+
+    // 1. Render OpenRouter List
+    const openrouterKeys = providers.openrouter || data.openrouter || [];
+    if (openrouterKeys.length === 0) {
+      orList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No OpenRouter keys configured.</p>';
+    } else {
+      orList.innerHTML = openrouterKeys.map(k => renderKeyCard(k, 'openrouter')).join('');
+    }
+
+    // 2. Render Other Free LLM Providers List
+    if (otherList) {
+      const otherKeys = [];
+      for (const [pId, list] of Object.entries(providers)) {
+        if (pId !== 'openrouter' && pId !== 'huggingface' && Array.isArray(list)) {
+          otherKeys.push(...list.map(k => ({ ...k, provider: pId })));
+        }
+      }
+
+      if (otherKeys.length === 0) {
+        otherList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No keys for Groq, Gemini, Mistral, Cohere, etc. configured yet. Add one via the form!</p>';
+      } else {
+        otherList.innerHTML = otherKeys.map(k => renderKeyCard(k, k.provider)).join('');
+      }
+    }
+
+    // 3. Render Hugging Face List
+    const hfKeys = providers.huggingface || data.huggingface || [];
+    if (hfKeys.length === 0) {
       hfList.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted);margin:0;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px dashed var(--panel-border);border-radius:8px;">No Hugging Face tokens configured.</p>';
     } else {
-      hfList.innerHTML = data.huggingface.map(k => {
-        const bg = k.isExhausted ? 'rgba(255,149,0,0.08)' : 'rgba(34,197,94,0.05)';
-        const border = k.isExhausted ? 'rgba(255,149,0,0.25)' : 'rgba(34,197,94,0.15)';
-        const iconColor = k.isExhausted ? '#ff9500' : 'var(--whatsapp)';
-        const badgeHtml = k.isExhausted 
-          ? `<span class="badge" style="background:rgba(255,149,0,0.15);color:#ff9500;padding:2px 8px;border-radius:20px;font-size:0.7rem;margin-left:8px;font-weight:600;border:1px solid rgba(255,149,0,0.2);">Exhausted/Muted</span>`
-          : '';
-        return `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:${bg};border:1px solid ${border};border-radius:8px;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <i data-lucide="${k.isExhausted ? 'alert-circle' : 'key'}" style="width:14px;height:14px;color:${iconColor};"></i>
-              <span style="font-family:monospace;font-size:0.85rem;color:var(--text-light);">${escapeHtml(k.masked)}</span>
-              ${badgeHtml}
-            </div>
-            <button class="btn btn-secondary btn-sm delete-key-btn" data-id="${k.id}" data-provider="huggingface" style="padding:4px 8px;width:auto;height:auto;background:rgba(255,59,48,0.1);color:#ff3b30;border-color:transparent;">
-              <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
-            </button>
-          </div>
-        `;
-      }).join('');
+      hfList.innerHTML = hfKeys.map(k => renderKeyCard(k, 'huggingface')).join('');
     }
 
     if (window.lucide) lucide.createIcons();
@@ -2391,19 +2473,21 @@ async function fetchApiKeys() {
     // Attach delete listeners
     document.querySelectorAll('.delete-key-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        deleteApiKey(btn.dataset.id, btn.dataset.provider);
+        deleteApiKey(btn.dataset.id, btn.dataset.provider, btn.dataset.providerName);
       });
     });
 
   } catch (err) {
     if (orList) orList.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;padding:12px;">Failed to load keys.</p>';
+    if (otherList) otherList.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;padding:12px;">Failed to load keys.</p>';
     if (hfList) hfList.innerHTML = '<p style="font-size:0.8rem;color:#ff3b30;margin:0;padding:12px;">Failed to load keys.</p>';
   }
 }
 
-async function deleteApiKey(id, provider) {
-  if (!id || !provider) return;
-  if (!confirm(`Are you sure you want to delete this ${provider === 'openrouter' ? 'OpenRouter' : 'Hugging Face'} key?`)) {
+async function deleteApiKey(id, provider, providerName) {
+  if (!id) return;
+  const label = providerName || provider || 'API';
+  if (!confirm(`Are you sure you want to delete this ${label} key?`)) {
     return;
   }
 
@@ -2452,7 +2536,23 @@ async function resetExhaustedKeys() {
   }
 }
 
-// Bind add key form submission
+// Auto-detection on input & Bind add key form submission
+const keyValInput = document.getElementById('key-value');
+const keyProvSelect = document.getElementById('key-provider');
+const provHint = document.getElementById('provider-hint');
+
+if (keyValInput && keyProvSelect) {
+  keyValInput.addEventListener('input', () => {
+    const detected = detectFrontendProvider(keyValInput.value);
+    if (detected && keyProvSelect.value === 'auto') {
+      const meta = getProviderMeta(detected);
+      if (provHint) {
+        provHint.innerHTML = `<span style="color:${meta.color};font-weight:600;">⚡ Detected: ${meta.name}</span>`;
+      }
+    }
+  });
+}
+
 const addKeyForm = document.getElementById('add-key-form');
 if (addKeyForm) {
   addKeyForm.addEventListener('submit', async (e) => {
@@ -2460,12 +2560,20 @@ if (addKeyForm) {
     const providerSelect = document.getElementById('key-provider');
     const keyValueInput = document.getElementById('key-value');
 
-    const provider = providerSelect ? providerSelect.value : '';
+    let provider = providerSelect ? providerSelect.value : 'auto';
     const key = keyValueInput ? keyValueInput.value.trim() : '';
 
-    if (!provider || !key) {
-      showToast('Please select a provider and fill in the API key.', 'error');
+    if (!key) {
+      showToast('Please enter an API key or token.', 'error');
       return;
+    }
+
+    // Auto-detect if set to auto
+    if (provider === 'auto') {
+      const detected = detectFrontendProvider(key);
+      if (detected) {
+        provider = detected;
+      }
     }
 
     try {
@@ -2477,8 +2585,10 @@ if (addKeyForm) {
       const data = await res.json();
 
       if (res.ok) {
-        showToast(data.message || 'Key added successfully.', 'success');
+        showToast(data.message || 'Key registered successfully.', 'success');
         if (keyValueInput) keyValueInput.value = '';
+        if (providerSelect) providerSelect.value = 'auto';
+        if (provHint) provHint.textContent = 'Curated free LLM providers with automatic failover and load-balancing.';
         await fetchApiKeys();
       } else {
         showToast(data.error || 'Failed to add key.', 'error');
