@@ -340,5 +340,47 @@ test('view coupons shows all coupons added by admin grouped for each added servi
   assert.equal(bbMsg.text.includes('BLINK50'), false);
 });
 
+test('admin can view, edit and delete coupons from coupon details and commands', async () => {
+  const h = harness();
+  // 1. Add coupon
+  await h.message(99, '/addcoupon Blinkit BLINKTEST');
+  
+  // 2. Open coupon detail
+  await h.callback(99, 'detail:BLINKTEST');
+  const detailMsg = h.calls.filter((c) => c.method === 'sendMessage' && c.chat_id === 99).at(-1);
+  assert.ok(detailMsg);
+  assert.equal(detailMsg.text.includes('BLINKTEST'), true);
+  const buttons = detailMsg.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'editc:BLINKTEST'), 'Edit coupon button should be present for admin');
+  assert.ok(buttons.some((b) => b.callback_data === 'delc:BLINKTEST'), 'Delete coupon button should be present for admin');
+
+  // 3. Admin clicks Edit -> updates App via button
+  await h.callback(99, 'setc:app:BLINKTEST:Swiggy');
+  const appUpdated = h.instances[0].redeemCodes.find((r) => r.code === 'BLINKTEST');
+  assert.equal(appUpdated.app, 'Swiggy');
+
+  // 4. Admin updates code via chat flow
+  await h.callback(99, 'editc:code:BLINKTEST');
+  await h.message(99, 'SWIGGYNEW');
+  const codeUpdated = h.instances[0].redeemCodes.find((r) => r.code === 'SWIGGYNEW');
+  assert.ok(codeUpdated, 'Coupon code should be updated to SWIGGYNEW');
+  assert.equal(codeUpdated.app, 'Swiggy');
+
+  // 5. Admin updates via /editcoupon command
+  await h.message(99, '/editcoupon SWIGGYNEW Zepto ZEPTO2026');
+  const cmdUpdated = h.instances[0].redeemCodes.find((r) => r.code === 'ZEPTO2026');
+  assert.ok(cmdUpdated, 'Coupon should be updated via /editcoupon');
+  assert.equal(cmdUpdated.app, 'Zepto');
+
+  // 6. Non-admin cannot delete or edit
+  await h.callback(12, 'delc:ZEPTO2026');
+  await h.callback(12, 'confirmdelc:ZEPTO2026');
+  assert.ok(h.instances[0].redeemCodes.some((r) => r.code === 'ZEPTO2026'), 'Coupon should not be deleted by non-admin');
+
+  // 7. Admin deletes coupon
+  await h.callback(99, 'confirmdelc:ZEPTO2026');
+  assert.equal(h.instances[0].redeemCodes.some((r) => r.code === 'ZEPTO2026'), false, 'Coupon should be deleted');
+});
+
 
 

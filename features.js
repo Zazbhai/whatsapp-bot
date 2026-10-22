@@ -1131,6 +1131,88 @@ module.exports = function setupFeatures(ctx) {
     return { record };
   }
 
+  async function updateCouponCode(oldCode, newApp, newCode) {
+    await acquireCouponLock();
+    try { return _updateCouponCode(oldCode, newApp, newCode); }
+    finally { releaseCouponLock(); }
+  }
+  function _updateCouponCode(oldCode, newApp, newCode) {
+    if (!oldCode) return null;
+    const qOld = String(oldCode).trim().toUpperCase();
+    const insts = loadInstances();
+    let target = null;
+    let targetInst = null;
+    for (const inst of insts) {
+      if (!Array.isArray(inst.redeemCodes)) continue;
+      const found = inst.redeemCodes.find((r) => r.code && String(r.code).toUpperCase() === qOld);
+      if (found) { target = found; targetInst = inst; break; }
+    }
+    if (!target) return null;
+
+    let cleanCode = target.code;
+    if (newCode !== undefined && newCode !== null && String(newCode).trim()) {
+      cleanCode = String(newCode).trim().toUpperCase().replace(/^\/+/, '');
+      if (!cleanCode) return { error: 'no_code' };
+      if (cleanCode !== qOld && targetInst.redeemCodes.some((r) => r.code && String(r.code).toUpperCase() === cleanCode)) {
+        return { error: 'exists', code: cleanCode };
+      }
+    }
+
+    const cleanApp = (newApp !== undefined && newApp !== null && String(newApp).trim())
+      ? String(newApp).trim()
+      : target.app;
+
+    const prevCode = target.code;
+    target.code = cleanCode;
+    target.app = cleanApp;
+
+    for (const inst of insts) {
+      for (const s of (inst.sessions || [])) {
+        if (s.redeemCode && String(s.redeemCode).toUpperCase() === qOld) {
+          s.redeemCode = cleanCode;
+          s.couponApp = cleanApp;
+        }
+      }
+    }
+
+    saveInstances(insts);
+    persist();
+    logInstanceEvent(target.bot || 'system', 'system', `Coupon updated: [${target.app}] ${target.code} (was [${target.app}] ${prevCode}).`);
+    return { record: target, prevCode };
+  }
+
+  async function deleteCouponCode(code) {
+    await acquireCouponLock();
+    try { return _deleteCouponCode(code); }
+    finally { releaseCouponLock(); }
+  }
+  function _deleteCouponCode(customCode) {
+    if (!customCode) return null;
+    const qCode = String(customCode).trim().toUpperCase();
+    const insts = loadInstances();
+    let removed = null;
+    for (const inst of insts) {
+      if (!Array.isArray(inst.redeemCodes)) continue;
+      const idx = inst.redeemCodes.findIndex((r) => r.code && String(r.code).toUpperCase() === qCode);
+      if (idx !== -1) {
+        removed = inst.redeemCodes.splice(idx, 1)[0];
+        for (const s of (inst.sessions || [])) {
+          if (s.redeemCode && String(s.redeemCode).toUpperCase() === qCode) {
+            s.redeemCode = null;
+            s.couponDelivered = false;
+          }
+        }
+      }
+    }
+    if (removed) {
+      saveInstances(insts);
+      persist();
+      logInstanceEvent(removed.bot || 'system', 'system', `Coupon [${removed.app}] ${removed.code} deleted.`);
+      return removed;
+    }
+    return null;
+  }
+
   async function sendCodeList(m, admin, filter = 'all', page = 0) {
     const chatId = (m && m.chat && m.chat.id) || (m && m.from && m.from.id);
     const fromId = m && m.from && m.from.id;
@@ -1156,6 +1238,7 @@ module.exports = function setupFeatures(ctx) {
     if (!tui.canViewCode(r, m.from.id, admin)) return tgReply(m.chat.id, '⛔ Coupon unavailable.', tui.backKeyboard());
     const rows = [];
     if (admin) {
+      rows.push([tui.button('✏️ Edit coupon', `editc:${r.code}`), tui.button('🗑️ Delete coupon', `delc:${r.code}`)]);
       rows.push([tui.button('🎁 View coupons', 'coupons:0'), tui.button('👑 Admin panel', 'admin')]);
     } else {
       rows.push([tui.button('🎁 My coupons', 'mine:0'), tui.button('🏠 Main menu', 'home')]);
@@ -1262,7 +1345,7 @@ module.exports = function setupFeatures(ctx) {
   }
 
   async function handleAdminCodes(m, text, isAdmin) {
-    if (!/^\/(coupons|codes|mycoupons|findcode|addcoupon|addcode|newcode|coupon)\b/i.test(text)) return false;
+    if (!/^\/(coupons|codes|mycoupons|findcode|addcoupon|addcode|newcode|coupon|delcoupon|deletecoupon|removecoupon|editcoupon|updatecoupon)\b/i.test(text)) return false;
     if (m.chat.type !== 'private') { await tgReply(m.chat.id, '⛔ Open this bot in a private chat.'); return true; }
     delete tgFlow[m.chat.id];
     const parts = text.trim().split(/\s+/);
@@ -1287,6 +1370,36 @@ module.exports = function setupFeatures(ctx) {
       return true;
     }
     if (!isAdmin) { await tgReply(m.chat.id, '⛔ Open the admin panel in a private chat with this bot.'); return true; }
+    if (/^\/(delcoupon|deletecoupon|removecoupon)\b/i.test(cmd)) {
+      if (!args.length) {
+        return tgReply(m.chat.id, '<b>🗑️ Delete coupon</b>\nUsage: <code>/delcoupon &lt;CODE&gt;</code>', tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      }
+      const code = args[0];
+      const deleted = await deleteCouponCode(code);
+      if (!deleted) {
+        return tgReply(m.chat.id, `⚠️ Coupon <code>${esc(code)}</code> not found.`, tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      }
+      return tgReply(m.chat.id, `<b>✅ Coupon deleted</b>\n\nCoupon <code>${esc(deleted.code)}</code> (${esc(deleted.app)}) has been removed from inventory.`, tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+    }
+    if (/^\/(editcoupon|updatecoupon)\b/i.test(cmd)) {
+      if (!args.length) {
+        return tgReply(m.chat.id, '<b>✏️ Edit coupon</b>\nUsage: <code>/editcoupon &lt;OLD_CODE&gt; &lt;NEW_APP&gt; &lt;NEW_CODE&gt;</code>\nOr: <code>/editcoupon &lt;OLD_CODE&gt; &lt;NEW_CODE&gt;</code>', tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      }
+      const oldCode = args[0];
+      let newApp = null;
+      let newCode = null;
+      if (args.length >= 3) {
+        newApp = args[1];
+        newCode = args.slice(2).join(' ');
+      } else if (args.length === 2) {
+        newCode = args[1];
+      }
+      const res = await updateCouponCode(oldCode, newApp, newCode);
+      if (!res) return tgReply(m.chat.id, `⚠️ Coupon <code>${esc(oldCode)}</code> not found.`, tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      if (res.error === 'exists') return tgReply(m.chat.id, `⚠️ Coupon <code>${esc(res.code)}</code> already exists!`, tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      if (res.error === 'no_code') return tgReply(m.chat.id, '⚠️ Please provide a valid coupon code.', tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      return tgReply(m.chat.id, `<b>✅ Coupon updated!</b>\n\n🏪 App: <b>${esc(res.record.app)}</b>\n🎁 New Code: <code>${esc(res.record.code)}</code>\n(Previous: <code>${esc(res.prevCode)}</code>)`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+    }
     if (/^\/(addcoupon|addcode|newcode|coupon)\b/i.test(cmd)) {
       if (!args.length) {
         return tgReply(m.chat.id, '<b>➕ Add coupon to pool</b>\n\nSelect which app this coupon is for:\nOr send <code>/addcoupon &lt;App&gt; &lt;Code&gt;</code>', tui.appSelectKeyboard());
@@ -1399,6 +1512,56 @@ module.exports = function setupFeatures(ctx) {
     }
     if (data === 'find') return handleAdminCodes(m, '/findcode', admin);
     if (data.startsWith('detail:')) return showCode(m, data.slice(7), admin);
+    if (data.startsWith('editc:')) {
+      const parts = data.split(':');
+      if (parts[1] === 'app' && parts[2]) {
+        const code = parts.slice(2).join(':');
+        return tgReply(m.chat.id, `<b>🏪 Change App for Coupon</b>\n\nCoupon: <code>${esc(code)}</code>\nSelect the new app or choose Other App:`, tui.appEditKeyboard(code));
+      }
+      if (parts[1] === 'code' && parts[2]) {
+        const code = parts.slice(2).join(':');
+        tgFlow[m.chat.id] = { step: 'edit_coupon_code', oldCode: code };
+        return tgReply(m.chat.id, `<b>🎁 Change Coupon Code</b>\n\nCurrent code: <code>${esc(code)}</code>\n\nSend the new coupon code in chat:`, tui.cancelKeyboard());
+      }
+      const code = parts.slice(1).join(':');
+      const qCode = String(code || '').trim().toUpperCase();
+      const r = allCodes().find((x) => x.code && String(x.code).toUpperCase() === qCode);
+      if (!r) return tgReply(m.chat.id, '⚠️ Coupon not found.', tui.backKeyboard());
+      return tgReply(m.chat.id, `<b>✏️ Edit Coupon</b>\n\n🏪 <b>App:</b> ${esc(r.app || 'Coupon')}\n🎁 <b>Code:</b> <code>${esc(r.code)}</code>\n\nWhat would you like to update?`, tui.keyboard(
+        [tui.button('🏪 Change App', `editc:app:${r.code}`), tui.button('🎁 Change Code', `editc:code:${r.code}`)],
+        [tui.button('🔙 Back to details', `detail:${r.code}`)]
+      ));
+    }
+    if (data.startsWith('setc:app:')) {
+      const parts = data.split(':');
+      const code = parts[2];
+      const appChoice = parts.slice(3).join(':');
+      if (appChoice === 'other') {
+        tgFlow[m.chat.id] = { step: 'edit_coupon_app', code };
+        return tgReply(m.chat.id, `<b>✍️ Custom app name</b>\n\nSend the new app name for coupon <code>${esc(code)}</code>:`, tui.cancelKeyboard());
+      }
+      const res = await updateCouponCode(code, appChoice, null);
+      if (!res) return tgReply(m.chat.id, '⚠️ Coupon not found.', tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      return tgReply(m.chat.id, `<b>✅ Coupon updated!</b>\n\n🏪 App: <b>${esc(res.record.app)}</b>\n🎁 Code: <code>${esc(res.record.code)}</code>`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+    }
+    if (data.startsWith('delc:')) {
+      const code = data.slice(5);
+      const qCode = String(code || '').trim().toUpperCase();
+      const r = allCodes().find((x) => x.code && String(x.code).toUpperCase() === qCode);
+      if (!r) return tgReply(m.chat.id, '⚠️ Coupon not found.', tui.backKeyboard());
+      return tgReply(m.chat.id, `<b>🗑️ Delete Coupon</b>\n\nAre you sure you want to delete coupon <code>${esc(r.code)}</code> (${esc(r.app)})?\n\n⚠️ This will permanently remove it from inventory.`, tui.keyboard(
+        [tui.button('🗑️ Yes, delete coupon', `confirmdelc:${r.code}`)],
+        [tui.button('❌ Cancel', `detail:${r.code}`)]
+      ));
+    }
+    if (data.startsWith('confirmdelc:')) {
+      const code = data.slice(12);
+      const deleted = await deleteCouponCode(code);
+      if (deleted) {
+        return tgReply(m.chat.id, `<b>✅ Coupon deleted</b>\n\nCoupon <code>${esc(deleted.code)}</code> (${esc(deleted.app)}) has been permanently removed.`, tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      }
+      return tgReply(m.chat.id, '⚠️ Coupon not found or already deleted.', tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+    }
     if (data === 'upload') return tgReply(m.chat.id, '<b>📦 Update the APK</b>\n\nSend an .apk document here (up to 20 MB).\nCaption: <code>v2.4 Bug fixes</code>\nFor one bot: <code>@bot-slug v2.4 Bug fixes</code>\n\n📤 The file becomes the latest version after upload.', tui.adminKeyboard());
     if (data === 'sessions') {
       const sessions = loadInstances().flatMap((i) => (i.sessions || []).filter((s) => s.tgOwner && String(s.tgOwner.id) === String(m.from.id)).map((s) => {
@@ -1430,6 +1593,22 @@ module.exports = function setupFeatures(ctx) {
     if (resAdd.error === 'no_code') return res.status(400).json({ error: 'Coupon code required' });
     res.json(resAdd.record);
   });
+  if (typeof app.put === 'function') {
+    app.put('/api/redeem-codes/:code', authenticateToken, async (req, res) => {
+      const resUpdate = await updateCouponCode(req.params.code, req.body.app, req.body.code);
+      if (!resUpdate) return res.status(404).json({ error: 'Coupon not found' });
+      if (resUpdate.error === 'exists') return res.status(409).json({ error: 'Coupon code already exists' });
+      if (resUpdate.error === 'no_code') return res.status(400).json({ error: 'Valid coupon code required' });
+      res.json(resUpdate.record);
+    });
+  }
+  if (typeof app.delete === 'function') {
+    app.delete('/api/redeem-codes/:code', authenticateToken, async (req, res) => {
+      const deleted = await deleteCouponCode(req.params.code);
+      if (!deleted) return res.status(404).json({ error: 'Coupon not found' });
+      res.json({ success: true, deleted });
+    });
+  }
   app.post('/api/redeem-codes/:code/used', authenticateToken, async (req, res) => {
     const r = await setCodeUsed(req.params.code.toUpperCase(), req.body.used !== false);
     r ? res.json(r) : res.status(404).json({ error: 'Not found' });
@@ -1462,6 +1641,28 @@ module.exports = function setupFeatures(ctx) {
       const app = tgFlow[chatId].app || 'General';
       delete tgFlow[chatId];
       return handleAdminCodes(m, `/addcoupon ${app} ${text}`, isAdmin);
+    }
+    if (tgFlow[chatId] && tgFlow[chatId].step === 'edit_coupon_app' && text && !text.startsWith('/') && isAdmin) {
+      const code = tgFlow[chatId].code;
+      const newApp = text.trim();
+      delete tgFlow[chatId];
+      const res = await updateCouponCode(code, newApp, null);
+      if (!res) return tgReply(chatId, '⚠️ Coupon not found.', tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      return tgReply(chatId, `<b>✅ Coupon updated!</b>\n\n🏪 App: <b>${esc(res.record.app)}</b>\n🎁 Code: <code>${esc(res.record.code)}</code>`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+    }
+    if (tgFlow[chatId] && tgFlow[chatId].step === 'edit_coupon_code' && text && !text.startsWith('/') && isAdmin) {
+      const oldCode = tgFlow[chatId].oldCode;
+      const newCode = text.trim();
+      delete tgFlow[chatId];
+      const res = await updateCouponCode(oldCode, null, newCode);
+      if (!res) return tgReply(chatId, '⚠️ Coupon not found.', tui.keyboard([tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      if (res.error === 'exists') {
+        return tgReply(chatId, `⚠️ Coupon <code>${esc(res.code)}</code> already exists!`, tui.keyboard([tui.button('✏️ Try again', `editc:code:${oldCode}`)], [tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      }
+      if (res.error === 'no_code') {
+        return tgReply(chatId, '⚠️ Please provide a valid coupon code.', tui.keyboard([tui.button('✏️ Try again', `editc:code:${oldCode}`)], [tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
+      }
+      return tgReply(chatId, `<b>✅ Coupon updated!</b>\n\n🏪 App: <b>${esc(res.record.app)}</b>\n🎁 New Code: <code>${esc(res.record.code)}</code>\n(Previous: <code>${esc(res.prevCode)}</code>)`, tui.keyboard([tui.button('🔎 View details', `detail:${res.record.code}`)], [tui.button('🎁 View coupons', 'coupons:0')], [tui.button('👑 Admin panel', 'admin')]));
     }
     if (tgFlow[chatId] && tgFlow[chatId].step === 'addcode' && text && !text.startsWith('/') && isAdmin) {
       delete tgFlow[chatId];

@@ -26,6 +26,14 @@ const appSelectKeyboard = () => keyboard(
   [button('👑 Admin panel', 'admin')]
 );
 
+const appEditKeyboard = (code) => keyboard(
+  [button('⚡ Blinkit', `setc:app:${code}:Blinkit`), button('🛒 BigBasket', `setc:app:${code}:BigBasket`)],
+  [button('🚀 Zepto', `setc:app:${code}:Zepto`), button('🍔 Swiggy', `setc:app:${code}:Swiggy`)],
+  [button('🛍️ Amazon', `setc:app:${code}:Amazon`), button('📦 Flipkart', `setc:app:${code}:Flipkart`)],
+  [button('✍️ Other App', `setc:app:${code}:other`)],
+  [button('🔙 Back to coupon', `detail:${code}`)]
+);
+
 const userPrefAppKeyboard = () => keyboard(
   [button('⚡ Blinkit', 'prefapp:Blinkit'), button('🛒 BigBasket', 'prefapp:BigBasket')],
   [button('🚀 Zepto', 'prefapp:Zepto'), button('🍔 Swiggy', 'prefapp:Swiggy')],
@@ -39,7 +47,7 @@ function canViewCode(record, userId, admin) {
 }
 
 function canUseCallback(data, admin) {
-  return !/^(admin|coupons|codes|find|upload|addcoupon|addcode|addc)(:|$)/.test(data) || admin;
+  return !/^(admin|coupons|codes|find|upload|addcoupon|addcode|addc|editc|delc|confirmdelc|setc)(:|$)/.test(data) || admin;
 }
 
 function pageOf(records, page, size = 5) {
@@ -186,5 +194,5 @@ function codePage(records, page, prefix, admin, filter = 'all', allServices = []
 
 module.exports = {
   escapeHtml, button, keyboard, homeKeyboard, backKeyboard, cancelKeyboard,
-  adminKeyboard, appSelectKeyboard, userPrefAppKeyboard, canViewCode, canUseCallback, pageOf, getAppEmoji, codePage
+  adminKeyboard, appSelectKeyboard, appEditKeyboard, userPrefAppKeyboard, canViewCode, canUseCallback, pageOf, getAppEmoji, codePage
 };
