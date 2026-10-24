@@ -50,7 +50,7 @@
       flex-direction: column;
       position: relative;
       box-shadow: 0 0 30px rgba(0, 0, 0, 0.08);
-      padding-bottom: 70px; /* Space for bottom nav bar */
+      padding-bottom: 24px;
     }
 
     @media (min-width: 481px) {
@@ -389,20 +389,76 @@
     /* Screenshots horizontal scrollable gallery */
     .screenshots-section {
       padding: 16px 0;
+      position: relative;
+    }
+
+    .screenshots-nav-arrow {
+      position: absolute;
+      top: calc(50% - 10px);
+      transform: translateY(-50%);
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 20;
+      color: var(--gp-text-main);
+      transition: all 0.2s;
+    }
+
+    .screenshots-nav-arrow:hover {
+      background: #ffffff;
+      transform: translateY(-50%) scale(1.12);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    }
+
+    .screenshots-nav-arrow.prev {
+      left: 8px;
+    }
+
+    .screenshots-nav-arrow.next {
+      right: 8px;
     }
 
     .screenshots-scroll {
       display: flex;
       gap: 12px;
       overflow-x: auto;
-      padding: 0 20px;
-      scroll-snap-type: x mandatory;
+      padding: 4px 20px 14px;
+      scroll-behavior: smooth;
       -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
+      cursor: grab;
+      user-select: none;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(1, 135, 95, 0.3) rgba(0, 0, 0, 0.05);
+    }
+
+    .screenshots-scroll:active {
+      cursor: grabbing;
     }
 
     .screenshots-scroll::-webkit-scrollbar {
-      display: none;
+      height: 6px;
+    }
+
+    .screenshots-scroll::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.04);
+      border-radius: 4px;
+      margin: 0 20px;
+    }
+
+    .screenshots-scroll::-webkit-scrollbar-thumb {
+      background: rgba(1, 135, 95, 0.4);
+      border-radius: 4px;
+    }
+
+    .screenshots-scroll::-webkit-scrollbar-thumb:hover {
+      background: var(--gp-green);
     }
 
     .screenshot-card {
@@ -415,7 +471,7 @@
       background: #1a1a1a;
       scroll-snap-align: start;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-      cursor: pointer;
+      cursor: grab;
       transition: transform 0.2s, box-shadow 0.2s;
     }
 
@@ -429,6 +485,9 @@
       height: 100%;
       object-fit: cover;
       display: block;
+      pointer-events: none;
+      -webkit-user-drag: none;
+      user-select: none;
     }
 
     /* Section Headers */
@@ -601,72 +660,10 @@
       border-radius: 4px;
     }
 
-    /* Bottom Navigation Bar (Authentic Google Play Mobile) */
-    .gp-bottom-nav {
-      position: fixed;
-      bottom: 0;
-      width: 100%;
-      max-width: 480px;
-      height: 64px;
-      background: #ffffff;
-      border-top: 1px solid var(--gp-divider);
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-      z-index: 1000;
-      backdrop-filter: blur(10px);
-    }
-
-    @media (min-width: 481px) {
-      .gp-bottom-nav {
-        border-bottom-left-radius: 28px;
-        border-bottom-right-radius: 28px;
-      }
-    }
-
-    .nav-tab {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-      color: var(--gp-text-sub);
-      text-decoration: none;
-      font-size: 0.75rem;
-      font-weight: 500;
-      cursor: pointer;
-      position: relative;
-    }
-
-    .nav-tab.active {
-      color: var(--gp-green);
-      font-weight: 700;
-    }
-
-    .nav-icon-pill {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 44px;
-      height: 28px;
-      border-radius: 14px;
-      transition: background-color 0.2s;
-    }
-
-    .nav-tab.active .nav-icon-pill {
-      background-color: var(--gp-green-light);
-    }
-
-    .nav-tab svg {
-      width: 20px;
-      height: 20px;
-    }
-
     /* Toast Notification */
     .toast-msg {
       position: fixed;
-      bottom: 80px;
+      bottom: 24px;
       left: 50%;
       transform: translateX(-50%) translateY(20px);
       background: #323232;
@@ -725,9 +722,6 @@
             <line x1="12" y1="17" x2="12.01" y2="17"></line>
           </svg>
         </button>
-
-        <!-- User profile avatar -->
-        <img class="gp-user-avatar" src="https://play-lh.googleusercontent.com/a-/ALV-UjUl4aRl7tMmLPeiRtnJYA38MqnKcfR5NkCnG9z5f1HNQTegqcU=s64" alt="User Avatar" onerror="this.src='https://www.gstatic.com/android/market_images/web/favicon_v3.ico'">
       </div>
     </header>
 
@@ -735,7 +729,7 @@
     <main id="store-content">
       <!-- App Header: Icon + Title + Dev -->
       <section class="app-header">
-        <img id="app-icon-img" class="app-icon" src="https://play-lh.googleusercontent.com/_re6mcALPaqotePA0WkgYeOQ6TighHRUS62FRmREPEhyZPdGM3QmRjcSpiMt6Pz1O-WZyvEIy4mtGHj9zw=s180-rw" alt="iStore South Africa icon" onerror="showIconFallback()">
+        <img id="app-icon-img" class="app-icon" src="/istore/logo.jpg" alt="iStore South Africa logo" onerror="showIconFallback()">
         <div id="app-icon-fallback" class="app-icon-fallback" style="display: none;">iStore</div>
 
         <div class="app-title-group">
@@ -808,6 +802,16 @@
 
       <!-- Screenshots Carousel -->
       <section class="screenshots-section">
+        <button class="screenshots-nav-arrow prev" onclick="scrollScreenshots(-220)" aria-label="Previous">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+        <button class="screenshots-nav-arrow next" onclick="scrollScreenshots(220)" aria-label="Next">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
         <div class="screenshots-scroll" id="screenshots-list">
           <!-- Card 1 -->
           <div class="screenshot-card">
@@ -832,6 +836,10 @@
           <!-- Card 6 -->
           <div class="screenshot-card">
             <img src="/istore/6.jpg" onerror="this.src='https://play-lh.googleusercontent.com/-JDkSvf2RMKwB7ylLhynlWxQEc8dpK6vKoIkzBOvaZL4YIB-q6TUxZoKyv-gCcPh4xRIt5WBLv70tG-kZMMF=w720-h1440'" alt="iStore South Africa - Order tracking" loading="lazy">
+          </div>
+          <!-- Card 7 -->
+          <div class="screenshot-card">
+            <img src="/istore/7.jpg" onerror="this.src='https://play-lh.googleusercontent.com/cM4puNVuWmf9SNBxIpVBY-YFt4ejykFvTTK4PIfuC4yFQQuzAYtbWRQfIjEKxCIcIbzfSLjRPWSF7AF5fn7-jw=w720-h1440'" alt="iStore South Africa - Apple products collection" loading="lazy">
           </div>
         </div>
       </section>
@@ -946,57 +954,6 @@ iStore South Africa is an Apple Premium Partner, which launched its first store 
         </div>
       </section>
     </main>
-
-    <!-- Bottom Navigation Bar (Google Play Mobile Bar) -->
-    <nav class="gp-bottom-nav">
-      <!-- Games -->
-      <div class="nav-tab" onclick="switchNav(this, 'Games')">
-        <div class="nav-icon-pill">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="6" y1="12" x2="10" y2="12"></line>
-            <line x1="8" y1="10" x2="8" y2="14"></line>
-            <line x1="15" y1="13" x2="15.01" y2="13"></line>
-            <line x1="18" y1="11" x2="18.01" y2="11"></line>
-            <rect x="2" y="6" width="20" height="12" rx="2"></rect>
-          </svg>
-        </div>
-        <span>Games</span>
-      </div>
-
-      <!-- Apps (Active) -->
-      <div class="nav-tab active" onclick="switchNav(this, 'Apps')">
-        <div class="nav-icon-pill">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
-            <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
-            <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
-            <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
-          </svg>
-        </div>
-        <span>Apps</span>
-      </div>
-
-      <!-- Books -->
-      <div class="nav-tab" onclick="switchNav(this, 'Books')">
-        <div class="nav-icon-pill">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-          </svg>
-        </div>
-        <span>Books</span>
-      </div>
-
-      <!-- Children -->
-      <div class="nav-tab" onclick="switchNav(this, 'Children')">
-        <div class="nav-icon-pill">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-          </svg>
-        </div>
-        <span>Children</span>
-      </div>
-    </nav>
   </div>
 
   <!-- Toast Notification Container -->
@@ -1059,10 +1016,54 @@ iStore South Africa is an Apple Premium Partner, which launched its first store 
       }
     }
 
-    function switchNav(el, name) {
-      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-      el.classList.add('active');
-      showToast(`Switched to ${name}`);
+    function scrollScreenshots(offset) {
+      const slider = document.getElementById('screenshots-list');
+      if (slider) slider.scrollBy({ left: offset, behavior: 'smooth' });
+    }
+
+    // Drag-to-scroll & mousewheel support for screenshots gallery
+    const slider = document.getElementById('screenshots-list');
+    if (slider) {
+      let isDown = false;
+      let startX = 0;
+      let scrollLeftPos = 0;
+
+      slider.addEventListener('mousedown', (e) => {
+        isDown = true;
+        slider.style.cursor = 'grabbing';
+        startX = e.pageX - slider.offsetLeft;
+        scrollLeftPos = slider.scrollLeft;
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (isDown) {
+          isDown = false;
+          slider.style.cursor = 'grab';
+        }
+      });
+
+      slider.addEventListener('mouseleave', () => {
+        if (isDown) {
+          isDown = false;
+          slider.style.cursor = 'grab';
+        }
+      });
+
+      slider.addEventListener('mousemove', (e) => {
+        if (!isDown) return;
+        e.preventDefault();
+        const x = e.pageX - slider.offsetLeft;
+        const walk = (x - startX) * 1.6;
+        slider.scrollLeft = scrollLeftPos - walk;
+      });
+
+      // Mousewheel horizontal scrolling
+      slider.addEventListener('wheel', (e) => {
+        if (e.deltaY !== 0) {
+          e.preventDefault();
+          slider.scrollLeft += e.deltaY * 1.2;
+        }
+      }, { passive: false });
     }
 
     function triggerSearch() {
