@@ -524,7 +524,7 @@
       -webkit-box-orient: vertical;
       overflow: hidden;
       white-space: pre-line;
-      margin-bottom: 16px;
+      margin-bottom: 4px;
     }
 
     .about-description.expanded {
@@ -532,67 +532,203 @@
       display: block;
     }
 
+    .about-dots {
+      color: var(--gp-text-sub);
+      font-size: 0.9rem;
+      cursor: pointer;
+      margin-bottom: 16px;
+      line-height: 1;
+      user-select: none;
+    }
+
+    .app-updated-block {
+      margin-top: 18px;
+    }
+
+    .app-updated-title {
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--gp-text-main);
+      margin-bottom: 3px;
+    }
+
+    .app-updated-date {
+      font-size: 0.85rem;
+      color: var(--gp-text-sub);
+    }
+
     .chips-row {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 14px;
+      margin-top: 16px;
     }
 
-    .gp-chip {
-      background: var(--gp-chip-bg);
-      color: var(--gp-text-main);
-      padding: 6px 14px;
-      border-radius: 16px;
-      font-size: 0.8rem;
+    .gp-chip-pill {
+      background: #ffffff;
+      color: var(--gp-text-sub);
+      padding: 6px 16px;
+      border-radius: 18px;
+      font-size: 0.85rem;
       font-weight: 500;
-      text-decoration: none;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      border: 1px solid rgba(0, 0, 0, 0.04);
+      border: 1px solid var(--gp-divider);
+      cursor: pointer;
+      text-decoration: none;
     }
 
-    /* Data Safety Section */
-    .data-safety-box {
+    .gp-chip-pill:hover {
+      background: #f8f9fa;
+    }
+
+    /* Data Safety Section matching Play Store UI */
+    .data-safety-intro {
+      font-size: 0.88rem;
+      color: var(--gp-text-sub);
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    .data-safety-card {
       border: 1px solid var(--gp-divider);
-      border-radius: 12px;
-      padding: 16px;
-      margin-top: 6px;
+      border-radius: 8px;
+      padding: 20px 16px 16px 16px;
       background: #ffffff;
     }
 
-    .data-safety-item {
+    .ds-item {
       display: flex;
-      gap: 14px;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .ds-icon {
+      width: 22px;
+      height: 22px;
+      color: var(--gp-text-sub);
+      flex-shrink: 0;
+      margin-top: 1px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ds-text-group {
+      flex: 1;
+    }
+
+    .ds-main-text {
+      font-size: 0.88rem;
+      color: var(--gp-text-main);
+      line-height: 1.4;
+      font-weight: 400;
+    }
+
+    .ds-sub-text {
+      font-size: 0.8rem;
+      color: var(--gp-text-sub);
+      margin-top: 3px;
+      line-height: 1.4;
+    }
+
+    .ds-underline-link {
+      color: inherit;
+      text-decoration: underline;
+    }
+
+    .ds-action {
+      margin-top: 10px;
+      padding-top: 4px;
+    }
+
+    .ds-details-link {
+      color: var(--gp-green);
+      font-size: 0.88rem;
+      font-weight: 500;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    .ds-details-link:hover {
+      color: var(--gp-green-hover);
+    }
+
+    /* Google Play Footer */
+    .gp-footer {
+      padding: 32px 20px 36px 20px;
+      border-top: 1px solid var(--gp-divider);
+      margin-top: 24px;
+      background: #ffffff;
+    }
+
+    .gp-footer-section {
+      margin-bottom: 24px;
+    }
+
+    .gp-footer-heading {
+      font-size: 0.92rem;
+      font-weight: 500;
+      color: #3c4043;
       margin-bottom: 12px;
     }
 
-    .data-safety-item:last-child {
-      margin-bottom: 0;
+    .gp-footer-links {
+      list-style: none;
+      padding: 0;
+      margin: 0;
     }
 
-    .data-safety-item svg {
-      width: 20px;
-      height: 20px;
-      color: var(--gp-text-sub);
-      flex-shrink: 0;
-      margin-top: 2px;
+    .gp-footer-links li {
+      margin-bottom: 10px;
     }
 
-    .data-safety-text {
-      font-size: 0.82rem;
-      color: var(--gp-text-sub);
-      line-height: 1.45;
-    }
-
-    .data-safety-see-more {
-      display: inline-block;
-      margin-top: 10px;
-      color: var(--gp-green);
-      font-size: 0.82rem;
-      font-weight: 500;
+    .gp-footer-links a {
+      font-size: 0.85rem;
+      color: #5f6368;
       text-decoration: none;
+      transition: color 0.15s ease;
+    }
+
+    .gp-footer-links a:hover {
+      color: #202124;
+    }
+
+    .gp-footer-legal {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px 20px;
+      margin-top: 32px;
+      padding-top: 12px;
+    }
+
+    .gp-footer-legal a, .gp-footer-gst {
+      font-size: 0.78rem;
+      color: #5f6368;
+      text-decoration: none;
+    }
+
+    .gp-footer-legal a:hover {
+      color: #202124;
+    }
+
+    .gp-footer-locale {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 24px;
+      font-size: 0.85rem;
+      color: #5f6368;
+      cursor: pointer;
+    }
+
+    .gp-flag-svg {
+      width: 22px;
+      height: 15px;
+      border-radius: 2px;
+      box-shadow: 0 0 1px rgba(0, 0, 0, 0.4);
+      display: block;
     }
 
     /* Ratings breakdown */
@@ -869,17 +1005,21 @@ App features:
 
 Why iStore?
 iStore is an Apple Premium Partner, which launched its first store in 2005. With a wealth of Apple product experience, iStore offers best in class retail experience both online and in-store.</p>
+        <div class="about-dots" onclick="toggleAbout()">...</div>
+
+        <div class="app-updated-block">
+          <div class="app-updated-title">Updated on</div>
+          <div class="app-updated-date">22 Oct 2026</div>
+        </div>
 
         <div class="chips-row">
-          <span class="gp-chip">#1 top free in Shopping</span>
-          <span class="gp-chip">Shopping</span>
-          <span class="gp-chip">Apple Products</span>
+          <span class="gp-chip-pill" id="app-category" onclick="showToast('Category: Lifestyle')">Lifestyle</span>
         </div>
       </section>
 
       <!-- Data Safety -->
       <section class="content-section">
-        <div class="section-header-row">
+        <div class="section-header-row" onclick="showToast('Data safety details')">
           <h2 class="section-title">Data safety</h2>
           <div class="section-arrow">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -889,24 +1029,71 @@ iStore is an Apple Premium Partner, which launched its first store in 2005. With
           </div>
         </div>
 
-        <div class="data-safety-box">
-          <div class="data-safety-item">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-            </svg>
-            <div class="data-safety-text">
-              Safety starts with understanding how developers collect and share your data. Data privacy and security practices may vary based on your use, region, and age.
+        <p class="data-safety-intro">Safety starts with understanding how developers collect and share your data. Data privacy and security practices may vary based on your use, region and age. The developer provided this information and may update it over time.</p>
+
+        <div class="data-safety-card">
+          <!-- Item 1: No data shared -->
+          <div class="ds-item">
+            <div class="ds-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"></circle>
+                <circle cx="6" cy="12" r="3"></circle>
+                <circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+              </svg>
+            </div>
+            <div class="ds-text-group">
+              <div class="ds-main-text">No data shared with third parties</div>
+              <div class="ds-sub-text"><a href="#" onclick="showToast('Developers declare how data is shared'); return false;" class="ds-underline-link">Learn more</a> about how developers declare sharing</div>
             </div>
           </div>
-          <div class="data-safety-item">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            <div class="data-safety-text">
-              No data shared with third parties
+
+          <!-- Item 2: May collect data types -->
+          <div class="ds-item">
+            <div class="ds-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+                <polyline points="8 13 12 9 16 13"></polyline>
+                <line x1="12" y1="9" x2="12" y2="17"></line>
+              </svg>
+            </div>
+            <div class="ds-text-group">
+              <div class="ds-main-text">This app may collect these data types</div>
+              <div class="ds-sub-text">Personal info, App activity and 2 others</div>
             </div>
           </div>
-          <a href="#" class="data-safety-see-more" onclick="showToast('Verified by Google Play Protect'); return false;">See details</a>
+
+          <!-- Item 3: Encrypted in transit -->
+          <div class="ds-item">
+            <div class="ds-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+            </div>
+            <div class="ds-text-group">
+              <div class="ds-main-text">Data is encrypted in transit</div>
+            </div>
+          </div>
+
+          <!-- Item 4: Request deletion -->
+          <div class="ds-item">
+            <div class="ds-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </div>
+            <div class="ds-text-group">
+              <div class="ds-main-text">You can request that data be deleted</div>
+            </div>
+          </div>
+
+          <!-- See details link -->
+          <div class="ds-action">
+            <a href="#" class="ds-details-link" onclick="showToast('Verified by Google Play Protect'); return false;">See details</a>
+          </div>
         </div>
       </section>
 
@@ -954,6 +1141,47 @@ iStore is an Apple Premium Partner, which launched its first store in 2005. With
         </div>
       </section>
     </main>
+
+    <!-- Google Play Footer -->
+    <footer class="gp-footer">
+      <div class="gp-footer-section">
+        <div class="gp-footer-heading">Google Play</div>
+        <ul class="gp-footer-links">
+          <li><a href="#" onclick="showToast('Play Pass'); return false;">Play Pass</a></li>
+          <li><a href="#" onclick="showToast('Play Points'); return false;">Play Points</a></li>
+          <li><a href="#" onclick="showToast('Gift cards'); return false;">Gift cards</a></li>
+          <li><a href="#" onclick="showToast('Redeem'); return false;">Redeem</a></li>
+          <li><a href="#" onclick="showToast('Refund policy'); return false;">Refund policy</a></li>
+        </ul>
+      </div>
+
+      <div class="gp-footer-section">
+        <div class="gp-footer-heading">Children and family</div>
+        <ul class="gp-footer-links">
+          <li><a href="#" onclick="showToast('Parent guide'); return false;">Parent guide</a></li>
+          <li><a href="#" onclick="showToast('Family sharing'); return false;">Family sharing</a></li>
+        </ul>
+      </div>
+
+      <div class="gp-footer-legal">
+        <a href="#" onclick="showToast('Terms of Service'); return false;">Terms of Service</a>
+        <a href="#" onclick="showToast('Privacy'); return false;">Privacy</a>
+        <a href="#" onclick="showToast('About Google Play'); return false;">About Google Play</a>
+        <a href="#" onclick="showToast('Developers'); return false;">Developers</a>
+        <a href="#" onclick="showToast('Google Store'); return false;">Google Store</a>
+        <span class="gp-footer-gst">All prices include GST.</span>
+      </div>
+
+      <div class="gp-footer-locale" onclick="showToast('Region: India');">
+        <svg class="gp-flag-svg" viewBox="0 0 24 16">
+          <rect width="24" height="5.33" fill="#FF9933"/>
+          <rect y="5.33" width="24" height="5.33" fill="#FFFFFF"/>
+          <rect y="10.66" width="24" height="5.33" fill="#128807"/>
+          <circle cx="12" cy="8" r="2.2" fill="none" stroke="#000080" stroke-width="0.6"/>
+        </svg>
+        <span>India (English (India))</span>
+      </div>
+    </footer>
   </div>
 
   <!-- Toast Notification Container -->
