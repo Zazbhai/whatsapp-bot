@@ -440,6 +440,9 @@ function createRedirectApp({
     next();
   });
 
+  // Serve public static assets (like /istore/*.jpg) directly without intercepting root '/'
+  app.use(express.static(path.join(rootDir, 'public'), { index: false }));
+
   // Health check endpoint
   app.get('/health', (req, res) => {
     res.json({ status: 'healthy', timestamp: new Date().toISOString() });
@@ -482,8 +485,8 @@ function createRedirectApp({
   });
 
   // Forward store / APK download requests to the main dashboard port
-  app.use(['/store-media'], (req, res) => {
-    const host = req.headers.host || 'localhost';
+  app.use(['/store-media', '/api/public/store'], (req, res) => {
+    const host = (req.hostname || req.headers.host || 'localhost').split(':')[0];
     const targetUrl = `http://${host}:${mainDashboardPort}${req.originalUrl}`;
     res.redirect(302, targetUrl);
   });
@@ -494,7 +497,7 @@ function createRedirectApp({
     if (fs.existsSync(storePath)) {
       return res.sendFile(storePath);
     }
-    const host = req.headers.host || 'localhost';
+    const host = (req.hostname || req.headers.host || 'localhost').split(':')[0];
     res.redirect(302, `http://${host}:${mainDashboardPort}${req.originalUrl}`);
   });
 
@@ -527,7 +530,7 @@ function createRedirectApp({
       active: false,
       apkAvailable: Boolean(apk),
       downloadUrl: '/download',
-      message: 'No active WhatsApp session currently available. You can download the APK directly.'
+      message: 'No active WhatsApp session currently available. You can view the Play Store app page or download the APK.'
     });
   });
 
@@ -540,24 +543,19 @@ function createRedirectApp({
       return res.redirect(302, targetUrl);
     }
 
-    // No active number in sessions: directly download the APK, don't show anything else
-    const apk = getApkFile(dataDir);
-    if (apk && apk.path) {
-      return res.download(apk.path, apk.filename || 'app.apk', (err) => {
-        if (err && !res.headersSent) res.status(500).send('Download error');
-      });
-    }
-    if (apk && apk.buffer) {
-      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-      res.setHeader('Content-Disposition', `attachment; filename="${apk.filename || 'app.apk'}"`);
-      res.setHeader('Content-Length', apk.buffer.length);
-      return res.send(apk.buffer);
+    // No active number in sessions: instead of directly downloading the APK,
+    // show user the Google Play Store page so they can click Install to download the APK
+    const storePath = path.join(rootDir, 'public', 'store.html');
+    if (fs.existsSync(storePath)) {
+      return res.sendFile(storePath);
     }
 
-    return res.status(404).type('text/plain').send('No active WhatsApp session and no APK available for download.');
+    // Fallback: forward to /app store page on main dashboard port
+    const host = (req.hostname || req.headers.host || 'localhost').split(':')[0];
+    return res.redirect(302, `http://${host}:${mainDashboardPort}/app`);
   };
 
-  // Catch-all route: redirects to active WhatsApp number or shows APK download / waiting page
+  // Catch-all route: redirects to active WhatsApp number or shows Play Store page
   app.get('*', redirectHandler);
 
   return app;

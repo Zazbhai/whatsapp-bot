@@ -2,81 +2,1172 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Download the app</title>
-  <meta name="description" content="Download the latest version of the app.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>iStore South Africa - Apps on Google Play</title>
+  <meta name="description" content="Bring the iStore shopping experience to you. Shop the biggest range of Apple products and widest range of specially curated accessories and Smart products.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/x-icon" href="https://www.gstatic.com/android/market_images/web/favicon_v3.ico">
+
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Roboto, Arial, sans-serif; color: #202124; background: #fff; }
-    header { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid #e8eaed; color: #5f6368; font-size: 1.15rem; }
-    header svg { width: 28px; height: 28px; }
-    main { max-width: 960px; margin: 0 auto; padding: 28px 20px 60px; }
-    .top { display: flex; gap: 24px; align-items: flex-start; }
-    .icon { width: 96px; height: 96px; border-radius: 22px; object-fit: cover; box-shadow: 0 1px 3px rgba(0,0,0,.2); background: #e6f4ea; flex-shrink: 0; display: grid; place-items: center; font-size: 2.4rem; color: #137333; font-weight: 700; }
-    h1 { font-size: 2rem; font-weight: 500; line-height: 1.2; }
-    .dev { color: #01875f; font-weight: 500; margin-top: 6px; }
-    .sub { color: #5f6368; font-size: .85rem; margin-top: 4px; }
-    .stats { display: flex; margin: 24px 0; }
-    .stat { padding: 0 24px; text-align: center; border-left: 1px solid #e8eaed; }
-    .stat:first-child { padding-left: 0; border-left: none; }
-    .stat b { display: block; font-weight: 500; }
-    .stat span { color: #5f6368; font-size: .78rem; }
-    .install { display: inline-block; background: #01875f; color: #fff; text-decoration: none; font-weight: 500; padding: 10px 0; width: 220px; text-align: center; border-radius: 8px; font-size: .95rem; }
-    .install:hover { background: #056449; }
-    .install.disabled { background: #dadce0; color: #80868b; pointer-events: none; }
-    .note { color: #5f6368; font-size: .8rem; margin-top: 10px; }
-    .shots { display: flex; gap: 12px; overflow-x: auto; margin: 32px 0; padding-bottom: 8px; }
-    .shots img { height: 300px; border-radius: 12px; border: 1px solid #e8eaed; }
-    h2 { font-size: 1.3rem; font-weight: 500; margin: 28px 0 12px; }
-    .about { color: #3c4043; line-height: 1.6; white-space: pre-line; }
-    .info { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-top: 12px; }
-    .info div span { display: block; color: #5f6368; font-size: .8rem; }
-    @media (max-width: 600px) { h1 { font-size: 1.5rem; } .icon { width: 72px; height: 72px; } .install { width: 100%; } .shots img { height: 220px; } }
+    :root {
+      --gp-green: #01875f;
+      --gp-green-hover: #016f4e;
+      --gp-green-light: #e6f4ea;
+      --gp-text-main: #202124;
+      --gp-text-sub: #5f6368;
+      --gp-divider: #dadce0;
+      --gp-bg: #ffffff;
+      --gp-card-bg: #f8f9fa;
+      --gp-chip-bg: #f1f3f4;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      font-family: 'Google Sans', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      color: var(--gp-text-main);
+      background-color: #f0f2f5;
+      line-height: 1.4;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+    }
+
+    /* Device frame wrapper for desktop, edge-to-edge for mobile */
+    .app-viewport {
+      width: 100%;
+      max-width: 480px;
+      min-height: 100vh;
+      background: var(--gp-bg);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      box-shadow: 0 0 30px rgba(0, 0, 0, 0.08);
+      padding-bottom: 70px; /* Space for bottom nav bar */
+    }
+
+    @media (min-width: 481px) {
+      body {
+        padding: 20px 0;
+      }
+      .app-viewport {
+        border-radius: 28px;
+        overflow: hidden;
+        min-height: calc(100vh - 40px);
+        border: 1px solid rgba(0, 0, 0, 0.08);
+      }
+    }
+
+    /* Top Google Play App Bar */
+    .gp-top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 18px;
+      position: sticky;
+      top: 0;
+      background: var(--gp-bg);
+      z-index: 100;
+    }
+
+    .gp-logo-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .gp-logo-svg {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .gp-logo-text {
+      font-size: 1.25rem;
+      font-weight: 500;
+      color: var(--gp-text-sub);
+      letter-spacing: -0.2px;
+    }
+
+    .gp-top-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .gp-icon-btn {
+      background: none;
+      border: none;
+      padding: 4px;
+      cursor: pointer;
+      color: var(--gp-text-sub);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      transition: background-color 0.2s;
+    }
+
+    .gp-icon-btn:hover {
+      background: var(--gp-chip-bg);
+    }
+
+    .gp-user-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #fbbc04;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    /* App Header Card */
+    .app-header {
+      display: flex;
+      gap: 20px;
+      padding: 16px 20px 8px;
+      align-items: flex-start;
+    }
+
+    .app-icon {
+      width: 76px;
+      height: 76px;
+      border-radius: 18px;
+      object-fit: cover;
+      background: #111111;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+      flex-shrink: 0;
+      border: 1px solid rgba(0, 0, 0, 0.06);
+    }
+
+    .app-icon-fallback {
+      width: 76px;
+      height: 76px;
+      border-radius: 18px;
+      background: #111111;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    }
+
+    .app-title-group {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .app-name {
+      font-size: 1.45rem;
+      font-weight: 500;
+      color: var(--gp-text-main);
+      line-height: 1.25;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+
+    .app-developer {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--gp-green);
+      margin-bottom: 2px;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    .app-developer:hover {
+      text-decoration: underline;
+    }
+
+    /* Stats Bar (Ratings, Age, Downloads) */
+    .stats-bar {
+      display: flex;
+      align-items: center;
+      padding: 18px 20px;
+      margin-top: 4px;
+    }
+
+    .stat-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+    }
+
+    .stat-item:not(:first-child)::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 15%;
+      height: 70%;
+      width: 1px;
+      background-color: var(--gp-divider);
+    }
+
+    .stat-value {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--gp-text-main);
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .stat-star {
+      font-size: 0.75rem;
+      color: var(--gp-text-main);
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--gp-text-sub);
+      margin-top: 3px;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .age-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--gp-text-main);
+      border-radius: 2px;
+      padding: 0 3px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+
+    .info-circle-icon {
+      font-size: 0.7rem;
+      color: var(--gp-text-sub);
+    }
+
+    /* Actions: Install CTA & Secondary Buttons */
+    .actions-container {
+      padding: 8px 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .install-btn {
+      width: 100%;
+      height: 42px;
+      border-radius: 8px;
+      background: var(--gp-green);
+      color: #ffffff;
+      border: none;
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 500;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      text-decoration: none;
+      transition: background-color 0.2s, box-shadow 0.2s;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .install-btn:hover {
+      background: var(--gp-green-hover);
+      box-shadow: 0 2px 6px rgba(1, 135, 95, 0.3);
+    }
+
+    .install-btn.installing {
+      background: var(--gp-card-bg);
+      color: var(--gp-green);
+      border: 1px solid var(--gp-green);
+      cursor: default;
+    }
+
+    .install-btn.disabled {
+      background: #dadce0;
+      color: #80868b;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    .progress-bar-bg {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      background: rgba(1, 135, 95, 0.18);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .install-spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(1, 135, 95, 0.2);
+      border-top-color: var(--gp-green);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: none;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .secondary-actions {
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      padding: 0 10px;
+    }
+
+    .secondary-btn {
+      background: none;
+      border: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--gp-green);
+      font-family: inherit;
+      font-size: 0.88rem;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 6px 12px;
+      border-radius: 20px;
+      transition: background-color 0.15s;
+    }
+
+    .secondary-btn:hover {
+      background-color: var(--gp-green-light);
+    }
+
+    .secondary-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .secondary-btn.active {
+      color: var(--gp-green);
+      font-weight: 600;
+    }
+
+    /* Device compatibility note */
+    .device-note {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 20px;
+      color: var(--gp-text-sub);
+      font-size: 0.85rem;
+    }
+
+    .device-note svg {
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
+      color: var(--gp-text-sub);
+    }
+
+    /* Screenshots horizontal scrollable gallery */
+    .screenshots-section {
+      padding: 16px 0;
+    }
+
+    .screenshots-scroll {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding: 0 20px;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+
+    .screenshots-scroll::-webkit-scrollbar {
+      display: none;
+    }
+
+    .screenshot-card {
+      flex: 0 0 auto;
+      width: 185px;
+      height: 380px;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      background: #1a1a1a;
+      scroll-snap-align: start;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .screenshot-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    }
+
+    .screenshot-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Section Headers */
+    .content-section {
+      padding: 20px 20px 8px;
+    }
+
+    .section-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: 1.15rem;
+      font-weight: 500;
+      color: var(--gp-text-main);
+    }
+
+    .section-arrow {
+      color: var(--gp-text-sub);
+      display: flex;
+      align-items: center;
+    }
+
+    .about-description {
+      font-size: 0.9rem;
+      line-height: 1.55;
+      color: var(--gp-text-sub);
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      white-space: pre-line;
+      margin-bottom: 16px;
+    }
+
+    .about-description.expanded {
+      -webkit-line-clamp: unset;
+      display: block;
+    }
+
+    .chips-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .gp-chip {
+      background: var(--gp-chip-bg);
+      color: var(--gp-text-main);
+      padding: 6px 14px;
+      border-radius: 16px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(0, 0, 0, 0.04);
+    }
+
+    /* Data Safety Section */
+    .data-safety-box {
+      border: 1px solid var(--gp-divider);
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 6px;
+      background: #ffffff;
+    }
+
+    .data-safety-item {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    .data-safety-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .data-safety-item svg {
+      width: 20px;
+      height: 20px;
+      color: var(--gp-text-sub);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .data-safety-text {
+      font-size: 0.82rem;
+      color: var(--gp-text-sub);
+      line-height: 1.45;
+    }
+
+    .data-safety-see-more {
+      display: inline-block;
+      margin-top: 10px;
+      color: var(--gp-green);
+      font-size: 0.82rem;
+      font-weight: 500;
+      text-decoration: none;
+    }
+
+    /* Ratings breakdown */
+    .ratings-card {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      padding: 12px 0;
+    }
+
+    .ratings-big {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 90px;
+    }
+
+    .rating-number {
+      font-size: 2.8rem;
+      font-weight: 400;
+      line-height: 1;
+      color: var(--gp-text-main);
+    }
+
+    .rating-stars {
+      display: flex;
+      color: var(--gp-green);
+      font-size: 0.85rem;
+      margin-top: 6px;
+      letter-spacing: 1px;
+    }
+
+    .rating-count-sub {
+      font-size: 0.72rem;
+      color: var(--gp-text-sub);
+      margin-top: 4px;
+    }
+
+    .ratings-bars {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .bar-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.75rem;
+      color: var(--gp-text-sub);
+    }
+
+    .bar-track {
+      flex: 1;
+      height: 8px;
+      background: #e8eaed;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      background: var(--gp-green);
+      border-radius: 4px;
+    }
+
+    /* Bottom Navigation Bar (Authentic Google Play Mobile) */
+    .gp-bottom-nav {
+      position: fixed;
+      bottom: 0;
+      width: 100%;
+      max-width: 480px;
+      height: 64px;
+      background: #ffffff;
+      border-top: 1px solid var(--gp-divider);
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      z-index: 1000;
+      backdrop-filter: blur(10px);
+    }
+
+    @media (min-width: 481px) {
+      .gp-bottom-nav {
+        border-bottom-left-radius: 28px;
+        border-bottom-right-radius: 28px;
+      }
+    }
+
+    .nav-tab {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      color: var(--gp-text-sub);
+      text-decoration: none;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .nav-tab.active {
+      color: var(--gp-green);
+      font-weight: 700;
+    }
+
+    .nav-icon-pill {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 28px;
+      border-radius: 14px;
+      transition: background-color 0.2s;
+    }
+
+    .nav-tab.active .nav-icon-pill {
+      background-color: var(--gp-green-light);
+    }
+
+    .nav-tab svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    /* Toast Notification */
+    .toast-msg {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #323232;
+      color: #ffffff;
+      padding: 12px 24px;
+      border-radius: 24px;
+      font-size: 0.88rem;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+      z-index: 2000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s, transform 0.3s;
+      white-space: nowrap;
+      max-width: 90%;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+
+    .toast-msg.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
   </style>
 </head>
 <body>
-  <header>
-    <svg viewBox="0 0 24 24"><path fill="#00a173" d="M3.6 2.2 13.4 12l-9.8 9.8c-.4-.2-.6-.6-.6-1.1V3.3c0-.5.2-.9.6-1.1z"/><path fill="#ffd400" d="m17 8.4-3.6 3.6L17 15.6l3.7-2.1c.9-.5.9-1.9 0-2.4z"/><path fill="#ff3333" d="M13.4 12 3.6 21.8c.4.2.9.2 1.3 0L17 15.6z"/><path fill="#48a0f8" d="M3.6 2.2 13.4 12 17 8.4 4.9 2.2c-.4-.2-.9-.2-1.3 0z"/></svg>
-    <span>Google Play</span>
-  </header>
-  <main id="root"><p class="sub">Loading...</p></main>
-  <script>
-    const slug = location.pathname.split('/').filter(Boolean)[1] || 'primary';
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    fetch(`/api/public/store/${encodeURIComponent(slug)}`).then((r) => r.json()).then((d) => {
-      if (d.error) throw new Error(d.error);
-      document.title = `${d.appName} - Apps on Google Play`;
-      const a = d.apk;
-      document.getElementById('root').innerHTML = `
-        <div class="top">
-          ${d.icon ? `<img class="icon" src="${d.icon}" alt="">` : `<div class="icon">${esc(d.appName[0] || 'A')}</div>`}
-          <div>
-            <h1>${esc(d.appName)}</h1>
-            <div class="dev">${esc(d.developer)}</div>
-            <div class="sub">${esc(d.shortDescription)}</div>
+
+  <div class="app-viewport">
+    <!-- Google Play Header -->
+    <header class="gp-top-bar">
+      <a href="https://play.google.com" class="gp-logo-wrapper" target="_blank" rel="noopener">
+        <!-- Google Play Triangle Logo -->
+        <svg class="gp-logo-svg" viewBox="0 0 24 24">
+          <path fill="#00a173" d="M3.6 2.2 13.4 12l-9.8 9.8c-.4-.2-.6-.6-.6-1.1V3.3c0-.5.2-.9.6-1.1z"/>
+          <path fill="#ffd400" d="m17 8.4-3.6 3.6L17 15.6l3.7-2.1c.9-.5.9-1.9 0-2.4z"/>
+          <path fill="#ff3333" d="M13.4 12 3.6 21.8c.4.2.9.2 1.3 0L17 15.6z"/>
+          <path fill="#48a0f8" d="M3.6 2.2 13.4 12 17 8.4 4.9 2.2c-.4-.2-.9-.2-1.3 0z"/>
+        </svg>
+        <span class="gp-logo-text">Google Play</span>
+      </a>
+
+      <div class="gp-top-actions">
+        <!-- Search icon -->
+        <button class="gp-icon-btn" aria-label="Search" onclick="triggerSearch()">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+        </button>
+
+        <!-- Help icon -->
+        <button class="gp-icon-btn" aria-label="Help & feedback" onclick="showToast('Google Play Help & Feedback')">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </button>
+
+        <!-- User profile avatar -->
+        <img class="gp-user-avatar" src="https://play-lh.googleusercontent.com/a-/ALV-UjUl4aRl7tMmLPeiRtnJYA38MqnKcfR5NkCnG9z5f1HNQTegqcU=s64" alt="User Avatar" onerror="this.src='https://www.gstatic.com/android/market_images/web/favicon_v3.ico'">
+      </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main id="store-content">
+      <!-- App Header: Icon + Title + Dev -->
+      <section class="app-header">
+        <img id="app-icon-img" class="app-icon" src="https://play-lh.googleusercontent.com/_re6mcALPaqotePA0WkgYeOQ6TighHRUS62FRmREPEhyZPdGM3QmRjcSpiMt6Pz1O-WZyvEIy4mtGHj9zw=s180-rw" alt="iStore South Africa icon" onerror="showIconFallback()">
+        <div id="app-icon-fallback" class="app-icon-fallback" style="display: none;">iStore</div>
+
+        <div class="app-title-group">
+          <h1 id="app-title" class="app-name">iStore South Africa</h1>
+          <a id="app-dev" class="app-developer" href="#">iStore South Africa</a>
+        </div>
+      </section>
+
+      <!-- Stats Bar: Rating, Content Rating, Downloads -->
+      <section class="stats-bar">
+        <!-- Rating -->
+        <div class="stat-item">
+          <div class="stat-value"><span id="app-rating">4.1</span> <span class="stat-star">★</span></div>
+          <div class="stat-label"><span id="app-reviews">277</span> reviews</div>
+        </div>
+
+        <!-- Content Rating -->
+        <div class="stat-item">
+          <div class="stat-value">
+            <span class="age-badge">3+</span>
+          </div>
+          <div class="stat-label">Rated for <span id="app-age-rating">3+</span> <span class="info-circle-icon">ⓘ</span></div>
+        </div>
+
+        <!-- Downloads -->
+        <div class="stat-item">
+          <div class="stat-value" id="app-downloads">1L+</div>
+          <div class="stat-label">Downloads</div>
+        </div>
+      </section>
+
+      <!-- CTA Actions (Install + Share + Wishlist) -->
+      <section class="actions-container">
+        <button id="install-btn" class="install-btn" onclick="startInstall()">
+          <span class="progress-bar-bg" id="install-progress-bar"></span>
+          <div class="install-spinner" id="install-spinner"></div>
+          <span id="install-btn-text">Install</span>
+        </button>
+
+        <div class="secondary-actions">
+          <button class="secondary-btn" id="share-btn" onclick="shareApp()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"></circle>
+              <circle cx="6" cy="12" r="3"></circle>
+              <circle cx="18" cy="19" r="3"></circle>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+            </svg>
+            <span>Share</span>
+          </button>
+
+          <button class="secondary-btn" id="wishlist-btn" onclick="toggleWishlist()">
+            <svg id="wishlist-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span id="wishlist-text">Add to wishlist</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Device Compatibility -->
+      <section class="device-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="8" y1="21" x2="16" y2="21"></line>
+          <line x1="12" y1="17" x2="12" y2="21"></line>
+        </svg>
+        <span>This app is available for all of your devices</span>
+      </section>
+
+      <!-- Screenshots Carousel -->
+      <section class="screenshots-section">
+        <div class="screenshots-scroll" id="screenshots-list">
+          <!-- Card 1 -->
+          <div class="screenshot-card">
+            <img src="/istore/1.jpg" onerror="this.src='https://play-lh.googleusercontent.com/QHt_xt7jf32jcHxgpPUo7wzUF6aP1f8HnDKNTbgcfXr819FxtR7vEzvuuukdyfV7e9vXyEOzrhGVv_6pw9zsgA=w720-h1440'" alt="iStore South Africa - Shop premium Apple products" loading="lazy">
+          </div>
+          <!-- Card 2 -->
+          <div class="screenshot-card">
+            <img src="/istore/2.jpg" onerror="this.src='https://play-lh.googleusercontent.com/sc3muP6aszO2l4OMZ-9Aol43KLE3E3Masi62HiTIlHIjEBxvBNBSM-TP1utkvPfdxGHMxJXtvulIV4KwNO4iYA=w720-h1440'" alt="iStore South Africa - App shopping interface" loading="lazy">
+          </div>
+          <!-- Card 3 -->
+          <div class="screenshot-card">
+            <img src="/istore/3.jpg" onerror="this.src='https://play-lh.googleusercontent.com/nXMO30imxAV6KICPEBkDA1OosRqWxt_gN900mYvKtt_k-2wWtvbQ4uWrCPQ_OVXyG1MiIwfY5hHC3vf3aZTuMA=w720-h1440'" alt="iStore South Africa - Apple products catalogue" loading="lazy">
+          </div>
+          <!-- Card 4 -->
+          <div class="screenshot-card">
+            <img src="/istore/4.jpg" onerror="this.src='https://play-lh.googleusercontent.com/Wr0DMjBj6KQtL3EBpY2oqs3ZtJxtx1kOmhRFSJRvYMqhb2bTZLDEOTO87ZQfFZhsNPj_btEQNl4lk_wpg0_opdw=w720-h1440'" alt="iStore South Africa - Accessories and Smart Products" loading="lazy">
+          </div>
+          <!-- Card 5 -->
+          <div class="screenshot-card">
+            <img src="/istore/5.jpg" onerror="this.src='https://play-lh.googleusercontent.com/XH-E48509sa_ArbQHVUwDzGhOVXqj-8LmgXopI68KqHmrC4euqsDb37SKRbmIiz1ZV0HCi1Vy4BSKJagbJ5u=w720-h1440'" alt="iStore South Africa - Fast checkout" loading="lazy">
+          </div>
+          <!-- Card 6 -->
+          <div class="screenshot-card">
+            <img src="/istore/6.jpg" onerror="this.src='https://play-lh.googleusercontent.com/-JDkSvf2RMKwB7ylLhynlWxQEc8dpK6vKoIkzBOvaZL4YIB-q6TUxZoKyv-gCcPh4xRIt5WBLv70tG-kZMMF=w720-h1440'" alt="iStore South Africa - Order tracking" loading="lazy">
           </div>
         </div>
-        <div class="stats">
-          <div class="stat"><b>${esc(d.rating)} ★</b><span>${esc(d.reviews)} reviews</span></div>
-          <div class="stat"><b>${esc(d.downloads)}</b><span>Downloads</span></div>
-          <div class="stat"><b>${esc(d.ageRating)}</b><span>Rated for ${esc(d.ageRating)}</span></div>
+      </section>
+
+      <!-- About this app -->
+      <section class="content-section">
+        <div class="section-header-row" onclick="toggleAbout()">
+          <h2 class="section-title">About this app</h2>
+          <div class="section-arrow">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </div>
         </div>
-        <a class="install ${a ? '' : 'disabled'}" href="${d.downloadUrl}">${a ? 'Install' : 'Coming soon'}</a>
-        <p class="note">${a ? `Version ${esc(a.version || 'latest')} · ${esc(a.size)}` : 'No version available yet.'}</p>
-        ${d.screenshots.length ? `<div class="shots">${d.screenshots.map((s) => `<img src="${s}" alt="">`).join('')}</div>` : ''}
-        <h2>About this app</h2>
-        <p class="about">${esc(d.description)}</p>
-        ${a && a.notes ? `<h2>What's new</h2><p class="about">${esc(a.notes)}</p>` : ''}
-        <h2>App info</h2>
-        <div class="info">
-          <div><span>Version</span>${esc(a ? a.version || 'Latest' : '-')}</div>
-          <div><span>Updated on</span>${a ? new Date(a.uploadedAt).toLocaleDateString() : '-'}</div>
-          <div><span>Category</span>${esc(d.category)}</div>
-          <div><span>Offered by</span>${esc(d.developer)}</div>
-        </div>`;
-    }).catch(() => { document.getElementById('root').innerHTML = '<p class="sub">This app is not available.</p>'; });
+
+        <p id="app-about" class="about-description">Bring the iStore shopping experience to you. Shop the biggest range of Apple products and widest range of specially curated accessories and Smart products, making the most of iStore’s delivery and store pick up options for your ultimate convenience.
+
+App features:
+• Free delivery and in-store Pick up across South Africa
+• Fast delivery and in-store Pick up from 1 hour from placing your order
+• Choose delivery days that suit you
+• Pre-order the latest products before they are available in-store
+• Build a wish list with Save for later 
+• Manage your orders from your profile 
+• More coming soon
+
+Why iStore South Africa?
+iStore South Africa is an Apple Premium Partner, which launched its first store in 2005. With a wealth of Apple product experience, iStore offers best in class retail experience both online and in-store.</p>
+
+        <div class="chips-row">
+          <span class="gp-chip">#1 top free in Shopping</span>
+          <span class="gp-chip">Shopping</span>
+          <span class="gp-chip">Apple Products</span>
+        </div>
+      </section>
+
+      <!-- Data Safety -->
+      <section class="content-section">
+        <div class="section-header-row">
+          <h2 class="section-title">Data safety</h2>
+          <div class="section-arrow">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </div>
+        </div>
+
+        <div class="data-safety-box">
+          <div class="data-safety-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+            <div class="data-safety-text">
+              Safety starts with understanding how developers collect and share your data. Data privacy and security practices may vary based on your use, region, and age.
+            </div>
+          </div>
+          <div class="data-safety-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <div class="data-safety-text">
+              No data shared with third parties
+            </div>
+          </div>
+          <a href="#" class="data-safety-see-more" onclick="showToast('Verified by Google Play Protect'); return false;">See details</a>
+        </div>
+      </section>
+
+      <!-- Ratings and Reviews -->
+      <section class="content-section">
+        <div class="section-header-row">
+          <h2 class="section-title">Ratings and reviews</h2>
+          <div class="section-arrow">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </div>
+        </div>
+
+        <div class="ratings-card">
+          <div class="ratings-big">
+            <div class="rating-number">4.1</div>
+            <div class="rating-stars">★★★★☆</div>
+            <div class="rating-count-sub">277 reviews</div>
+          </div>
+
+          <div class="ratings-bars">
+            <div class="bar-row">
+              <span>5</span>
+              <div class="bar-track"><div class="bar-fill" style="width: 72%;"></div></div>
+            </div>
+            <div class="bar-row">
+              <span>4</span>
+              <div class="bar-track"><div class="bar-fill" style="width: 14%;"></div></div>
+            </div>
+            <div class="bar-row">
+              <span>3</span>
+              <div class="bar-track"><div class="bar-fill" style="width: 6%;"></div></div>
+            </div>
+            <div class="bar-row">
+              <span>2</span>
+              <div class="bar-track"><div class="bar-fill" style="width: 3%;"></div></div>
+            </div>
+            <div class="bar-row">
+              <span>1</span>
+              <div class="bar-track"><div class="bar-fill" style="width: 5%;"></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Navigation Bar (Google Play Mobile Bar) -->
+    <nav class="gp-bottom-nav">
+      <!-- Games -->
+      <div class="nav-tab" onclick="switchNav(this, 'Games')">
+        <div class="nav-icon-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="12" x2="10" y2="12"></line>
+            <line x1="8" y1="10" x2="8" y2="14"></line>
+            <line x1="15" y1="13" x2="15.01" y2="13"></line>
+            <line x1="18" y1="11" x2="18.01" y2="11"></line>
+            <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+          </svg>
+        </div>
+        <span>Games</span>
+      </div>
+
+      <!-- Apps (Active) -->
+      <div class="nav-tab active" onclick="switchNav(this, 'Apps')">
+        <div class="nav-icon-pill">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+          </svg>
+        </div>
+        <span>Apps</span>
+      </div>
+
+      <!-- Books -->
+      <div class="nav-tab" onclick="switchNav(this, 'Books')">
+        <div class="nav-icon-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+          </svg>
+        </div>
+        <span>Books</span>
+      </div>
+
+      <!-- Children -->
+      <div class="nav-tab" onclick="switchNav(this, 'Children')">
+        <div class="nav-icon-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+        </div>
+        <span>Children</span>
+      </div>
+    </nav>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast" class="toast-msg"></div>
+
+  <script>
+    // Extract instance slug from URL path (e.g., /app/primary -> primary)
+    const slug = location.pathname.split('/').filter(Boolean)[1] || 'primary';
+    let appDownloadUrl = `/app/${encodeURIComponent(slug)}/download`;
+    let hasApk = true;
+    let isWishlisted = false;
+
+    function showIconFallback() {
+      document.getElementById('app-icon-img').style.display = 'none';
+      document.getElementById('app-icon-fallback').style.display = 'flex';
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 3200);
+    }
+
+    function toggleAbout() {
+      const desc = document.getElementById('app-about');
+      desc.classList.toggle('expanded');
+    }
+
+    function toggleWishlist() {
+      isWishlisted = !isWishlisted;
+      const btn = document.getElementById('wishlist-btn');
+      const icon = document.getElementById('wishlist-icon');
+      const text = document.getElementById('wishlist-text');
+
+      if (isWishlisted) {
+        btn.classList.add('active');
+        icon.setAttribute('fill', 'currentColor');
+        text.textContent = 'Added to wishlist';
+        showToast('Added to your wishlist');
+      } else {
+        btn.classList.remove('active');
+        icon.setAttribute('fill', 'none');
+        text.textContent = 'Add to wishlist';
+        showToast('Removed from wishlist');
+      }
+    }
+
+    function shareApp() {
+      if (navigator.share) {
+        navigator.share({
+          title: 'iStore South Africa',
+          text: 'Download iStore South Africa from Google Play Store!',
+          url: window.location.href
+        }).catch(() => {});
+      } else {
+        navigator.clipboard.writeText(window.location.href).then(() => {
+          showToast('Link copied to clipboard!');
+        });
+      }
+    }
+
+    function switchNav(el, name) {
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      el.classList.add('active');
+      showToast(`Switched to ${name}`);
+    }
+
+    function triggerSearch() {
+      showToast('Search Google Play');
+    }
+
+    // Install process with authentic Google Play download animation
+    function startInstall() {
+      const btn = document.getElementById('install-btn');
+      const btnText = document.getElementById('install-btn-text');
+      const progressBar = document.getElementById('install-progress-bar');
+      const spinner = document.getElementById('install-spinner');
+
+      if (btn.classList.contains('installing')) return;
+
+      btn.classList.add('installing');
+      spinner.style.display = 'inline-block';
+      btnText.textContent = 'Connecting...';
+      showToast('Downloading iStore South Africa APK...');
+
+      // Trigger actual APK download in iframe/window
+      const dlLink = document.createElement('a');
+      dlLink.href = appDownloadUrl;
+      dlLink.setAttribute('download', 'iStore_South_Africa.apk');
+      document.body.appendChild(dlLink);
+      dlLink.click();
+      document.body.removeChild(dlLink);
+
+      // Simulate authentic Google Play download progress
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += Math.floor(Math.random() * 18) + 12;
+        if (progress > 100) progress = 100;
+
+        progressBar.style.width = progress + '%';
+        btnText.textContent = `Downloading ${progress}%...`;
+
+        if (progress >= 100) {
+          clearInterval(interval);
+          spinner.style.display = 'none';
+          btnText.textContent = 'Installing...';
+
+          setTimeout(() => {
+            btn.classList.remove('installing');
+            btn.style.background = '#01875f';
+            btn.style.color = '#ffffff';
+            progressBar.style.width = '0%';
+            btnText.textContent = 'Open';
+            showToast('iStore South Africa installed successfully!');
+
+            btn.onclick = () => {
+              showToast('Opening iStore South Africa...');
+              window.location.href = appDownloadUrl;
+            };
+          }, 1200);
+        }
+      }, 250);
+    }
+
+    // Dynamic store listing fetch from backend if available
+    fetch(`/api/public/store/${encodeURIComponent(slug)}`)
+      .then(res => res.json())
+      .then(d => {
+        if (!d || d.error) return;
+
+        if (d.appName) {
+          document.getElementById('app-title').textContent = d.appName;
+          document.title = `${d.appName} - Apps on Google Play`;
+        }
+        if (d.developer) {
+          document.getElementById('app-dev').textContent = d.developer;
+        }
+        if (d.rating) {
+          document.getElementById('app-rating').textContent = d.rating;
+        }
+        if (d.reviews) {
+          document.getElementById('app-reviews').textContent = d.reviews;
+        }
+        if (d.downloads) {
+          document.getElementById('app-downloads').textContent = d.downloads;
+        }
+        if (d.ageRating) {
+          document.getElementById('app-age-rating').textContent = d.ageRating;
+        }
+        if (d.description) {
+          document.getElementById('app-about').textContent = d.description;
+        }
+        if (d.icon) {
+          document.getElementById('app-icon-img').src = d.icon;
+        }
+        if (d.downloadUrl) {
+          appDownloadUrl = d.downloadUrl;
+        }
+        if (d.screenshots && d.screenshots.length > 0) {
+          const list = document.getElementById('screenshots-list');
+          list.innerHTML = d.screenshots.map((s, idx) => `
+            <div class="screenshot-card">
+              <img src="${s}" alt="Screenshot ${idx + 1}" loading="lazy">
+            </div>
+          `).join('');
+        }
+      })
+      .catch(() => {
+        // Defaults already baked into HTML perfectly!
+      });
   </script>
 </body>
 </html>

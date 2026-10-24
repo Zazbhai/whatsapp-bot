@@ -115,13 +115,26 @@ body {
   top: 0;
   height: 100vh;
   z-index: 10;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
 }
 
 .sidebar-brand {
   display: flex;
   align-items: center;
   gap: 15px;
-  margin-bottom: 45px;
+  margin-bottom: 30px;
+  flex-shrink: 0;
 }
 
 .brand-logo {

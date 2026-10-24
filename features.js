@@ -533,11 +533,21 @@ module.exports = function setupFeatures(ctx) {
   // 3 + 4. STORE PAGE + DOWNLOAD LINK
   // ───────────────────────────────────────────────────────────
   const DEFAULT_LISTING = {
-    appName: 'iStore', developer: 'iStore Team', category: 'Tools',
-    shortDescription: 'Fast, secure and simple.',
-    description: 'Download the latest version of our app.',
-    rating: 4.6, reviews: '12K', downloads: '100K+', ageRating: '3+',
-    icon: '', screenshots: [], publicUrl: '', downloadCount: 0
+    appName: 'iStore South Africa', developer: 'iStore South Africa', category: 'Shopping',
+    shortDescription: 'Bring the iStore shopping experience to you.',
+    description: "Bring the iStore shopping experience to you. Shop the biggest range of Apple products and widest range of specially curated accessories and Smart products, making the most of iStore's delivery and store pick up options for your ultimate convenience.\n\nApp features:\n• Free delivery and in-store Pick up across South Africa\n• Fast delivery and in-store Pick up from 1 hour from placing your order\n• Choose delivery days that suit you\n• Pre-order the latest products before they are available in-store\n• Build a wish list with Save for later\n• Manage your orders from your profile\n• More coming soon\n\nWhy iStore South Africa?\niStore South Africa is an Apple Premium Partner, which launched its first store in 2005. With a wealth of Apple product experience, iStore offers best in class retail experience both online and in-store.",
+    rating: 4.1, reviews: '277', downloads: '1L+', ageRating: '3+',
+    icon: 'https://play-lh.googleusercontent.com/_re6mcALPaqotePA0WkgYeOQ6TighHRUS62FRmREPEhyZPdGM3QmRjcSpiMt6Pz1O-WZyvEIy4mtGHj9zw=s180-rw',
+    screenshots: [
+      'https://play-lh.googleusercontent.com/QHt_xt7jf32jcHxgpPUo7wzUF6aP1f8HnDKNTbgcfXr819FxtR7vEzvuuukdyfV7e9vXyEOzrhGVv_6pw9zsgA=w720-h1440',
+      'https://play-lh.googleusercontent.com/sc3muP6aszO2l4OMZ-9Aol43KLE3E3Masi62HiTIlHIjEBxvBNBSM-TP1utkvPfdxGHMxJXtvulIV4KwNO4iYA=w720-h1440',
+      'https://play-lh.googleusercontent.com/nXMO30imxAV6KICPEBkDA1OosRqWxt_gN900mYvKtt_k-2wWtvbQ4uWrCPQ_OVXyG1MiIwfY5hHC3vf3aZTuMA=w720-h1440',
+      'https://play-lh.googleusercontent.com/Wr0DMjBj6KQtL3EBpY2oqs3ZtJxtx1kOmhRFSJRvYMqhb2bTZLDEOTO87ZQfFZhsNPj_btEQNl4lk_wpg0_opdw=w720-h1440',
+      'https://play-lh.googleusercontent.com/XH-E48509sa_ArbQHVUwDzGhOVXqj-8LmgXopI68KqHmrC4euqsDb37SKRbmIiz1ZV0HCi1Vy4BSKJagbJ5u=w720-h1440',
+      'https://play-lh.googleusercontent.com/-JDkSvf2RMKwB7ylLhynlWxQEc8dpK6vKoIkzBOvaZL4YIB-q6TUxZoKyv-gCcPh4xRIt5WBLv70tG-kZMMF=w720-h1440',
+      'https://play-lh.googleusercontent.com/cM4puNVuWmf9SNBxIpVBY-YFt4ejykFvTTK4PIfuC4yFQQuzAYtbWRQfIjEKxCIcIbzfSLjRPWSF7AF5fn7-jw=w720-h1440'
+    ],
+    publicUrl: '', downloadCount: 100000
   };
   const DEFAULT_LINK_MSG = '📲 Here is the latest version of our app.\nYou can also download it here: {link}';
 

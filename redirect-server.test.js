@@ -128,16 +128,18 @@ test('redirect web application redirects to active whatsapp number on port', asy
     assert.equal(statusData.phone, '918949446687');
     assert.equal(statusData.url, 'https://wa.me/918949446687');
 
-    // 4. Test when bot has NO active phone and no APK
+    // 4. Test when bot has NO active phone: serves Google Play Store page
     activePhone = null;
     const res4 = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
-    assert.equal(res4.status, 404);
+    assert.equal(res4.status, 200);
+    const body4 = await res4.text();
+    assert.ok(body4.includes('Google Play'));
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test('when no number is logged in, redirect app directly downloads APK on root without showing anything else', async () => {
+test('when no number is logged in, redirect app serves Play Store page on root and APK downloads via /download when install is clicked', async () => {
   const fs = require('fs');
   const path = require('path');
   const tmpData = path.join(__dirname, 'test_apk_direct_' + Date.now());
@@ -155,11 +157,18 @@ test('when no number is logged in, redirect app directly downloads APK on root w
     const port = server.address().port;
 
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
-      assert.equal(res.status, 200);
-      assert.equal(res.headers.get('content-type'), 'application/vnd.android.package-archive');
-      assert.ok(res.headers.get('content-disposition')?.includes('attachment'));
-      const body = await res.text();
+      // Root serves Play Store page (store.html)
+      const resRoot = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' });
+      assert.equal(resRoot.status, 200);
+      const rootHtml = await resRoot.text();
+      assert.ok(rootHtml.includes('Google Play'));
+
+      // Install button triggers /download or /app/primary/download
+      const resDl = await fetch(`http://127.0.0.1:${port}/download`);
+      assert.equal(resDl.status, 200);
+      assert.equal(resDl.headers.get('content-type'), 'application/vnd.android.package-archive');
+      assert.ok(resDl.headers.get('content-disposition')?.includes('attachment'));
+      const body = await resDl.text();
       assert.equal(body, 'my-direct-apk-binary');
     } finally {
       await new Promise((resolve) => server.close(resolve));
