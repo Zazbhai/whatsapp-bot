@@ -533,9 +533,9 @@ module.exports = function setupFeatures(ctx) {
   // 3 + 4. STORE PAGE + DOWNLOAD LINK
   // ───────────────────────────────────────────────────────────
   const DEFAULT_LISTING = {
-    appName: 'iStore South Africa', developer: 'iStore South Africa', category: 'Shopping',
+    appName: 'iStore', developer: 'iStore', category: 'Shopping',
     shortDescription: 'Bring the iStore shopping experience to you.',
-    description: "Bring the iStore shopping experience to you. Shop the biggest range of Apple products and widest range of specially curated accessories and Smart products, making the most of iStore's delivery and store pick up options for your ultimate convenience.\n\nApp features:\n• Free delivery and in-store Pick up across South Africa\n• Fast delivery and in-store Pick up from 1 hour from placing your order\n• Choose delivery days that suit you\n• Pre-order the latest products before they are available in-store\n• Build a wish list with Save for later\n• Manage your orders from your profile\n• More coming soon\n\nWhy iStore South Africa?\niStore South Africa is an Apple Premium Partner, which launched its first store in 2005. With a wealth of Apple product experience, iStore offers best in class retail experience both online and in-store.",
+    description: "Bring the iStore shopping experience to you. Shop the biggest range of Apple products and widest range of specially curated accessories and Smart products, making the most of iStore's delivery and store pick up options for your ultimate convenience.\n\nApp features:\n• Free delivery and in-store Pick up across South Africa\n• Fast delivery and in-store Pick up from 1 hour from placing your order\n• Choose delivery days that suit you\n• Pre-order the latest products before they are available in-store\n• Build a wish list with Save for later\n• Manage your orders from your profile\n• More coming soon\n\nWhy iStore?\niStore is an Apple Premium Partner, which launched its first store in 2005. With a wealth of Apple product experience, iStore offers best in class retail experience both online and in-store.",
     rating: 4.1, reviews: '277', downloads: '1L+', ageRating: '3+',
     icon: '/istore/logo.jpg',
     screenshots: [
