@@ -101,6 +101,9 @@ const {
   renderWaitingPage
 } = require('./redirect-server');
 let redirectServerInstance = null;
+const STORE_PORT = process.env.STORE_PORT || process.env.PLAYSTORE_PORT || 3002;
+const { startStoreServer } = require('./store-server');
+let storeServerInstance = null;
 
 const app = express();
 const server = http.createServer(app);
@@ -3515,7 +3518,8 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
     adminForwardNumber: inst && inst.adminForwardNumber ? inst.adminForwardNumber : '',
     blockTriggerText: inst && inst.blockTriggerText ? inst.blockTriggerText : '',
     downloadPort: process.env.APK_PORT || '3005',
-    redirectPort: REDIRECT_PORT
+    redirectPort: REDIRECT_PORT,
+    storePort: STORE_PORT
   });
 });
 
@@ -4428,6 +4432,19 @@ server.listen(PORT, () => {
     });
   } catch (err) {
     console.error('[SYSTEM] Failed to start WhatsApp Redirect Gateway:', err.message);
+  }
+
+  try {
+    storeServerInstance = startStoreServer({
+      port: Number(STORE_PORT),
+      loadInstances,
+      saveInstances,
+      latestApkCache,
+      dataDir,
+      rootDir: __dirname
+    });
+  } catch (err) {
+    console.error('[SYSTEM] Failed to start Dedicated Play Store Server:', err.message);
   }
 
   // Check if FFmpeg is installed

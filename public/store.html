@@ -1170,8 +1170,9 @@ iStore is an Apple Premium Partner, which launched its first store in 2005. With
   <div id="toast" class="toast-msg"></div>
 
   <script>
-    // Extract instance slug from URL path (e.g., /app/primary -> primary)
-    const slug = location.pathname.split('/').filter(Boolean)[1] || 'primary';
+    // Extract instance slug from URL path (e.g., /app/primary -> primary, or / -> primary)
+    const _pathParts = location.pathname.split('/').filter(Boolean);
+    const slug = (_pathParts[0] === 'app' ? _pathParts[1] : _pathParts[0]) || 'primary';
     let appDownloadUrl = `/app/${encodeURIComponent(slug)}/download`;
     let hasApk = true;
     let isWishlisted = false;

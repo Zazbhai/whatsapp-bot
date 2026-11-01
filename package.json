@@ -9,7 +9,9 @@
     "dev": "nodemon server.js",
     "test": "node --test *.test.js",
     "tunnel:wa": "bash cloudflared.sh 3001",
+    "tunnel:store": "bash cloudflared.sh 3002",
     "tunnel:dash": "bash cloudflared.sh 3000",
+    "store": "node store-server.js",
     "tunnel:update": "bash cloudflared.sh --update"
   },
   "keywords": [
