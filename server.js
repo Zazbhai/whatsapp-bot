@@ -4434,18 +4434,9 @@ server.listen(PORT, () => {
     console.error('[SYSTEM] Failed to start WhatsApp Redirect Gateway:', err.message);
   }
 
-  try {
-    storeServerInstance = startStoreServer({
-      port: Number(STORE_PORT),
-      loadInstances,
-      saveInstances,
-      latestApkCache,
-      dataDir,
-      rootDir: __dirname
-    });
-  } catch (err) {
-    console.error('[SYSTEM] Failed to start Dedicated Play Store Server:', err.message);
-  }
+  // NOTE: Port 3002 (Play Store page) is managed as a dedicated standalone
+  // process via PM2 (store-page in ecosystem.config.js). Do NOT start it here -
+  // running from both server.js and the PM2 standalone causes a port conflict.
 
   // Check if FFmpeg is installed
   exec('ffmpeg -version', (err) => {
