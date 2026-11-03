@@ -23,6 +23,26 @@ module.exports = {
       args: 'cloudflared.sh 3000',
       restart_delay: 5000,
       autorestart: true
+    },
+    {
+      name: 'cf-store',
+      script: 'bash',
+      args: 'cloudflared.sh 3002',
+      restart_delay: 5000,
+      autorestart: true
+    },
+    {
+      name: 'store-page',
+      script: 'store-server.js',
+      restart_delay: 5000,
+      autorestart: true
+    },
+    {
+      name: 'store-bot',
+      script: 'store-bot.js',
+      restart_delay: 5000,
+      max_restarts: 20,
+      autorestart: true
     }
   ]
 };

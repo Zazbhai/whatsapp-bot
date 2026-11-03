@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const http = require('http');
+const multer = require('multer');
 
 // Load environment variables manually if executed standalone
 const envPath = path.join(__dirname, '.env');
@@ -165,15 +166,105 @@ function resolveMediaUrl(slug, f) {
 
 /**
  * Creates the dedicated Express application that strictly serves the Play Store page.
+ *
+ * Isolated APK storage (storeApkDir / STORE_DATA_DIR):
+ *   - Only requests authenticated with STORE_APK_TOKEN can push a new APK.
+ *   - This cache is completely separate from the main bot's latestApkCache / dataDir.
+ *   - Downloads prefer the isolated store APK; fall back to main bot cache when absent.
  */
 function createStoreApp({
   loadInstances,
   saveInstances,
   latestApkCache = {},
   dataDir = path.join(__dirname, 'data'),
-  rootDir = __dirname
+  rootDir = __dirname,
+  storeApkDir = path.join(__dirname, process.env.STORE_DATA_DIR || 'data/store'),
+  storeApkToken = process.env.STORE_APK_TOKEN || ''
 } = {}) {
   const app = express();
+
+  // ── Isolated APK cache (only the store-bot writes here) ─────────────────
+  // Ensure the isolated directory exists
+  try { fs.mkdirSync(storeApkDir, { recursive: true }); } catch {}
+  const storeApkFile = path.join(storeApkDir, 'latest_apk.json');
+
+  // In-memory cache for the isolated store APK. Loaded once on startup.
+  let isolatedApkCache = null;
+  try {
+    if (fs.existsSync(storeApkFile)) {
+      const raw = JSON.parse(fs.readFileSync(storeApkFile, 'utf8'));
+      if (raw && raw.data && raw.data.length > 0) {
+        isolatedApkCache = raw;
+        console.log(`[STORE] Loaded isolated APK from disk: ${raw.filename || 'istore.apk'} (${raw.version || 'unknown version'})`);
+      }
+    }
+  } catch (err) {
+    console.error('[STORE] Could not load isolated APK cache on startup:', err.message);
+  }
+
+  /** Save the isolated APK to disk and update in-memory cache. */
+  function persistIsolatedApk(apkData) {
+    isolatedApkCache = apkData;
+    try {
+      fs.writeFileSync(storeApkFile, JSON.stringify(apkData, null, 2), 'utf8');
+    } catch (err) {
+      console.error('[STORE] Failed to persist isolated APK to disk:', err.message);
+    }
+  }
+
+  /** Resolve the APK to serve:
+   *  1. Isolated store cache (written only by store-bot)
+   *  2. Main bot's in-memory latestApkCache (fallback)
+   *  3. Main bot's disk dataDir (fallback)
+   */
+  function resolveApkToServe(slug) {
+    // 1. Isolated store APK (highest priority)
+    if (isolatedApkCache && isolatedApkCache.data && isolatedApkCache.data.length > 0) {
+      return {
+        buffer: Buffer.from(isolatedApkCache.data, 'base64'),
+        filename: isolatedApkCache.filename || 'istore.apk',
+        version: isolatedApkCache.version,
+        notes: isolatedApkCache.notes,
+        uploadedAt: isolatedApkCache.uploadedAt,
+        uploadedBy: isolatedApkCache.uploadedBy,
+        source: 'store'
+      };
+    }
+    // 2 & 3. Fallback to main bot cache / disk
+    return getApkFromMemoryOrDisk({ slug, latestApkCache, dataDir });
+  }
+
+  /** Build the apk metadata object used by the JSON listing API. */
+  function resolveApkInfo_forStore(slug) {
+    const apk = resolveApkToServe(slug);
+    return resolveApkInfo(apk);
+  }
+
+  // ── Multer (memory storage, APK only, 200 MB max) ───────────────────────
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 200 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const isApk =
+        file.originalname.toLowerCase().endsWith('.apk') ||
+        file.mimetype === 'application/vnd.android.package-archive';
+      cb(isApk ? null : new Error('Only .apk files are accepted'), isApk);
+    }
+  });
+
+  // ── Bearer token auth middleware (store-bot only) ───────────────────────
+  function requireStoreToken(req, res, next) {
+    if (!storeApkToken) {
+      // Token not configured — block all uploads until configured
+      return res.status(503).json({ error: 'STORE_APK_TOKEN is not configured on this server.' });
+    }
+    const auth = req.headers['authorization'] || '';
+    const provided = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    if (!provided || provided !== storeApkToken) {
+      return res.status(401).json({ error: 'Invalid or missing STORE_APK_TOKEN.' });
+    }
+    next();
+  }
 
   // Helper to read instances safely
   const getInstancesList = () => {
@@ -255,7 +346,7 @@ function createStoreApp({
     const inst = findInstance(slug);
     const listing = Object.assign({}, DEFAULT_LISTING, (inst && inst.storeListing) || {});
     const activeSlug = (inst && inst.slug) || slug;
-    const apk = getApkFromMemoryOrDisk({ slug: activeSlug, latestApkCache, dataDir });
+    const apk = resolveApkToServe(activeSlug);
 
     res.json({
       appName: listing.appName || DEFAULT_LISTING.appName,
@@ -269,15 +360,72 @@ function createStoreApp({
       ageRating: listing.ageRating || DEFAULT_LISTING.ageRating,
       icon: resolveMediaUrl(activeSlug, listing.icon || DEFAULT_LISTING.icon),
       screenshots: (listing.screenshots && listing.screenshots.length ? listing.screenshots : DEFAULT_LISTING.screenshots).map((s) => resolveMediaUrl(activeSlug, s)),
-      apk: resolveApkInfo(apk),
+      apk: resolveApkInfo_forStore(activeSlug),
       downloadUrl: `/app/${encodeURIComponent(activeSlug)}/download`
     });
   });
 
-  // APK file download endpoints
+  // ── Isolated APK upload endpoint (store-bot only) ──────────────────────
+  // POST /api/store/apk/upload
+  //   Authorization: Bearer <STORE_APK_TOKEN>
+  //   Body: multipart/form-data { apk: <file>, version?: string, notes?: string }
+  app.post('/api/store/apk/upload', requireStoreToken, (req, res, next) => {
+    upload.single('apk')(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ error: err.message });
+      }
+      next();
+    });
+  }, (req, res) => {
+    if (!req.file || !req.file.buffer || req.file.buffer.length < 78) {
+      return res.status(400).json({ error: 'No valid APK file received (file too small or missing).' });
+    }
+
+    const base64 = req.file.buffer.toString('base64');
+    const meta = {
+      mimetype: 'application/vnd.android.package-archive',
+      data: base64,
+      filename: req.file.originalname || 'istore.apk',
+      version: (req.body && req.body.version) ? req.body.version.trim().slice(0, 50) : '',
+      notes: (req.body && req.body.notes) ? req.body.notes.trim().slice(0, 500) : '',
+      uploadedBy: 'store-bot',
+      uploadedAt: new Date().toISOString(),
+      sizeMB: (req.file.buffer.length / 1024 / 1024).toFixed(2)
+    };
+
+    persistIsolatedApk(meta);
+    console.log(`[STORE] ✅ New isolated APK uploaded: ${meta.filename} v${meta.version || 'n/a'} (${meta.sizeMB} MB)`);
+
+    res.json({
+      success: true,
+      filename: meta.filename,
+      version: meta.version || 'n/a',
+      size: `${meta.sizeMB} MB`,
+      uploadedAt: meta.uploadedAt
+    });
+  });
+
+  // GET /api/store/apk/info — lets the store-bot confirm what is currently live
+  app.get('/api/store/apk/info', requireStoreToken, (req, res) => {
+    if (!isolatedApkCache || !isolatedApkCache.data) {
+      return res.json({ cached: false, source: 'none' });
+    }
+    res.json({
+      cached: true,
+      source: 'store',
+      filename: isolatedApkCache.filename,
+      version: isolatedApkCache.version || 'n/a',
+      notes: isolatedApkCache.notes || '',
+      uploadedBy: isolatedApkCache.uploadedBy,
+      uploadedAt: isolatedApkCache.uploadedAt,
+      size: `${isolatedApkCache.sizeMB || ((isolatedApkCache.data.length * 0.75) / 1024 / 1024).toFixed(2)} MB`
+    });
+  });
+
+  // APK file download endpoints — prefer isolated store APK over main bot cache
   app.get(['/app/:slug/download', '/download', '/apk', '/get-apk', '/app.apk', '/istore.apk'], (req, res) => {
     const slug = (req.params.slug || 'primary').toLowerCase();
-    const apk = getApkFromMemoryOrDisk({ slug, latestApkCache, dataDir });
+    const apk = resolveApkToServe(slug);
 
     if (!apk) {
       return res.status(404).send('No APK package available yet. Please upload an APK first.');
@@ -322,9 +470,11 @@ function startStoreServer({
   saveInstances,
   latestApkCache = {},
   dataDir = path.join(__dirname, 'data'),
-  rootDir = __dirname
+  rootDir = __dirname,
+  storeApkDir = path.join(__dirname, process.env.STORE_DATA_DIR || 'data/store'),
+  storeApkToken = process.env.STORE_APK_TOKEN || ''
 } = {}) {
-  const app = createStoreApp({ loadInstances, saveInstances, latestApkCache, dataDir, rootDir });
+  const app = createStoreApp({ loadInstances, saveInstances, latestApkCache, dataDir, rootDir, storeApkDir, storeApkToken });
   const server = http.createServer(app);
   let closeTimer = null;
 

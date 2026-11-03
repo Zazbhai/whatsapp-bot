@@ -58,8 +58,10 @@ echo "==========================================================================
 echo "🚀 STARTING CLOUDFLARE TUNNEL FOR PORT: $PORT"
 if [ "$PORT" == "3001" ]; then
   echo "👉 Target: WhatsApp Auto-Redirect Gateway (wa.me click-to-chat)"
+elif [ "$PORT" == "3002" ]; then
+  echo "👉 Target: Dedicated Google Play Store Page Portal"
 elif [ "$PORT" == "3000" ]; then
-  echo "👉 Target: Admin Dashboard & Web Store"
+  echo "👉 Target: Admin Dashboard"
 elif [ "$PORT" == "3005" ]; then
   echo "👉 Target: APK Download Server"
 fi
