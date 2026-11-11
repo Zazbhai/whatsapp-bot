@@ -556,7 +556,10 @@ module.exports = function setupFeatures(ctx) {
     return inst.storeListing;
   }
   function baseUrl(inst) {
-    const u = (inst && inst.storeListing && inst.storeListing.publicUrl) || process.env.PUBLIC_URL || `http://localhost:${port}`;
+    const entryDomain = process.env.STORE_ENTRY_DOMAIN
+      ? (process.env.STORE_ENTRY_DOMAIN.startsWith('http') ? process.env.STORE_ENTRY_DOMAIN : `https://${process.env.STORE_ENTRY_DOMAIN}`)
+      : null;
+    const u = (inst && inst.storeListing && inst.storeListing.publicUrl) || entryDomain || process.env.PUBLIC_URL || `http://localhost:${port}`;
     return u.replace(/\/+$/, '');
   }
   function storeLink(slug) { return `${baseUrl(getInst(slug))}/app/${slug}`; }

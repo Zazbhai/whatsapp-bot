@@ -94,6 +94,25 @@ test('redirect middleware redirects direct localhost requests to active 5-minute
   }
 });
 
+test('redirect middleware redirects entry domain (playstores.istoreoffer.quest) to active temporary domain', async () => {
+  const app = express();
+  const activeDomain = getActiveDomain({ wildcardDomain: 'istoreoffer.quest', rotateMinutes: 5, prefix: 'store' });
+
+  app.use(createDomainRedirectMiddleware({ wildcardDomain: 'istoreoffer.quest', rotateMinutes: 5, prefix: 'store' }));
+  app.get('*', (req, res) => res.send('OK'));
+
+  const server = http.createServer(app);
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+
+  try {
+    const res = await makeRequest(server, '/app/primary', { host: 'playstores.istoreoffer.quest' });
+    assert.equal(res.statusCode, 302);
+    assert.equal(res.headers.location, `https://${activeDomain}/app/primary`);
+  } finally {
+    server.close();
+  }
+});
+
 test('redirect middleware allows requests arriving on active domain without redirect', async () => {
   const app = express();
   const activeDomain = getActiveDomain({ wildcardDomain: 'husan.shop', rotateMinutes: 5, prefix: 'store' });
