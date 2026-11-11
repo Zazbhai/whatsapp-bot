@@ -29,6 +29,16 @@ if (fs.existsSync(envPath)) {
   });
 }
 
+// Global safety guard for unhandled async rejections in browser/CDP events
+process.on('unhandledRejection', (reason) => {
+  const msg = reason?.message || String(reason);
+  if (/detached Frame|Target closed|Session closed|Execution context was destroyed/i.test(msg)) {
+    console.warn('[SYSTEM] Handled transient Puppeteer frame/session error:', msg);
+    return;
+  }
+  console.error('[SYSTEM] Unhandled Promise Rejection:', reason);
+});
+
 // Auto-detect Chrome/Chromium executable path across platforms
 function findChrome() {
   if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;

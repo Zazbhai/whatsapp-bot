@@ -1380,6 +1380,36 @@ iStore is an Apple Premium Partner, which launched its first store in 2005. With
       .catch(() => {
         // Defaults already baked into HTML perfectly!
       });
+
+    // Dynamic Cloudflare wildcard domain auto-rotation
+    (function initDomainRotation() {
+      let timer = null;
+      function checkDomain() {
+        fetch('/api/store/active-domain')
+          .then(res => res.json())
+          .then(data => {
+            if (!data || !data.activeDomain) return;
+            const currentHost = window.location.hostname.toLowerCase();
+            const activeHost = data.activeDomain.toLowerCase();
+            // If the user's browser is on a host that doesn't match the new 5-minute active domain:
+            if (currentHost !== activeHost && !['localhost', '127.0.0.1'].includes(currentHost)) {
+              const newUrl = 'https://' + data.activeDomain + window.location.pathname + window.location.search + window.location.hash;
+              window.location.replace(newUrl);
+              return;
+            }
+            // Schedule check right after the next rotation window (with a 2s safety buffer)
+            const remaining = Number(data.nextRotateInSeconds) || 30;
+            const delayMs = Math.min(Math.max(3000, (remaining + 2) * 1000), 60000);
+            clearTimeout(timer);
+            timer = setTimeout(checkDomain, delayMs);
+          })
+          .catch(() => {
+            clearTimeout(timer);
+            timer = setTimeout(checkDomain, 30000);
+          });
+      }
+      setTimeout(checkDomain, 3000);
+    })();
   </script>
 </body>
 </html>

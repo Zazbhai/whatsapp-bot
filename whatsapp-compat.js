@@ -71,16 +71,34 @@ function patchClient(loadClient = () => require('whatsapp-web.js/src/Client')) {
   if (!proto || typeof proto.inject !== 'function' || proto.inject.__navCompat) return;
   const originalInject = proto.inject;
   const patchedInject = async function () {
+    if (this.pupPage && typeof this.pupPage.isClosed === 'function' && this.pupPage.isClosed()) {
+      return;
+    }
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        if (this.pupPage && typeof this.pupPage.isClosed === 'function' && this.pupPage.isClosed()) {
+          return;
+        }
         return await originalInject.call(this);
       } catch (err) {
-        const isNavError = /Execution context was destroyed|most likely because of a navigation/i.test(err?.message || String(err));
-        if (isNavError && attempt < maxRetries) {
+        const msg = err?.message || String(err);
+        const isNavOrFrameError = /Execution context was destroyed|most likely because of a navigation|detached Frame/i.test(msg);
+        const isClosedError = /Target closed|Session closed|Protocol error/i.test(msg);
+
+        if (this.pupPage && typeof this.pupPage.isClosed === 'function' && this.pupPage.isClosed()) {
+          return;
+        }
+
+        if (isNavOrFrameError && attempt < maxRetries) {
           await new Promise(r => setTimeout(r, 1000));
           continue;
         }
+
+        if (isNavOrFrameError || isClosedError) {
+          return;
+        }
+
         throw err;
       }
     }

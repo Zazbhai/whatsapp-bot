@@ -1,0 +1,31 @@
+{
+  "restartable": "rs",
+  "ignore": [
+    ".wwebjs_auth/**",
+    ".wwebjs_cache/**",
+    "data/**",
+    "uploads/**",
+    "istore/**",
+    "brag-output/**",
+    ".agents/**",
+    ".claude/**",
+    "node_modules/**",
+    "*.log",
+    "*.bak",
+    "*.tmp"
+  ],
+  "watch": [
+    "server.js",
+    "features.js",
+    "llm-providers.js",
+    "session-health.js",
+    "telegram-ui.js",
+    "whatsapp-compat.js",
+    "store-server.js",
+    "supervisor.js",
+    "public"
+  ],
+  "ext": "js,html,css",
+  "delay": 1000
+}
+

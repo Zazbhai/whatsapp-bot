@@ -3,6 +3,11 @@ const path = require('path');
 const express = require('express');
 const http = require('http');
 const multer = require('multer');
+const {
+  createDomainRedirectMiddleware,
+  getActiveDomain,
+  getNextRotateRemainingSeconds
+} = require('./store-domain-rotator');
 
 // Load environment variables manually if executed standalone
 const envPath = path.join(__dirname, '.env');
@@ -172,6 +177,10 @@ function resolveMediaUrl(slug, f) {
  *   - This cache is completely separate from the main bot's latestApkCache / dataDir.
  *   - Downloads prefer the isolated store APK; fall back to main bot cache when absent.
  */
+const isTestEnv = process.env.NODE_ENV === 'test' ||
+  (Array.isArray(process.execArgv) && process.execArgv.includes('--test')) ||
+  (Array.isArray(process.argv) && process.argv.some(a => typeof a === 'string' && a.includes('test')));
+
 function createStoreApp({
   loadInstances,
   saveInstances,
@@ -179,7 +188,10 @@ function createStoreApp({
   dataDir = path.join(__dirname, 'data'),
   rootDir = __dirname,
   storeApkDir = path.join(__dirname, process.env.STORE_DATA_DIR || 'data/store'),
-  storeApkToken = process.env.STORE_APK_TOKEN || ''
+  storeApkToken = process.env.STORE_APK_TOKEN || '',
+  wildcardDomain = (isTestEnv ? '' : (process.env.STORE_WILDCARD_DOMAIN || '')),
+  rotateMinutes = Number(process.env.STORE_DOMAIN_ROTATE_MINUTES || 5),
+  subdomainPrefix = process.env.STORE_SUBDOMAIN_PREFIX || 'store'
 } = {}) {
   const app = express();
 
@@ -329,6 +341,19 @@ function createStoreApp({
     res.json({ status: 'healthy', service: 'playstore', timestamp: new Date().toISOString() });
   });
 
+  // Dynamic active domain & remaining time API for client-side auto-rotation
+  app.get('/api/store/active-domain', (req, res) => {
+    const activeDomain = getActiveDomain({ wildcardDomain, rotateMinutes, prefix: subdomainPrefix });
+    res.json({
+      activeDomain: activeDomain || null,
+      rotateMinutes,
+      nextRotateInSeconds: getNextRotateRemainingSeconds(rotateMinutes)
+    });
+  });
+
+  // 5-minute Cloudflare wildcard domain auto-redirect middleware
+  app.use(createDomainRedirectMiddleware({ wildcardDomain, rotateMinutes, prefix: subdomainPrefix }));
+
   // Serve static store images (/istore/*.jpg) strictly - never exposes dashboard assets
   app.use('/istore', express.static(path.join(rootDir, 'public', 'istore'), { index: false }));
 
@@ -472,9 +497,23 @@ function startStoreServer({
   dataDir = path.join(__dirname, 'data'),
   rootDir = __dirname,
   storeApkDir = path.join(__dirname, process.env.STORE_DATA_DIR || 'data/store'),
-  storeApkToken = process.env.STORE_APK_TOKEN || ''
+  storeApkToken = process.env.STORE_APK_TOKEN || '',
+  wildcardDomain = (process.env.NODE_ENV === 'test' ? '' : (process.env.STORE_WILDCARD_DOMAIN || '')),
+  rotateMinutes = Number(process.env.STORE_DOMAIN_ROTATE_MINUTES || 5),
+  subdomainPrefix = process.env.STORE_SUBDOMAIN_PREFIX || 'store'
 } = {}) {
-  const app = createStoreApp({ loadInstances, saveInstances, latestApkCache, dataDir, rootDir, storeApkDir, storeApkToken });
+  const app = createStoreApp({
+    loadInstances,
+    saveInstances,
+    latestApkCache,
+    dataDir,
+    rootDir,
+    storeApkDir,
+    storeApkToken,
+    wildcardDomain,
+    rotateMinutes,
+    subdomainPrefix
+  });
   const server = http.createServer(app);
   let closeTimer = null;
 
@@ -489,6 +528,10 @@ function startStoreServer({
 
   server.listen(port, () => {
     console.log(`📱 Dedicated Play Store Portal: http://localhost:${port} -> Shows Play Store page only`);
+    const activeDomain = getActiveDomain({ wildcardDomain, rotateMinutes, prefix: subdomainPrefix });
+    if (activeDomain) {
+      console.log(`🌐 5-Minute Wildcard Rotation Active: https://${activeDomain} (rotates every ${rotateMinutes}m)`);
+    }
   });
 
   const shutdown = () => {
@@ -529,6 +572,8 @@ module.exports = {
   resolveApkInfo,
   resolveMediaUrl,
   createStoreApp,
-  startStoreServer
+  startStoreServer,
+  getActiveDomain,
+  createDomainRedirectMiddleware
 };
 

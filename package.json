@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node supervisor.js",
     "direct": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "nodemon --config nodemon.json server.js",
     "test": "node --test *.test.js",
     "tunnel:wa": "bash cloudflared.sh 3001",
     "tunnel:store": "bash cloudflared.sh 3002",
