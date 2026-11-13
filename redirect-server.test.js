@@ -6,7 +6,6 @@ const http = require('node:http');
 const {
   resolveActiveWhatsAppNumber,
   buildWhatsAppUrl,
-  buildWhatsAppAppUrl,
   createRedirectApp,
   startRedirectServer
 } = require('./redirect-server');
@@ -101,13 +100,6 @@ test('buildWhatsAppUrl creates clean wa.me links with optional query params', ()
   );
 });
 
-test('buildWhatsAppAppUrl creates a native WhatsApp link with prefilled text', () => {
-  assert.equal(
-    buildWhatsAppAppUrl('918949446687', { text: 'I want free iphone' }),
-    'whatsapp://send?phone=918949446687&text=I+want+free+iphone'
-  );
-});
-
 test('redirect web application redirects to active whatsapp number on port', async () => {
   let activePhone = '918949446687';
   const app = createRedirectApp({
@@ -147,7 +139,7 @@ test('redirect web application redirects to active whatsapp number on port', asy
   }
 });
 
-test('redirect gateway redirects mobile browsers directly to the native WhatsApp app', async () => {
+test('redirect gateway uses a direct native WhatsApp handoff for mobile browsers', async () => {
   const app = createRedirectApp({
     getActiveNumber: () => ({ phone: '918975616201' }),
     defaultText: 'I want free iphone'
@@ -157,12 +149,14 @@ test('redirect gateway redirects mobile browsers directly to the native WhatsApp
 
   try {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/`, {
-      redirect: 'manual',
       headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile' }
     });
-    assert.equal(res.status, 302);
-    assert.equal(res.headers.get('location'), 'whatsapp://send?phone=918975616201&text=I+want+free+iphone');
-    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /text\/html/);
+    assert.equal(res.headers.get('cache-control'), 'no-store, no-cache, must-revalidate');
+    const html = await res.text();
+    assert.ok(html.includes('whatsapp://send?phone=918975616201&text=I%20want%20free%20iphone'));
+    assert.ok(html.includes('intent://send?phone=918975616201&text=I%20want%20free%20iphone'));
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

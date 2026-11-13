@@ -8,6 +8,7 @@ const {
   getActiveDomain,
   getNextRotateRemainingSeconds
 } = require('./store-domain-rotator');
+const { getLocalIp } = require('./network-urls');
 
 // Load environment variables manually if executed standalone
 const envPath = path.join(__dirname, '.env');
@@ -527,11 +528,22 @@ function startStoreServer({
   });
 
   server.listen(port, () => {
-    console.log(`📱 Dedicated Play Store Portal: http://localhost:${port} -> Shows Play Store page only`);
+    const localIp = getLocalIp();
+    const entryDomain = process.env.STORE_ENTRY_DOMAIN
+      ? (process.env.STORE_ENTRY_DOMAIN.startsWith('http') ? process.env.STORE_ENTRY_DOMAIN : `https://${process.env.STORE_ENTRY_DOMAIN}`)
+      : null;
     const activeDomain = getActiveDomain({ wildcardDomain, rotateMinutes, prefix: subdomainPrefix });
-    if (activeDomain) {
-      console.log(`🌐 5-Minute Wildcard Rotation Active: https://${activeDomain} (rotates every ${rotateMinutes}m)`);
+
+    console.log(`\n=============================================================`);
+    console.log(`📱 DEDICATED PLAY STORE PORTAL IS ONLINE (Port ${port})`);
+    if (entryDomain) {
+      console.log(`  👉 Public Store Entry:    ${entryDomain} (Test on phone!)`);
     }
+    if (activeDomain) {
+      console.log(`  🔄 Active 5-Min Domain:   https://${activeDomain} (Rotates every ${rotateMinutes}m)`);
+    }
+    console.log(`  🌐 Local / LAN Testing:   http://localhost:${port}${localIp ? ` | http://${localIp}:${port}` : ''}`);
+    console.log(`=============================================================\n`);
   });
 
   const shutdown = () => {

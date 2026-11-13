@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const http = require('http');
+const { getLocalIp } = require('./network-urls');
 
 // ── Rate limiter helper ──
 function createRateLimiter(maxRequests, windowMs) {
@@ -208,13 +209,129 @@ function buildWhatsAppUrl(phone, query = {}, defaultText = '') {
 function buildWhatsAppAppUrl(phone, query = {}, defaultText = '') {
   const clean = String(phone).replace(/\D/g, '');
   const text = query.text || query.msg || query.message || defaultText;
-  const params = new URLSearchParams({ phone: clean });
-  if (text) params.set('text', text);
-  return `whatsapp://send?${params.toString()}`;
+  const encodedText = text ? encodeURIComponent(text) : '';
+  return `whatsapp://send?phone=${clean}${encodedText ? `&text=${encodedText}` : ''}`;
+}
+
+function buildWhatsAppIntentUrl(phone, query = {}, defaultText = '') {
+  const clean = String(phone).replace(/\D/g, '');
+  const text = query.text || query.msg || query.message || defaultText;
+  const encodedText = text ? encodeURIComponent(text) : '';
+  return `intent://send?phone=${clean}${encodedText ? `&text=${encodedText}` : ''}#Intent;scheme=whatsapp;package=com.whatsapp;end`;
 }
 
 function isMobileUserAgent(userAgent = '') {
   return /Android|iPhone|iPad|iPod|Windows Phone|Mobile/i.test(userAgent);
+}
+
+function renderMobileWhatsAppHandoff({ phone, query = {}, defaultText = '' }) {
+  const clean = String(phone).replace(/\D/g, '');
+  const text = query.text || query.msg || query.message || defaultText;
+  const encodedText = text ? encodeURIComponent(text) : '';
+  const nativeAppUrl = `whatsapp://send?phone=${clean}${encodedText ? `&text=${encodedText}` : ''}`;
+  const intentUrl = `intent://send?phone=${clean}${encodedText ? `&text=${encodedText}` : ''}#Intent;scheme=whatsapp;package=com.whatsapp;end`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="refresh" content="0;url=${nativeAppUrl}">
+  <title>Opening WhatsApp...</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0b141a;
+      color: #e9edef;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+      text-align: center;
+    }
+    .card {
+      background: #111b21;
+      border: 1px solid #222d34;
+      border-radius: 20px;
+      padding: 32px 24px;
+      max-width: 380px;
+      width: 100%;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    .wa-icon {
+      width: 60px;
+      height: 60px;
+      background: #25d366;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      box-shadow: 0 4px 16px rgba(37, 211, 102, 0.4);
+    }
+    .wa-icon svg {
+      width: 34px;
+      height: 34px;
+      fill: #ffffff;
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #e9edef;
+    }
+    p {
+      color: #8696a0;
+      font-size: 14px;
+      line-height: 1.5;
+      margin-bottom: 24px;
+    }
+    .btn {
+      display: block;
+      background: #25d366;
+      color: #0b141a;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 14px 24px;
+      border-radius: 28px;
+      text-decoration: none;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:active {
+      transform: scale(0.98);
+      background: #20ba5a;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="wa-icon">
+      <svg viewBox="0 0 24 24"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2M12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 15 3.8 13.47 3.8 11.91C3.81 7.37 7.5 3.67 12.05 3.67M9.05 7.42C8.87 7.42 8.59 7.49 8.35 7.75C8.11 8.01 7.44 8.64 7.44 9.92C7.44 11.2 8.38 12.43 8.5 12.6C8.64 12.78 10.36 15.42 12.97 16.55C13.59 16.82 14.07 16.98 14.45 17.1C15.07 17.3 15.63 17.27 16.08 17.2C16.58 17.13 17.62 16.57 17.84 15.96C18.05 15.34 18.05 14.82 17.99 14.71C17.93 14.6 17.76 14.54 17.5 14.41C17.24 14.28 15.96 13.65 15.72 13.56C15.49 13.48 15.32 13.43 15.15 13.69C14.97 13.95 14.48 14.54 14.33 14.71C14.18 14.88 14.03 14.91 13.78 14.78C13.52 14.65 12.69 14.38 11.71 13.51C10.95 12.83 10.43 12 10.28 11.74C10.14 11.49 10.26 11.35 10.39 11.22C10.51 11.1 10.66 10.91 10.79 10.76C10.92 10.61 10.97 10.5 11.05 10.33C11.14 10.16 11.09 10.01 11.03 9.89C10.97 9.76 10.47 8.53 10.26 8.03C10.06 7.54 9.86 7.6 9.71 7.6C9.57 7.6 9.4 7.6 9.23 7.6H9.05Z"/></svg>
+    </div>
+    <h2>Opening WhatsApp...</h2>
+    <p>Connecting you directly to chat. If WhatsApp does not open automatically, tap below.</p>
+    <a id="action-btn" class="btn" href="${nativeAppUrl}">Continue to WhatsApp</a>
+  </div>
+
+  <script>
+    (function () {
+      var isAndroid = /Android/i.test(navigator.userAgent);
+      var nativeUrl = ${JSON.stringify(nativeAppUrl)};
+      var intentUrl = ${JSON.stringify(intentUrl)};
+      var targetUrl = isAndroid ? intentUrl : nativeUrl;
+      var btn = document.getElementById('action-btn');
+      btn.href = targetUrl;
+
+      // Programmatically trigger launch
+      try { btn.click(); } catch (_) {}
+      window.location.href = targetUrl;
+    })();
+  </script>
+</body>
+</html>`;
 }
 
 /**
@@ -571,12 +688,16 @@ function createRedirectApp({
     const fallback = !active && typeof getFallbackNumber === 'function' ? getFallbackNumber() : null;
     const target = active?.phone ? active : fallback;
     if (target && target.phone) {
-      const targetUrl = buildWhatsAppUrl(target.phone, req.query, defaultText);
       if (isMobileUserAgent(req.get('user-agent'))) {
-        const appUrl = buildWhatsAppAppUrl(target.phone, req.query, defaultText);
-        res.set('Cache-Control', 'no-store');
-        return res.redirect(302, appUrl);
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+        return res.type('html').send(renderMobileWhatsAppHandoff({
+          phone: target.phone,
+          query: req.query,
+          defaultText
+        }));
       }
+
+      const targetUrl = buildWhatsAppUrl(target.phone, req.query, defaultText);
       // HTTP 302 Temporary Redirect so browsers don't cache stale numbers when failover rotates
       return res.redirect(302, targetUrl);
     }
@@ -625,7 +746,9 @@ function startRedirectServer({
   });
 
   server.listen(port, () => {
-    console.log(`🌐 WhatsApp Auto-Redirect Gateway: http://localhost:${port} -> Directs visitors to active WhatsApp number`);
+    const localIp = getLocalIp();
+    const lanStr = localIp ? ` (Phone/LAN: http://${localIp}:${port})` : '';
+    console.log(`🌐 WhatsApp Auto-Redirect Gateway: http://localhost:${port}${lanStr} -> Directs visitors to active WhatsApp number`);
   });
 
   // Graceful shutdown on SIGTERM/SIGINT
@@ -662,7 +785,9 @@ module.exports = {
   resolveActiveWhatsAppNumber,
   buildWhatsAppUrl,
   buildWhatsAppAppUrl,
+  buildWhatsAppIntentUrl,
   isMobileUserAgent,
+  renderMobileWhatsAppHandoff,
   renderWaitingPage,
   startRedirectServer
 };

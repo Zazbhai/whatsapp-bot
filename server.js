@@ -113,6 +113,8 @@ const {
 let redirectServerInstance = null;
 const STORE_PORT = process.env.STORE_PORT || process.env.PLAYSTORE_PORT || 3002;
 const { startStoreServer } = require('./store-server');
+const { logStartupUrls } = require('./network-urls');
+const { getActiveDomain } = require('./store-domain-rotator');
 let storeServerInstance = null;
 
 const app = express();
@@ -4423,7 +4425,16 @@ setInterval(() => {
 server.listen(PORT, () => {
   console.log(`\n=============================================================`);
   console.log(`🤖 MULTI-INSTANCE WHATSAPP AUTOMATION BOT HUB IS ONLINE!`);
-  console.log(`🌐 Dashboard Portal Interface: http://localhost:${PORT}`);
+  try {
+    const activeStoreDomain = getActiveDomain({
+      wildcardDomain: process.env.STORE_WILDCARD_DOMAIN || '',
+      rotateMinutes: Number(process.env.STORE_DOMAIN_ROTATE_MINUTES || 5),
+      prefix: process.env.STORE_SUBDOMAIN_PREFIX || 'store'
+    });
+    logStartupUrls({ port: PORT, redirectPort: REDIRECT_PORT, storePort: STORE_PORT, activeStoreDomain });
+  } catch (_) {
+    console.log(`🌐 Dashboard Portal Interface: http://localhost:${PORT}`);
+  }
   console.log(`=============================================================\n`);
 
   try {
