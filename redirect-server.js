@@ -237,93 +237,378 @@ function renderMobileWhatsAppHandoff({ phone, query = {}, defaultText = '' }) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta http-equiv="refresh" content="0;url=${nativeAppUrl}">
-  <title>Opening WhatsApp...</title>
+  <title>🎁 Claim Your Free iPhone!</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800;900&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
-      background: #0b141a;
-      color: #e9edef;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: 'Poppins', sans-serif;
+      background: #0a0a0f;
+      color: #fff;
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
-      padding: 24px;
+      padding: 20px;
       text-align: center;
+      overflow: hidden;
+      position: relative;
     }
-    .card {
-      background: #111b21;
-      border: 1px solid #222d34;
-      border-radius: 20px;
-      padding: 32px 24px;
-      max-width: 380px;
-      width: 100%;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+
+    /* Animated background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 0%, rgba(255, 215, 0, 0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 80%, rgba(180, 100, 255, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 50% 35% at 10% 70%, rgba(0, 200, 255, 0.07) 0%, transparent 50%),
+        linear-gradient(160deg, #0a0a0f 0%, #0d0d1a 50%, #0a0f0a 100%);
+      z-index: 0;
+      animation: bgPulse 6s ease-in-out infinite alternate;
     }
-    .wa-icon {
-      width: 60px;
-      height: 60px;
-      background: #25d366;
+    @keyframes bgPulse {
+      from { opacity: 0.8; }
+      to   { opacity: 1; }
+    }
+
+    /* Floating particles */
+    .particles { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
+    .particle {
+      position: absolute;
       border-radius: 50%;
-      display: inline-flex;
+      animation: float linear infinite;
+      opacity: 0;
+    }
+    @keyframes float {
+      0%   { transform: translateY(110vh) scale(0); opacity: 0; }
+      10%  { opacity: 1; }
+      90%  { opacity: 0.6; }
+      100% { transform: translateY(-10vh) scale(1); opacity: 0; }
+    }
+
+    /* Main card */
+    .card {
+      position: relative;
+      z-index: 10;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 215, 0, 0.18);
+      border-radius: 28px;
+      padding: 36px 24px 32px;
+      max-width: 400px;
+      width: 100%;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow:
+        0 0 0 1px rgba(255,215,0,0.08),
+        0 20px 60px rgba(0, 0, 0, 0.6),
+        0 0 80px rgba(255, 215, 0, 0.06);
+      animation: cardIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: scale(0.85) translateY(20px); }
+      to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      background: linear-gradient(135deg, #FFD700, #FF8C00);
+      color: #0a0a0f;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      padding: 5px 14px;
+      border-radius: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 0 20px rgba(255, 165, 0, 0.5);
+      animation: badgePop 0.4s 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+    @keyframes badgePop {
+      from { opacity: 0; transform: scale(0.5); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+
+    /* iPhone visual */
+    .iphone-wrap {
+      margin: 0 auto 20px;
+      position: relative;
+      width: 90px;
+      height: 160px;
+      animation: phoneFloat 3s ease-in-out infinite;
+    }
+    @keyframes phoneFloat {
+      0%, 100% { transform: translateY(0) rotate(-2deg); }
+      50%       { transform: translateY(-10px) rotate(2deg); }
+    }
+    .iphone {
+      width: 90px;
+      height: 160px;
+      background: linear-gradient(145deg, #2a2a2a 0%, #1a1a1a 40%, #111 60%, #222 100%);
+      border-radius: 20px;
+      border: 2px solid rgba(255,255,255,0.15);
+      box-shadow:
+        inset 0 1px 1px rgba(255,255,255,0.1),
+        0 0 40px rgba(255, 215, 0, 0.25),
+        0 20px 40px rgba(0,0,0,0.6);
+      position: relative;
+      overflow: hidden;
+    }
+    .iphone::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 20%; right: 20%;
+      height: 18px;
+      background: #111;
+      border-radius: 0 0 12px 12px;
+      z-index: 2;
+    }
+    .iphone-screen {
+      position: absolute;
+      inset: 4px 4px 4px 4px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #1a3a5c 0%, #0d2240 50%, #071428 100%);
+      display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 20px;
-      box-shadow: 0 4px 16px rgba(37, 211, 102, 0.4);
+      font-size: 32px;
+      animation: screenGlow 2s ease-in-out infinite alternate;
     }
-    .wa-icon svg {
-      width: 34px;
-      height: 34px;
-      fill: #ffffff;
+    @keyframes screenGlow {
+      from { box-shadow: inset 0 0 20px rgba(0,100,255,0.2); }
+      to   { box-shadow: inset 0 0 40px rgba(0,150,255,0.4); }
     }
-    h2 {
-      font-size: 20px;
-      font-weight: 600;
-      margin-bottom: 8px;
-      color: #e9edef;
+    .shine {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.12) 0%, transparent 50%);
+      border-radius: 20px;
+      pointer-events: none;
     }
-    p {
-      color: #8696a0;
+    .stars-ring {
+      position: absolute;
+      inset: -10px;
+      animation: ringRotate 6s linear infinite;
+    }
+    @keyframes ringRotate {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .star {
+      position: absolute;
       font-size: 14px;
-      line-height: 1.5;
+    }
+
+    /* Headline */
+    .headline {
+      font-size: 26px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin-bottom: 10px;
+      background: linear-gradient(135deg, #FFD700 0%, #FFA500 40%, #FFD700 70%, #FFEC6E 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      background-size: 200% 200%;
+      animation: shimmerText 3s linear infinite;
+    }
+    @keyframes shimmerText {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .subtext {
+      color: rgba(255,255,255,0.65);
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 8px;
+    }
+
+    /* Urgency strip */
+    .urgency {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 59, 59, 0.12);
+      border: 1px solid rgba(255, 59, 59, 0.3);
+      color: #ff6b6b;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 20px;
       margin-bottom: 24px;
+      animation: urgencyPulse 1.5s ease-in-out infinite;
     }
-    .btn {
-      display: block;
-      background: #25d366;
-      color: #0b141a;
-      font-weight: 700;
-      font-size: 16px;
-      padding: 14px 24px;
-      border-radius: 28px;
+    @keyframes urgencyPulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.7; }
+    }
+
+    /* CTA Button */
+    .cta-wrap {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+      margin-bottom: 16px;
+    }
+    .pulse-ring {
+      position: absolute;
+      inset: -4px;
+      border-radius: 36px;
+      border: 2px solid rgba(37, 211, 102, 0.6);
+      animation: ringPulse 1.6s ease-out infinite;
+    }
+    .pulse-ring:nth-child(2) { animation-delay: 0.5s; }
+    .pulse-ring:nth-child(3) { animation-delay: 1s; }
+    @keyframes ringPulse {
+      0%   { transform: scale(1); opacity: 0.8; }
+      100% { transform: scale(1.18); opacity: 0; }
+    }
+    .cta-btn {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      background: linear-gradient(135deg, #25d366 0%, #128C7E 100%);
+      color: #fff;
+      font-family: 'Poppins', sans-serif;
+      font-weight: 800;
+      font-size: 17px;
+      padding: 17px 24px;
+      border-radius: 32px;
       text-decoration: none;
-      transition: background 0.2s, transform 0.1s;
+      border: none;
+      cursor: pointer;
+      box-shadow:
+        0 0 0 0 rgba(37, 211, 102, 0.4),
+        0 8px 30px rgba(37, 211, 102, 0.35);
+      animation: btnGlow 2s ease-in-out infinite;
+      transition: transform 0.15s;
+      -webkit-tap-highlight-color: transparent;
     }
-    .btn:active {
-      transform: scale(0.98);
-      background: #20ba5a;
+    @keyframes btnGlow {
+      0%, 100% { box-shadow: 0 8px 30px rgba(37, 211, 102, 0.35); }
+      50%       { box-shadow: 0 8px 50px rgba(37, 211, 102, 0.6); }
     }
+    .cta-btn:active { transform: scale(0.97); }
+    .arrow-bounce {
+      display: inline-block;
+      animation: arrowBounce 0.8s ease-in-out infinite alternate;
+    }
+    @keyframes arrowBounce {
+      from { transform: translateX(0); }
+      to   { transform: translateX(5px); }
+    }
+
+    /* Social proof */
+    .proof {
+      color: rgba(255,255,255,0.35);
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    /* Divider */
+    .divider {
+      border: none;
+      border-top: 1px solid rgba(255,255,255,0.07);
+      margin: 20px 0 16px;
+    }
+
+    /* Skip link */
+    .skip {
+      display: block;
+      color: rgba(255,255,255,0.3);
+      font-size: 12px;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .skip:active { color: rgba(255,255,255,0.6); }
   </style>
 </head>
 <body>
+  <div class="particles" id="particles"></div>
+
   <div class="card">
-    <div class="wa-icon">
-      <svg viewBox="0 0 24 24"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2M12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 15 3.8 13.47 3.8 11.91C3.81 7.37 7.5 3.67 12.05 3.67M9.05 7.42C8.87 7.42 8.59 7.49 8.35 7.75C8.11 8.01 7.44 8.64 7.44 9.92C7.44 11.2 8.38 12.43 8.5 12.6C8.64 12.78 10.36 15.42 12.97 16.55C13.59 16.82 14.07 16.98 14.45 17.1C15.07 17.3 15.63 17.27 16.08 17.2C16.58 17.13 17.62 16.57 17.84 15.96C18.05 15.34 18.05 14.82 17.99 14.71C17.93 14.6 17.76 14.54 17.5 14.41C17.24 14.28 15.96 13.65 15.72 13.56C15.49 13.48 15.32 13.43 15.15 13.69C14.97 13.95 14.48 14.54 14.33 14.71C14.18 14.88 14.03 14.91 13.78 14.78C13.52 14.65 12.69 14.38 11.71 13.51C10.95 12.83 10.43 12 10.28 11.74C10.14 11.49 10.26 11.35 10.39 11.22C10.51 11.1 10.66 10.91 10.79 10.76C10.92 10.61 10.97 10.5 11.05 10.33C11.14 10.16 11.09 10.01 11.03 9.89C10.97 9.76 10.47 8.53 10.26 8.03C10.06 7.54 9.86 7.6 9.71 7.6C9.57 7.6 9.4 7.6 9.23 7.6H9.05Z"/></svg>
+    <div class="badge">🏆 Exclusive Offer — Limited Time</div>
+
+    <div class="iphone-wrap">
+      <div class="iphone">
+        <div class="iphone-screen">📱</div>
+        <div class="shine"></div>
+      </div>
+      <div class="stars-ring">
+        <span class="star" style="top:0;left:50%;transform:translate(-50%,-50%)">✨</span>
+        <span class="star" style="top:50%;right:0;transform:translate(50%,-50%)">⭐</span>
+        <span class="star" style="bottom:0;left:50%;transform:translate(-50%,50%)">✨</span>
+        <span class="star" style="top:50%;left:0;transform:translate(-50%,-50%)">⭐</span>
+      </div>
     </div>
-    <h2>Opening WhatsApp...</h2>
-    <p>Connecting you directly to chat. If WhatsApp does not open automatically, tap below.</p>
-    <a id="action-btn" class="btn" href="${nativeAppUrl}">Continue to WhatsApp</a>
+
+    <h1 class="headline">🎁 You're Getting a<br>FREE iPhone!</h1>
+    <p class="subtext">Your exclusive offer is ready.<br>Tap below to claim it on WhatsApp.</p>
+
+    <div class="urgency">
+      <span>⚡</span> Limited Offer — Act Now
+    </div>
+
+    <div class="cta-wrap">
+      <div class="pulse-ring"></div>
+      <div class="pulse-ring"></div>
+      <div class="pulse-ring"></div>
+      <a id="action-btn" class="cta-btn" href="${nativeAppUrl}">
+        👆 Tap Here to Claim
+        <span class="arrow-bounce">→</span>
+      </a>
+    </div>
+    <p class="proof">🔒 Secure · Verified · 100% Free</p>
+
+    <hr class="divider">
+    <a id="skip-btn" class="skip" href="${nativeAppUrl}">Already have WhatsApp? Open directly</a>
   </div>
 
   <script>
+    // Spawn floating particles
+    (function() {
+      var container = document.getElementById('particles');
+      var emojis = ['🎁','✨','⭐','🎉','💫','🏆','📱'];
+      for (var i = 0; i < 18; i++) {
+        var el = document.createElement('div');
+        el.className = 'particle';
+        var size = 12 + Math.random() * 16;
+        el.style.cssText = [
+          'width:' + size + 'px',
+          'height:' + size + 'px',
+          'left:' + (Math.random() * 100) + '%',
+          'animation-duration:' + (5 + Math.random() * 8) + 's',
+          'animation-delay:' + (Math.random() * 6) + 's',
+          'font-size:' + size + 'px',
+          'background:transparent',
+          'border-radius:0'
+        ].join(';');
+        el.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+        container.appendChild(el);
+      }
+    })();
+
+    // WhatsApp redirect logic
     (function () {
       var isAndroid = /Android/i.test(navigator.userAgent);
       var nativeUrl = ${JSON.stringify(nativeAppUrl)};
       var intentUrl = ${JSON.stringify(intentUrl)};
       var targetUrl = isAndroid ? intentUrl : nativeUrl;
       var btn = document.getElementById('action-btn');
+      var skip = document.getElementById('skip-btn');
       btn.href = targetUrl;
+      if (skip) skip.href = targetUrl;
 
       // Programmatically trigger launch
       try { btn.click(); } catch (_) {}
