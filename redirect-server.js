@@ -205,6 +205,48 @@ function buildWhatsAppUrl(phone, query = {}, defaultText = '') {
   return url;
 }
 
+function buildWhatsAppAppUrl(phone, query = {}, defaultText = '') {
+  const clean = String(phone).replace(/\D/g, '');
+  const text = query.text || query.msg || query.message || defaultText;
+  const params = new URLSearchParams({ phone: clean });
+  if (text) params.set('text', text);
+  return `whatsapp://send?${params.toString()}`;
+}
+
+function isMobileUserAgent(userAgent = '') {
+  return /Android|iPhone|iPad|iPod|Windows Phone|Mobile/i.test(userAgent);
+}
+
+function renderMobileWhatsAppHandoff(appUrl, webUrl) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Opening WhatsApp</title>
+</head>
+<body>
+  <p>Opening WhatsApp...</p>
+  <p><a href="${appUrl}" id="open-whatsapp">Tap here if WhatsApp does not open</a></p>
+  <script>
+    (function () {
+      var appUrl = ${JSON.stringify(appUrl)};
+      var webUrl = ${JSON.stringify(webUrl)};
+      var handedOff = false;
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) handedOff = true;
+      });
+      window.location.href = appUrl;
+      window.setTimeout(function () {
+        if (!handedOff && !document.hidden) window.location.replace(webUrl);
+      }, 1400);
+    })();
+  </script>
+</body>
+</html>`;
+}
+
 /**
  * HTML response when no WhatsApp number is active or ready.
  */
@@ -560,6 +602,11 @@ function createRedirectApp({
     const target = active?.phone ? active : fallback;
     if (target && target.phone) {
       const targetUrl = buildWhatsAppUrl(target.phone, req.query, defaultText);
+      if (isMobileUserAgent(req.get('user-agent'))) {
+        const appUrl = buildWhatsAppAppUrl(target.phone, req.query, defaultText);
+        res.set('Cache-Control', 'no-store');
+        return res.type('html').send(renderMobileWhatsAppHandoff(appUrl, targetUrl));
+      }
       // HTTP 302 Temporary Redirect so browsers don't cache stale numbers when failover rotates
       return res.redirect(302, targetUrl);
     }
@@ -644,6 +691,8 @@ module.exports = {
   createRedirectApp,
   resolveActiveWhatsAppNumber,
   buildWhatsAppUrl,
+  buildWhatsAppAppUrl,
+  isMobileUserAgent,
   renderWaitingPage,
   startRedirectServer
 };

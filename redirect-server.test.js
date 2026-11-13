@@ -6,6 +6,7 @@ const http = require('node:http');
 const {
   resolveActiveWhatsAppNumber,
   buildWhatsAppUrl,
+  buildWhatsAppAppUrl,
   createRedirectApp,
   startRedirectServer
 } = require('./redirect-server');
@@ -100,6 +101,13 @@ test('buildWhatsAppUrl creates clean wa.me links with optional query params', ()
   );
 });
 
+test('buildWhatsAppAppUrl creates a native WhatsApp link with prefilled text', () => {
+  assert.equal(
+    buildWhatsAppAppUrl('918949446687', { text: 'I want free iphone' }),
+    'whatsapp://send?phone=918949446687&text=I+want+free+iphone'
+  );
+});
+
 test('redirect web application redirects to active whatsapp number on port', async () => {
   let activePhone = '918949446687';
   const app = createRedirectApp({
@@ -134,6 +142,30 @@ test('redirect web application redirects to active whatsapp number on port', asy
     assert.equal(res4.status, 200);
     const body4 = await res4.text();
     assert.ok(body4.includes('Google Play'));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('redirect gateway uses a native app handoff for mobile browsers', async () => {
+  const app = createRedirectApp({
+    getActiveNumber: () => ({ phone: '918975616201' }),
+    defaultText: 'I want free iphone'
+  });
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/`, {
+      headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile' }
+    });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /text\/html/);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    const html = await res.text();
+    assert.match(html, /whatsapp:\/\/send\?phone=918975616201&text=I\+want\+free\+iphone/);
+    assert.match(html, /https:\/\/wa\.me\/918975616201\?text=I%20want%20free%20iphone/);
+    assert.match(html, /window\.location\.replace\(webUrl\)/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
