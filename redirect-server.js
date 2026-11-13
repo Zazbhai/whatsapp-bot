@@ -217,36 +217,6 @@ function isMobileUserAgent(userAgent = '') {
   return /Android|iPhone|iPad|iPod|Windows Phone|Mobile/i.test(userAgent);
 }
 
-function renderMobileWhatsAppHandoff(appUrl, webUrl) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer">
-  <title>Opening WhatsApp</title>
-</head>
-<body>
-  <p>Opening WhatsApp...</p>
-  <p><a href="${appUrl}" id="open-whatsapp">Tap here if WhatsApp does not open</a></p>
-  <script>
-    (function () {
-      var appUrl = ${JSON.stringify(appUrl)};
-      var webUrl = ${JSON.stringify(webUrl)};
-      var handedOff = false;
-      document.addEventListener('visibilitychange', function () {
-        if (document.hidden) handedOff = true;
-      });
-      window.location.href = appUrl;
-      window.setTimeout(function () {
-        if (!handedOff && !document.hidden) window.location.replace(webUrl);
-      }, 1400);
-    })();
-  </script>
-</body>
-</html>`;
-}
-
 /**
  * HTML response when no WhatsApp number is active or ready.
  */
@@ -605,7 +575,7 @@ function createRedirectApp({
       if (isMobileUserAgent(req.get('user-agent'))) {
         const appUrl = buildWhatsAppAppUrl(target.phone, req.query, defaultText);
         res.set('Cache-Control', 'no-store');
-        return res.type('html').send(renderMobileWhatsAppHandoff(appUrl, targetUrl));
+        return res.redirect(302, appUrl);
       }
       // HTTP 302 Temporary Redirect so browsers don't cache stale numbers when failover rotates
       return res.redirect(302, targetUrl);

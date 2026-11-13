@@ -147,7 +147,7 @@ test('redirect web application redirects to active whatsapp number on port', asy
   }
 });
 
-test('redirect gateway uses a native app handoff for mobile browsers', async () => {
+test('redirect gateway redirects mobile browsers directly to the native WhatsApp app', async () => {
   const app = createRedirectApp({
     getActiveNumber: () => ({ phone: '918975616201' }),
     defaultText: 'I want free iphone'
@@ -157,15 +157,12 @@ test('redirect gateway uses a native app handoff for mobile browsers', async () 
 
   try {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/`, {
+      redirect: 'manual',
       headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile' }
     });
-    assert.equal(res.status, 200);
-    assert.match(res.headers.get('content-type'), /text\/html/);
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get('location'), 'whatsapp://send?phone=918975616201&text=I+want+free+iphone');
     assert.equal(res.headers.get('cache-control'), 'no-store');
-    const html = await res.text();
-    assert.match(html, /whatsapp:\/\/send\?phone=918975616201&text=I\+want\+free\+iphone/);
-    assert.match(html, /https:\/\/wa\.me\/918975616201\?text=I%20want%20free%20iphone/);
-    assert.match(html, /window\.location\.replace\(webUrl\)/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
