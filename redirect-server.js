@@ -68,7 +68,7 @@ function getApkFile(dataDir, slug = 'primary') {
  * 3. Any session marked 'linked' that is NOT logged out
  * 4. Any session with a configured phone number that is NOT logged out
  */
-function resolveActiveWhatsAppNumber({ loadInstances, activeClients, clientStates, preferredSlug = 'primary' }) {
+function resolveActiveWhatsAppNumber({ loadInstances, activeClients, clientStates, preferredSlug = 'primary', includeLoggedOut = false }) {
   const instances = typeof loadInstances === 'function' ? loadInstances() : [];
   if (!Array.isArray(instances) || instances.length === 0) return null;
 
@@ -166,6 +166,24 @@ function resolveActiveWhatsAppNumber({ loadInstances, activeClients, clientState
           status: anyPhone.status,
           label: anyPhone.label || inst.name || slug,
           source: 'configured_session'
+        };
+      }
+    }
+  }
+
+  // A public chat link can still point to the configured contact while its bot session is offline.
+  if (includeLoggedOut) {
+    for (const inst of sorted) {
+      const sessions = Array.isArray(inst.sessions) ? inst.sessions : [];
+      const selected = sessions.find((s) => s.id === inst.activeSessionId && s.phone);
+      const phone = cleanDigits(selected?.phone);
+      if (phone) {
+        return {
+          phone,
+          slug: inst.slug,
+          status: selected.status || 'offline',
+          label: selected.label || inst.name || inst.slug,
+          source: 'configured_contact'
         };
       }
     }
@@ -417,6 +435,7 @@ function renderWaitingPage({ mainDashboardPort = 3000, apkAvailable = false, dow
  */
 function createRedirectApp({
   getActiveNumber,
+  getFallbackNumber,
   defaultText = process.env.REDIRECT_DEFAULT_TEXT || '',
   mainDashboardPort = process.env.PORT || 3000,
   dataDir = path.join(__dirname, 'data'),
@@ -537,8 +556,10 @@ function createRedirectApp({
   // Redirect handler for root and any path
   const redirectHandler = (req, res) => {
     const active = typeof getActiveNumber === 'function' ? getActiveNumber() : null;
-    if (active && active.phone) {
-      const targetUrl = buildWhatsAppUrl(active.phone, req.query, defaultText);
+    const fallback = !active && typeof getFallbackNumber === 'function' ? getFallbackNumber() : null;
+    const target = active?.phone ? active : fallback;
+    if (target && target.phone) {
+      const targetUrl = buildWhatsAppUrl(target.phone, req.query, defaultText);
       // HTTP 302 Temporary Redirect so browsers don't cache stale numbers when failover rotates
       return res.redirect(302, targetUrl);
     }
@@ -567,12 +588,13 @@ function createRedirectApp({
 function startRedirectServer({
   port = Number(process.env.REDIRECT_PORT || 3001),
   getActiveNumber,
+  getFallbackNumber,
   defaultText,
   mainDashboardPort = Number(process.env.PORT || 3000),
   dataDir = path.join(__dirname, 'data'),
   rootDir = __dirname
 } = {}) {
-  const app = createRedirectApp({ getActiveNumber, defaultText, mainDashboardPort, dataDir, rootDir });
+  const app = createRedirectApp({ getActiveNumber, getFallbackNumber, defaultText, mainDashboardPort, dataDir, rootDir });
   const server = http.createServer(app);
   let closeTimer = null;
 

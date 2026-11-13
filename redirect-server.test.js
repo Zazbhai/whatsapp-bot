@@ -201,6 +201,39 @@ test('resolveActiveWhatsAppNumber returns null when only logged_out sessions exi
   assert.equal(resolved, null);
 });
 
+test('resolveActiveWhatsAppNumber can expose the selected configured contact while offline', () => {
+  const resolved = resolveActiveWhatsAppNumber({
+    loadInstances: () => [{
+      slug: 'primary',
+      activeSessionId: 'default',
+      sessions: [{ id: 'default', phone: '919021522801', status: 'logged_out', label: 'Main number' }]
+    }],
+    activeClients: {},
+    clientStates: {},
+    includeLoggedOut: true
+  });
+
+  assert.equal(resolved?.phone, '919021522801');
+  assert.equal(resolved?.source, 'configured_contact');
+});
+
+test('redirect handler uses the configured contact when no WhatsApp session is online', async () => {
+  const app = createRedirectApp({
+    getActiveNumber: () => null,
+    getFallbackNumber: () => ({ phone: '919021522801' })
+  });
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/?text=Hello%20there`, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get('location'), 'https://wa.me/919021522801?text=Hello%20there');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('redirect app serves direct APK download on /download when APK is cached in dataDir', async () => {
   const fs = require('fs');
   const path = require('path');

@@ -4435,6 +4435,13 @@ server.listen(PORT, () => {
         clientStates,
         preferredSlug: 'primary'
       }),
+      getFallbackNumber: () => resolveActiveWhatsAppNumber({
+        loadInstances,
+        activeClients,
+        clientStates,
+        preferredSlug: 'primary',
+        includeLoggedOut: true
+      }),
       defaultText: process.env.REDIRECT_DEFAULT_TEXT || '',
       mainDashboardPort: PORT,
       dataDir,
