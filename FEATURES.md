@@ -97,7 +97,7 @@ Integrated permanent free-tier LLM providers from [awesome-free-llm-apis](https:
 
 Incoming audio is transcribed from the first message. Configured Hugging Face speech tokens are used first; if no real token exists or inference fails, the bot uses local CPU Whisper. Set `VOICE_STT_MODE=local` to always transcribe locally, `LOCAL_STT_MODEL=small` to select the Whisper model, and `LOCAL_STT_THREADS=2` to limit its CPU threads.
 
-Voice notes and requests such as `voice note bhejo` enable voice replies for that user, including Hinglish text. Hindi replies also retain their automatic voice behavior. Supertonic 3 generates Hindi speech, then FFmpeg converts it to mono OGG/Opus for WhatsApp. Speech generation happens before the WhatsApp send queue so a slow model cannot trigger session failover. Generation or media upload failures fall back to the text reply.
+Explicit requests such as `voice note bhejo` enable one voice reply. Repeated questions can also receive one voice reply so the user does not need to repeat themselves; ordinary messages and incoming voice notes do not permanently enable voice mode. The bot rewrites requested replies to natural Hindi in Devanagari before speech generation. Voice replies use the fixed female `F1` Supertonic 3 voice, with slower speech and higher synthesis quality. FFmpeg converts speech to mono OGG/Opus for WhatsApp. Speech generation happens before the WhatsApp send queue so a slow model cannot trigger session failover. Generation or media upload failures fall back to the text reply.
 
 On the bot server, install FFmpeg and use the Python executable configured in `PYTHON_PATH` (or `python3` when blank on Linux) to install and download the models once before restarting:
 

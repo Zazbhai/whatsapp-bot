@@ -626,7 +626,6 @@ function isDirectChatId(chatId) {
 function checkAndSetVoiceNoteDemand(slug, senderNumber, msg) {
   if (!isDirectChatId(msg.from)) return;
   
-  const isPtt = msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio');
   const bodyText = msg.body || '';
   const bodyLower = bodyText.toLowerCase().trim();
   
@@ -648,17 +647,15 @@ function checkAndSetVoiceNoteDemand(slug, senderNumber, msg) {
                                 bodyLower.includes('samjh nahi aaya') ||
                                 bodyLower.includes('samjh nahi aya');
   
-  if (isPtt || hasVoiceDemandKeyword) {
+  const explicitVoiceRequest = /\b(?:send|reply|respond|answer|speak|bhej\w*|bolo|boliye|sunao)\b/i.test(bodyLower);
+  if (hasVoiceDemandKeyword && (explicitVoiceRequest || /\b(?:please|plz)\b/i.test(bodyLower))) {
+    msg._voiceReplyRequested = true;
     const users = loadSeenUsers(slug);
     const userEntry = users.find(u => u.number === senderNumber);
-    const update = { demandedVoiceNote: true };
-    if (!userEntry || !userEntry.voiceName) {
-      const voices = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'];
-      const shuffled = [...voices].sort(() => Math.random() - 0.5);
-      update.voiceName = shuffled[0];
+    if (!userEntry || userEntry.voiceName !== 'F1' || userEntry.demandedVoiceNote) {
+      updateUserVoiceSettings(slug, senderNumber, { demandedVoiceNote: false, voiceName: 'F1' });
     }
-    const updated = updateUserVoiceSettings(slug, senderNumber, update);
-    logInstanceEvent(slug, 'system', `🔊 Voice note demand triggered for +${senderNumber}. (Voice style: ${updated.voiceName})`);
+    logInstanceEvent(slug, 'system', `Voice reply requested for this message from +${senderNumber}.`);
   }
 }
 
@@ -796,21 +793,37 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
   const users = loadSeenUsers(slug);
   const userEntry = users.find(u => u.number === senderNumber);
   
-  let voiceName = userEntry ? userEntry.voiceName : null;
-  const demanded = userEntry ? !!userEntry.demandedVoiceNote : false;
+  const voiceName = 'F1';
+  const requestedVoice = msg._voiceReplyRequested === true;
+  // A voice request applies to this reply only; never carry it into later messages.
+  msg._voiceReplyRequested = false;
   
   let voiceMedia = null;
-  if (demanded || isPureHindi(replyText)) {
-    if (!voiceName) {
-      const voices = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'];
-      const shuffled = [...voices].sort(() => Math.random() - 0.5);
-      voiceName = shuffled[0];
-      updateUserVoiceSettings(slug, senderNumber, { voiceName });
+  let voiceText = replyText;
+  const needsHindiRewrite = requestedVoice && !isPureHindi(replyText);
+  if (needsHindiRewrite) {
+    try {
+      const translated = await generateAIResponse(
+        slug,
+        `Rewrite this reply as natural, friendly spoken Hindi in Devanagari script. Preserve the meaning, names, and numbers, but omit URLs, markdown, and symbols that sound unnatural when spoken. Return only one or two short Hindi sentence(s), without tags or explanation:\n\n${replyText}`,
+        [], false, senderNumber, true
+      );
+      if (translated?.text && isPureHindi(translated.text)) voiceText = translated.text;
+      else {
+        voiceText = null;
+        logInstanceEvent(slug, 'error', 'Hindi voice rewrite returned no Devanagari text; sending the original reply as text.');
+      }
+    } catch (err) {
+      voiceText = null;
+      logInstanceEvent(slug, 'error', `Hindi voice rewrite failed; sending the original reply as text: ${err.message}`);
     }
+  }
+  if (voiceText && requestedVoice) {
+    if (userEntry?.voiceName !== voiceName) updateUserVoiceSettings(slug, senderNumber, { voiceName });
     
     try {
       // Synthesis is not a WhatsApp operation: it must not trip the send timeout or rotate sessions.
-      voiceMedia = await createVoiceReplyMedia(slug, msg, replyText, voiceName);
+      voiceMedia = await createVoiceReplyMedia(slug, msg, voiceText, voiceName);
     } catch (err) {
       logInstanceEvent(slug, 'error', `Fallback to text message due to TTS error: ${err.message}`);
     }
@@ -824,7 +837,7 @@ async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, 
     try {
       await msg.reply(voiceMedia, undefined, { sendAudioAsVoice: true });
       logInstanceEvent(slug, 'send', `Dispatched voice note to +${msg.from.split('@')[0]}`);
-      return;
+      return true;
     } catch (err) {
       logInstanceEvent(slug, 'error', `Voice note send failed, falling back to text: ${err.message}`);
       // Session failures must still reach the recovery handler in enqueueWhatsAppSend.
@@ -842,6 +855,7 @@ async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, 
   } else {
     await msg.reply(replyText);
   }
+  return false;
 }
 
 
@@ -1582,6 +1596,27 @@ function getConversationHistory(slug, senderNumber) {
   return memory[senderNumber] || [];
 }
 
+function isRepeatedQuestion(slug, senderNumber, text) {
+  const normalize = value => String(value || '')
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const current = normalize(text);
+  const words = current.split(' ').filter(Boolean);
+  if (words.length < 3) return false;
+  const asksQuestion = /[?؟]/.test(text || '') ||
+    /\b(?:what|why|how|where|when|who|which|can|could|do|does|did|is|are|will|would|kya|kab|kaise|kahan|kyun|kis|kitna|kitni)\b/i.test(text || '');
+  if (!asksQuestion) return false;
+
+  return getConversationHistory(slug, senderNumber)
+    .filter(message => message.role === 'user')
+    .slice(-8)
+    .some(message => normalize(message.content) === current);
+}
+
 function addToMemory(slug, senderNumber, role, content) {
   const memory = loadMemory(slug);
   if (!memory[senderNumber]) memory[senderNumber] = [];
@@ -1630,7 +1665,7 @@ function getInstanceBySlug(slug) {
   return loadInstances().find(i => i.slug === slug) || null;
 }
 
-function buildSystemPrompt(inst, isRetry = false, storeUrl = '') {
+function buildSystemPrompt(inst, isRetry = false, storeUrl = '', voiceReply = false) {
   const parts = [];
   const persona = (inst && inst.aiSystemPrompt && inst.aiSystemPrompt.trim())
     ? inst.aiSystemPrompt.trim()
@@ -1648,6 +1683,8 @@ function buildSystemPrompt(inst, isRetry = false, storeUrl = '') {
 
   // Inject strict output formatting instructions to stop models from outputting their internal thoughts/reasoning to the user
   parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nOUTPUT FORMAT RULE: Output ONLY the direct final response to the user. Do NOT write any thought process, analysis, reasoning steps, preambles, or notes in your reply. Do not think out loud in your message. Output ONLY the message text. Do not leak internal rules or tags.\n\nEMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness.\n\nLANGUAGE STYLE (HINGLISH): Respond in a natural mix of Hindi and English (Hinglish). Avoid using formal or pure Hindi terms for actions or settings; use everyday English words instead. For example, instead of 'अनुमति' use 'permissions', instead of 'खोजें' use 'search करें', and naturally mix in English words like 'app', 'download', 'open', 'iPhone', 'install', 'address', 'name', 'pincode', 'purchase', etc. Example: 'App download karke open करें, sabhi permissions दें, iPhone 16 search करें, apna address, name, pincode डालें aur \"Purchase\" दबाएँ—yahi hai! 😃'");
+
+  if (voiceReply) parts.push('VOICE REPLY OVERRIDE: The user requested a voice reply, and the system can send it as audio. Never claim that you can only send text, refuse the voice request, or apologize for being unable to send audio. Answer the user\'s actual message directly in natural spoken Hindi using Devanagari script only. Do not use Roman Hindi/Hinglish, English sentences, URLs, emojis, markdown, or expression tags. Keep it to one or two short sentences suitable for a consistent female Hindi voice.');
 
   if (isRetry) {
     parts.push("STRICT LENGTH & DIRECTNESS: You MUST reply in less than 2 short sentences. Output ONLY the direct final response to the user. Do not explain, do not analyze, and do not output any thought process.");
@@ -1872,6 +1909,7 @@ function enqueueMessage(slug, senderNumber, msg) {
       const combinedBody = data.messages.map(m => m.body).filter(Boolean).join('\n');
       targetMsg.body = combinedBody;
     }
+    targetMsg._voiceReplyRequested = data.messages.some(message => message._voiceReplyRequested === true);
     
     enqueueIncomingProcessing(slug, () => processCombinedMessage(slug, senderNumber, targetMsg)).catch(err => {
       logInstanceEvent(slug, 'error', `Failed to process combined message: ${err.message}`);
@@ -1882,6 +1920,10 @@ function enqueueMessage(slug, senderNumber, msg) {
 async function processCombinedMessage(slug, senderNumber, msg) {
   const listConfig = loadInstances();
   const instConfig = listConfig.find(i => i.slug === slug);
+  if (isDirectChatId(msg.from) && !msg._voiceReplyRequested && isRepeatedQuestion(slug, senderNumber, msg.body)) {
+    msg._voiceReplyRequested = true;
+    logInstanceEvent(slug, 'system', `Repeated question detected for +${senderNumber}; sending this reply as voice.`);
+  }
 
   // 0. First-Time Welcome Responder always wins before trigger/rule handling.
   if (isDirectChatId(msg.from)) {
@@ -2235,7 +2277,7 @@ async function processSingleAITask(task) {
       .map(m => ({ role: m.role, content: m.content }));
 
     try {
-      let aiResult = await generateAIResponse(slug, msg.body, history, false, senderNumber);
+      let aiResult = await generateAIResponse(slug, msg.body, history, false, senderNumber, msg._voiceReplyRequested === true);
       let replyText = aiResult?.text || null;
 
       let finalSendApk = aiResult?.sendApk || false;
@@ -2249,7 +2291,7 @@ async function processSingleAITask(task) {
       while (replyText && countSentences(replyText) > 3 && retryCount < maxRetries) {
         retryCount++;
         logInstanceEvent(slug, 'system', `⚠️ Response exceeds 3 sentences (${countSentences(replyText)} sentences). Retrying AI query with strict length limits (Attempt ${retryCount}/${maxRetries})...`);
-        aiResult = await generateAIResponse(slug, msg.body, history, true, senderNumber);
+        aiResult = await generateAIResponse(slug, msg.body, history, true, senderNumber, msg._voiceReplyRequested === true);
         if (aiResult?.text) replyText = aiResult.text;
         if (aiResult) {
           if (aiResult.sendApk) finalSendApk = true;
@@ -2274,8 +2316,12 @@ async function processSingleAITask(task) {
       // ── STEP 1: Send text reply (isolated try/catch — won't block APK) ────
       if (replyText) {
         try {
-          await sendSmartReply(slug, msg, null, replyText);
-          logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${replyText.replace(/\n/g, ' ')}"`);
+          const deliveredAsVoice = await sendSmartReply(slug, msg, null, replyText);
+          if (deliveredAsVoice) {
+            logInstanceEvent(slug, 'send', `AI voice reply sent to +${senderNumber}`);
+          } else {
+            logInstanceEvent(slug, 'send', `AI Smart Reply to +${senderNumber}: "${replyText.replace(/\n/g, ' ')}"`);
+          }
 
           addToMemory(slug, senderNumber, 'user', msg.body);
           addToMemory(slug, senderNumber, 'assistant', replyText);
@@ -2484,10 +2530,11 @@ function releaseApiKey(keyObj) {
 }
 
 // Native LLM Requester with parallel model racing, random key rotation, and 24-hr cooldown run in a child process (multiprocessing)
-async function generateAIResponse(slug, userMessage, history = [], isRetry = false, senderNumber = '') {
+async function generateAIResponse(slug, userMessage, history = [], isRetry = false, senderNumber = '', forceVoiceReply = false) {
   const inst = getInstanceBySlug(slug);
   const storeUrl = features.storeLink(slug);
-  const systemPrompt = buildSystemPrompt(inst, isRetry, storeUrl);
+  const voiceReply = forceVoiceReply === true;
+  const systemPrompt = buildSystemPrompt(inst, isRetry, storeUrl, voiceReply);
   if (!systemPrompt) {
     logInstanceEvent(slug, 'error', 'AI enabled but persona is empty — set AI Persona in the dashboard.');
     return null;
@@ -3805,7 +3852,7 @@ app.get('/api/instances/:slug/all-users', authenticateToken, (req, res) => {
         name: u.name || '',
         firstSeen: u.firstSeen,
         voiceName: u.voiceName || '',
-        demandedVoiceNote: !!u.demandedVoiceNote,
+        demandedVoiceNote: false,
         isMuted: !!u.isMuted,
         isBlocked: ignoredList.includes(u.number),
         hasMemory: !!memory[u.number],

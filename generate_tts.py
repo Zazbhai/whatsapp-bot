@@ -12,7 +12,8 @@ def main():
         sys.exit(1)
         
     text_arg = sys.argv[1]
-    voice_name = sys.argv[2]
+    # F1 is the stable female Hindi voice. Keep one voice for a consistent identity.
+    voice_name = 'F1'
     output_path = sys.argv[3]
     
     # Read text from file if the argument points to an existing text file
@@ -54,7 +55,14 @@ def main():
         
         # Synthesize audio. lang="hi" is forced as per user request:
         # "use only hindi/hi in language no other voice"
-        wav, duration = tts.synthesize(cleaned_text, voice_style=style, lang="hi")
+        wav, duration = tts.synthesize(
+            cleaned_text,
+            voice_style=style,
+            total_steps=12,
+            speed=0.95,
+            silence_duration=0.12,
+            lang="hi"
+        )
         
         # Save output
         tts.save_audio(wav, output_path)

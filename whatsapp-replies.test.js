@@ -198,6 +198,10 @@ test('buildSystemPrompt falls back to premade DEFAULT_AI_CONFIG when fields are 
   assert.ok(prompt.includes('One Shop app'));
   assert.ok(prompt.includes('RULES & PERSONA'));
   assert.ok(prompt.includes('[SEND_APK]'));
+
+  const voicePrompt = context.buildSystemPrompt(emptyInst, false, '', true);
+  assert.match(voicePrompt, /Never claim that you can only send text/);
+  assert.match(voicePrompt, /natural spoken Hindi using Devanagari script only/);
 });
 
 test('incoming messages from status@broadcast, broadcast lists, and newsletters are silently ignored and never queued', async () => {

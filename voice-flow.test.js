@@ -8,22 +8,27 @@ const { sanitizeReplyLinks } = require('./reply-links');
 const { downloadVoiceMedia, describeVoiceError, voiceMediaState } = require('./voice-runtime');
 const source = fs.readFileSync(require.resolve('./server'), 'utf8').replace(/\r\n/g, '\n');
 
-function replyHarness({ demanded = true, synthesize, uploadError } = {}) {
+function replyHarness({ demanded = true, synthesize, uploadError, voiceRewrite, isPureHindi = text => {
+  const devanagari = (text.match(/[\u0900-\u097F]/g) || []).length;
+  const latin = (text.match(/[a-z]/gi) || []).length;
+  return devanagari >= 5 && latin / (devanagari + latin) <= 0.5;
+} } = {}) {
   const events = [];
   const media = { data: 'voice-data' };
   const context = {
     activeClients: { main: {} },
-    loadSeenUsers: () => [{ number: '123', demandedVoiceNote: demanded, voiceName: 'F1' }],
-    isPureHindi: () => false,
+    loadSeenUsers: () => [{ number: '123', demandedVoiceNote: false, voiceName: 'F1' }],
+    isPureHindi,
     logInstanceEvent() {},
     isSessionFailure,
     sanitizeReplyLinks, features: { storeLink: () => 'https://store.customer.app/app/main' },
     createVoiceReplyMedia: async () => { events.push('synthesize'); return synthesize ? synthesize(context) : media; },
+    generateAIResponse: async (...args) => { events.push('voice-rewrite'); return voiceRewrite ? voiceRewrite(...args) : { text: 'ऐप डाउनलोड करके खोलें।' }; },
     enqueueWhatsAppSend: async (slug, task) => { events.push('queue'); return task(); }
   };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('async function sendSmartReply('), source.indexOf('async function resolveMuteChatCandidates')), context);
-  const msg = { from: '123@lid', reply: async (value, chatId, options) => {
+  const msg = { from: '123@lid', _voiceReplyRequested: demanded, reply: async (value, chatId, options) => {
     if (value === media && uploadError) throw uploadError;
     events.push(typeof value === 'string' ? 'text' : 'voice');
     if (value === media) assert.equal(options.sendAudioAsVoice, true);
@@ -32,9 +37,78 @@ function replyHarness({ demanded = true, synthesize, uploadError } = {}) {
 }
 
 test('requested Hinglish voice replies synthesize before entering the WhatsApp send queue', async () => {
+  let synthesizedText;
+  const harness = replyHarness({ synthesize: () => { synthesizedText = 'ऐप डाउनलोड करके खोलें।'; return { data: 'voice-data' }; } });
+  const deliveredAsVoice = await harness.send();
+  assert.equal(deliveredAsVoice, true);
+  assert.deepEqual(harness.events, ['voice-rewrite', 'synthesize', 'queue', 'voice']);
+  assert.equal(synthesizedText, 'ऐप डाउनलोड करके खोलें।');
+});
+
+test('a voice request is consumed after one reply', async () => {
   const harness = replyHarness();
   await harness.send();
-  assert.deepEqual(harness.events, ['synthesize', 'queue', 'voice']);
+  harness.events.length = 0;
+  await harness.context.sendSmartReply('main', { from: '123@lid', reply: async value => {
+    harness.events.push(typeof value === 'string' ? 'text' : 'voice');
+  } }, null, 'A later answer');
+  assert.deepEqual(harness.events, ['queue', 'text']);
+});
+
+test('repeated questions are eligible for one voice reply', () => {
+  const context = {
+    loadMemory: () => ({ '123': [{ role: 'user', content: 'Where is my order?' }] })
+  };
+  vm.createContext(context);
+  const start = source.indexOf('function getConversationHistory(');
+  const end = source.indexOf('function addToMemory(', start);
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(context.isRepeatedQuestion('main', '123', 'Where is my order?'), true);
+  assert.equal(context.isRepeatedQuestion('main', '123', 'Hi'), false);
+});
+
+test('only an explicit voice request enables voice mode; a PTT message alone does not', () => {
+  const start = source.indexOf('function checkAndSetVoiceNoteDemand(');
+  const end = source.indexOf('async function createVoiceReplyMedia', start);
+  const context = {
+    isDirectChatId: id => /@(c\.us|lid)$/.test(id),
+    loadSeenUsers: () => [],
+    updateUserVoiceSettings: () => ({ voiceName: 'F1' }),
+    logInstanceEvent() {}
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+  const voiceNote = { from: '123@lid', type: 'ptt', hasMedia: true, body: '' };
+  context.checkAndSetVoiceNoteDemand('main', '123', voiceNote);
+  assert.equal(voiceNote._voiceReplyRequested, undefined);
+  const explicit = { from: '123@lid', type: 'chat', hasMedia: false, body: 'Please send a voice note' };
+  context.checkAndSetVoiceNoteDemand('main', '123', explicit);
+  assert.equal(explicit._voiceReplyRequested, true);
+});
+
+test('failed Hindi rewrite falls back to text instead of speaking Hinglish', async () => {
+  let synthesized = false;
+  const harness = replyHarness({
+    voiceRewrite: () => null,
+    synthesize: () => { synthesized = true; return { data: 'voice-data' }; }
+  });
+  await harness.send();
+  assert.equal(synthesized, false);
+  assert.deepEqual(harness.events, ['voice-rewrite', 'queue', 'text']);
+});
+
+test('automatic Hindi replies stay text until voice is requested', async () => {
+  let selectedVoice;
+  const harness = replyHarness({
+    demanded: false,
+    isPureHindi: text => /[\u0900-\u097F]/.test(text),
+    synthesize: () => ({ data: 'voice-data' })
+  });
+  harness.context.createVoiceReplyMedia = async (slug, msg, text, voiceName) => { selectedVoice = voiceName; return { data: 'voice-data' }; };
+  const start = source.indexOf('async function sendSmartReply(');
+  assert.match(source.slice(start, source.indexOf('async function sendSmartReplyNow', start)), /const voiceName = 'F1'/);
+  await harness.context.sendSmartReply('main', { from: '123@lid', reply: async () => {} }, null, 'नमस्ते, कैसे हैं?');
+  assert.equal(selectedVoice, undefined);
 });
 
 test('normal Latin text replies remain text when voice was not requested', async () => {
@@ -46,22 +120,22 @@ test('normal Latin text replies remain text when voice was not requested', async
 test('speech synthesis errors preserve the text reply', async () => {
   const harness = replyHarness({ synthesize: () => { throw new Error('Missing speech model'); } });
   await harness.send();
-  assert.deepEqual(harness.events, ['synthesize', 'queue', 'text']);
+  assert.deepEqual(harness.events, ['voice-rewrite', 'synthesize', 'queue', 'text']);
 });
 
 test('a session change during synthesis cannot replay the reply on the replacement client', async () => {
   const harness = replyHarness({ synthesize: context => { context.activeClients.main = {}; return {}; } });
   await assert.rejects(harness.send(), /Session changed while generating reply/);
-  assert.deepEqual(harness.events, ['synthesize']);
+  assert.deepEqual(harness.events, ['voice-rewrite', 'synthesize']);
 });
 
 test('voice upload errors fall back to text but session failures reach recovery', async () => {
   const upload = replyHarness({ uploadError: new Error('Unsupported media') });
   await upload.send();
-  assert.deepEqual(upload.events, ['synthesize', 'queue', 'text']);
+  assert.deepEqual(upload.events, ['voice-rewrite', 'synthesize', 'queue', 'text']);
   const session = replyHarness({ uploadError: new Error('Target closed') });
   await assert.rejects(session.send(), /Target closed/);
-  assert.deepEqual(session.events, ['synthesize', 'queue']);
+  assert.deepEqual(session.events, ['voice-rewrite', 'synthesize', 'queue']);
 });
 
 function incomingHarness(transcription) {
