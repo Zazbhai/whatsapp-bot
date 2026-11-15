@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const { isSessionFailure } = require('./session-health');
 const { sanitizeReplyLinks } = require('./reply-links');
+const { downloadVoiceMedia, describeVoiceError, voiceMediaState } = require('./voice-runtime');
 const source = fs.readFileSync(require.resolve('./server'), 'utf8').replace(/\r\n/g, '\n');
 
 function replyHarness({ demanded = true, synthesize, uploadError } = {}) {
@@ -82,6 +83,7 @@ function incomingHarness(transcription) {
     markVoiceNoteTextPrompted: () => { prompted++; return true; },
     enqueueWhatsAppSend: async (slug, task) => task(),
     transcribeAudio: async () => { attempts++; return transcription; },
+    downloadVoiceMedia, describeVoiceError, voiceMediaState,
     enqueueMessage: (slug, number, msg) => queued.push(msg.body)
   };
   vm.createContext(context);

@@ -3,7 +3,7 @@ const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
 const { exec, fork } = require('child_process');
-const { resolvePython, runVoiceProcess } = require('./voice-runtime');
+const { resolvePython, runVoiceProcess, describeVoiceError, downloadVoiceMedia, voiceMediaState } = require('./voice-runtime');
 const { sanitizeReplyLinks, buildAppLinkInstructions } = require('./reply-links');
 const {
   PROVIDERS,
@@ -3146,9 +3146,16 @@ function initInstanceClient(slug, forcedSessionId) {
     
     if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
       const senderNumber = msg.from.split('@')[0];
+      let voiceStage = 'WhatsApp audio download';
       try {
         logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Starting speech recognition...`);
-        const media = await msg.downloadMedia();
+        const media = await downloadVoiceMedia(msg, {
+          isCurrent: () => activeClients[slug] === client,
+          onRetry: (attempt, error) => logInstanceEvent(slug, 'system',
+            `WhatsApp voice download attempt ${attempt}/3 failed; retrying in 1 second: ${describeVoiceError(error)}`)
+        });
+        voiceStage = 'speech recognition';
+        logInstanceEvent(slug, 'system', `WhatsApp audio downloaded (${media.mimetype || 'unknown format'}); starting transcription.`);
         if (media && media.data) {
           transcribedText = await transcribeAudio(slug, media);
           if (transcribedText) {
@@ -3159,7 +3166,13 @@ function initInstanceClient(slug, forcedSessionId) {
           }
         }
       } catch (err) {
-        logInstanceEvent(slug, 'error', `Voice note speech recognition failed: ${err.message}`);
+        logInstanceEvent(slug, 'error', `Voice note failed during ${voiceStage}: ${describeVoiceError(err)}`);
+        // Read only non-sensitive state fields; never log media URLs, encryption keys, or audio data.
+        if (voiceStage === 'WhatsApp audio download' && activeClients[slug] === client) {
+          voiceMediaState(msg).then(state => {
+            logInstanceEvent(slug, 'system', `WhatsApp voice media state: ${JSON.stringify(state)}`);
+          }).catch(error => logInstanceEvent(slug, 'error', `Voice media state lookup failed: ${describeVoiceError(error)}`));
+        }
       }
       if (activeClients[slug] !== client) return;
       if (!transcribedText) {
