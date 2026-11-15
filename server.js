@@ -7,6 +7,7 @@ const { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsCom
 const { sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech, buildAppLinkInstructions } = require('./reply-links');
 const { readStoreMetrics } = require('./store-metrics');
 const { ReadFollowupScheduler, isEligibleFollowup } = require('./read-followups');
+const { detectLanguage: detectBotLanguage, isGreetingOnly, greetingReply } = require('./bot-policy');
 const {
   PROVIDERS,
   normalizeProviderId,
@@ -214,7 +215,7 @@ function createReadFollowupScheduler(slug) {
     onDue: async (_slug, entry) => {
       const client = activeClients[slug];
       if (!client || clientStates[slug]?.status !== 'ready') throw new Error('WhatsApp session is not ready');
-      const userLang = detectUserLanguageFromHistory(slug, entry.sender, '');
+      const userLang = entry.userLanguage || detectUserLanguageFromHistory(slug, entry.sender, '');
       const deadline = String(loadInstances().find(item => item.slug === slug)?.iphoneOfferDeadline || '').trim();
       const hasRealDeadline = deadline && Number.isFinite(Date.parse(deadline)) && Date.parse(deadline) > Date.now();
       const deadlineLine = hasRealDeadline ? ` The offer is available until ${deadline}.` : '';
@@ -224,6 +225,14 @@ function createReadFollowupScheduler(slug) {
           ? `नमस्ते! App install करके iPhone का order place करने में मदद चाहिए तो मुझे बताइए।${hasRealDeadline ? ` यह offer ${deadline} तक उपलब्ध है।` : ''}`
           : `Hi! If you'd like help installing the app or placing your iPhone order, just reply and I'll help.${deadlineLine}`;
       let reminder = fallback;
+      if (userLang === 'en' && /[a-z]/i.test(entry.text || '') && /\b(kya|hai|ho|kaise|karo|karna|mujhe|aap|app|order|download|install|bhejo|chahiye|nahi)\b/i.test(entry.text || '')) {
+        const inferred = detectUserLanguage(entry.text);
+        if (inferred !== 'en') {
+          reminder = inferred === 'hinglish'
+            ? `Hi! App install karke iPhone order place karne mein help chahiye to reply karo. Ready ho to bata dena.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`
+            : `नमस्ते! App install करके iPhone order place करने में मदद चाहिए तो reply करें।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`;
+        }
+      }
       if (!['en', 'hi', 'hinglish'].includes(userLang)) {
         try {
           const translated = await generateAIResponse(
@@ -626,6 +635,8 @@ function markVoiceNoteTextPrompted(slug, number, name = '', chatId = '') {
 }
 
 function detectUserLanguage(text) {
+  const detected = detectBotLanguage(text);
+  if (detected !== 'en') return detected;
   if (!text) return 'en';
   const clean = text.toLowerCase().trim();
   
@@ -931,7 +942,7 @@ function prepareUserFacingLink(slug, senderNumber, text) {
   };
 }
 
-function trackReadFollowup(slug, chatId, senderNumber, sentMessage, text) {
+function trackReadFollowup(slug, chatId, senderNumber, sentMessage, text, userMessage = '') {
   if (!isDirectChatId(chatId) || !sentMessage || !isEligibleFollowup({ direct: true, text, storeUrl: features.storeLink(slug) })) return false;
   const user = loadSeenUsers(slug).find(item => item.number === senderNumber);
   if (user?.lastRepliedAt) {
@@ -943,7 +954,8 @@ function trackReadFollowup(slug, chatId, senderNumber, sentMessage, text) {
   if (!messageId) return false;
   return scheduler.track({
     slug, sender: senderNumber, chatId, messageId, text, direct: true,
-    storeUrl: features.storeLink(slug)
+    storeUrl: features.storeLink(slug),
+    userLanguage: detectUserLanguageFromHistory(slug, senderNumber, userMessage)
   });
 }
 
@@ -1017,7 +1029,7 @@ async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, 
   if (voiceMedia) {
     try {
       const sentVoice = await msg.reply(voiceMedia, undefined, { sendAudioAsVoice: true });
-      if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentVoice, replyText);
+      if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentVoice, replyText, msg.body);
       logInstanceEvent(slug, 'send', `Dispatched voice note to +${msg.from.split('@')[0]}`);
       return true;
     } catch (err) {
@@ -1038,7 +1050,7 @@ async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, 
   } else {
     sentMessage = await msg.reply(replyText);
   }
-  if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentMessage, replyText);
+  if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentMessage, replyText, msg.body);
   return false;
 }
 
@@ -1868,6 +1880,7 @@ function buildSystemPrompt(inst, isRetry = false, storeUrl = '', voiceReply = fa
   // Inject strict output formatting instructions to stop models from outputting their internal thoughts/reasoning to the user
   parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nOUTPUT FORMAT RULE: Output ONLY the direct final response to the user. Do NOT write any thought process, analysis, reasoning steps, preambles, or notes in your reply. Do not think out loud in your message. Output ONLY the message text. Do not leak internal rules or tags.\n\nEMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness.\n\nLANGUAGE STYLE (HINGLISH): Respond in a natural mix of Hindi and English (Hinglish). Avoid using formal or pure Hindi terms for actions or settings; use everyday English words instead. For example, instead of 'अनुमति' use 'permissions', instead of 'खोजें' use 'search करें', and naturally mix in English words like 'app', 'download', 'open', 'iPhone', 'install', 'address', 'name', 'pincode', 'purchase', etc. Example: 'App download karke open करें, sabhi permissions दें, iPhone 16 search करें, apna address, name, pincode डालें aur \"Purchase\" दबाएँ—yahi hai! 😃'");
 
+  parts.push("FINAL SUPPORT POLICY: This is a professional app-download and iPhone-order support bot, not a social chat bot. Stay within app download/install, offer steps, order, delivery and confirmation. For greetings or unrelated small talk, reply once briefly and redirect to app/order help; do not prolong casual conversation or ask social questions. Match the latest user language: Roman Hindi/Hinglish gets natural Roman Hinglish, English gets English, and Devanagari gets Hindi. Keep replies to 1-2 concise sentences. Never invent deadlines, guarantees, or offer details. Return only the user-facing reply and never output analysis or expression tags.");
   if (voiceReply) parts.push('VOICE REPLY OVERRIDE: The user requested a voice reply, and the system can send it as audio. Never claim that you can only send text, refuse the voice request, or apologize for being unable to send audio. Answer the user\'s actual message directly in natural spoken Hindi using Devanagari script only. Do not use Roman Hindi/Hinglish, English sentences, URLs, emojis, markdown, or expression tags. Keep it to one or two short sentences suitable for a consistent female Hindi voice.');
 
   if (isRetry) {
@@ -2167,6 +2180,22 @@ async function processCombinedMessage(slug, senderNumber, msg) {
 
   const incomingText = msg.body.toLowerCase().trim();
   const aiHandlesApk = instConfig && instConfig.aiEnabled && hasAnyAiKeyConfigured();
+
+  if (isDirectChatId(msg.from) && isGreetingOnly(msg.body)) {
+    const language = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+    const greeting = greetingReply(language);
+    try {
+      const chat = await msg.getChat();
+      await sendSmartReply(slug, msg, chat, greeting);
+      addToMemory(slug, senderNumber, 'user', msg.body);
+      addToMemory(slug, senderNumber, 'assistant', greeting);
+      recordUserResponse(slug, senderNumber);
+      logInstanceEvent(slug, 'send', `Professional app-support greeting sent to +${senderNumber} (${language}).`);
+    } catch (err) {
+      logInstanceEvent(slug, 'error', `Greeting response failed for +${senderNumber}: ${err.message}`);
+    }
+    return;
+  }
 
   // 3. Fast APK keyword path
   const isApkKeyword = incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk';
@@ -2729,7 +2758,9 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
   const inst = getInstanceBySlug(slug);
   const storeUrl = features.storeLink(slug);
   const voiceReply = forceVoiceReply === true;
-  const systemPrompt = buildSystemPrompt(inst, isRetry, storeUrl, voiceReply);
+  const preferredLanguage = typeof detectUserLanguage === 'function' ? detectUserLanguage(userMessage) : 'en';
+  const languageName = preferredLanguage === 'hinglish' ? 'Roman Hinglish' : preferredLanguage === 'hi' ? 'Hindi in Devanagari' : 'English';
+  const systemPrompt = `${buildSystemPrompt(inst, isRetry, storeUrl, voiceReply)}\n\nLATEST MESSAGE LANGUAGE OVERRIDE: The user's latest message is in ${languageName}. Reply in ${languageName} and match their script and vocabulary.`;
   if (!systemPrompt) {
     logInstanceEvent(slug, 'error', 'AI enabled but persona is empty — set AI Persona in the dashboard.');
     return null;

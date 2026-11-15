@@ -54,14 +54,14 @@ class ReadFollowupScheduler {
     }
   }
 
-  track({ slug, sender, chatId, messageId, text, direct, storeUrl }) {
+  track({ slug, sender, chatId, messageId, text, direct, storeUrl, userLanguage }) {
     if (!messageId || !sender || !isEligibleFollowup({ direct, text, storeUrl })) return false;
     const state = this.state(slug);
     if ((state.reminderCountByUser[sender] || 0) >= this.maxReminders) return false;
     if ((state.lastSentByUser[sender] || 0) > this.now()) return false;
     if (state.lastSentByUser[sender] && this.now() - state.lastSentByUser[sender] < this.cooldownMs) return false;
     if (Object.values(state.pending).some(entry => entry.sender === sender && !entry.cancelled && !entry.sentAt)) return false;
-    state.pending[messageId] = { sender, chatId, createdAt: this.now(), readAt: null, dueAt: null, cancelled: false, sentAt: null };
+    state.pending[messageId] = { sender, chatId, userLanguage: userLanguage || '', createdAt: this.now(), readAt: null, dueAt: null, cancelled: false, sentAt: null };
     this.persist(slug);
     return true;
   }

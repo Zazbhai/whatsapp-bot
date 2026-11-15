@@ -331,6 +331,7 @@ activeInstanceSelect.addEventListener('change', () => {
   
   // 3. Reload active configuration metrics from the new instance
   syncActiveInstanceData();
+  renderInstances();
   showToast(`Switched to: "${activeInstanceSlug}"`, 'info');
 });
 
@@ -1238,7 +1239,7 @@ async function fetchInstances() {
 }
 
 function populateHeaderDropdown() {
-  const currentVal = activeInstanceSelect.value || activeInstanceSlug;
+  const currentVal = activeInstanceSlug || localStorage.getItem('activeInstanceSlug') || activeInstanceSelect.value;
   activeInstanceSelect.innerHTML = '';
   
   allInstances.forEach(inst => {
@@ -1254,7 +1255,10 @@ function populateHeaderDropdown() {
   } else if (allInstances.length > 0) {
     activeInstanceSelect.value = allInstances[0].slug;
     activeInstanceSlug = allInstances[0].slug;
+    localStorage.setItem('activeInstanceSlug', activeInstanceSlug);
   }
+  activeInstanceSelect.disabled = allInstances.length < 2;
+  activeInstanceSelect.title = allInstances.length < 2 ? 'Create a second bot instance to switch between bots.' : 'Select the bot instance to manage.';
 }
 
 function renderInstances() {
@@ -1302,6 +1306,9 @@ function renderInstances() {
           </span>
         </td>
         <td style="padding: 16px 20px; text-align: right;">
+          <button class="btn btn-secondary btn-sm" onclick="selectBotInstance('${inst.slug}')" ${isActive ? 'disabled style="opacity: 0.55; cursor: default; margin-right: 8px;"' : 'style="margin-right: 8px;"'} title="${isActive ? 'Currently selected' : 'Switch dashboard to this bot'}">
+            <span>${isActive ? 'Selected' : 'Select'}</span>
+          </button>
           <button class="btn btn-danger btn-sm" onclick="deleteInstance('${inst.slug}')" ${allInstances.length <= 1 ? 'disabled style="opacity: 0.4; cursor: not-allowed;"' : ''} title="${allInstances.length <= 1 ? 'You must keep at least one active WhatsApp bot instance' : 'Delete bot instance'}">
             <i data-lucide="trash-2" style="width: 14px; height: 14px; margin-right: 4px;"></i>
             <span>Delete</span>
@@ -1314,6 +1321,19 @@ function renderInstances() {
 
   lucide.createIcons();
 }
+
+window.selectBotInstance = function(slug) {
+  if (!allInstances.some(inst => inst.slug === slug)) {
+    showToast('That bot instance is no longer available. Refreshing the list.', 'error');
+    fetchInstances();
+    return;
+  }
+  if (activeInstanceSelect.value !== slug) {
+    activeInstanceSelect.value = slug;
+    activeInstanceSelect.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  switchTab('dashboard');
+};
 
 instanceSearchInput.addEventListener('input', renderInstances);
 
@@ -1365,7 +1385,11 @@ instanceForm.addEventListener('submit', async (e) => {
     if (res.ok) {
       closeInstanceModal();
       showToast(`Bot instance "${name}" created successfully! Starting engine in the background...`, 'success');
-      fetchInstances();
+      activeInstanceSlug = slug;
+      localStorage.setItem('activeInstanceSlug', slug);
+      await fetchInstances();
+      if (socket) socket.emit('join_instance', slug);
+      await syncActiveInstanceData();
     } else {
       const errData = await res.json();
       showToast(errData.error || 'Failed to create bot instance.', 'error');
