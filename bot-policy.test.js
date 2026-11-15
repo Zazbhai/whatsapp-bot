@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation, requestedAppAsset, prepareAppRequestReply } = require('./bot-policy');
+const { detectLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation, requestedAppAsset, prepareAppRequestReply, isUnorderedInquiry } = require('./bot-policy');
 
 test('detects Roman Hinglish and Devanagari Hindi separately from English', () => {
   assert.equal(detectLanguage('hi kaise ho'), 'hinglish');
@@ -42,4 +42,62 @@ test('detects app asset requests and guarantees a link or APK notice', () => {
   assert.equal(prepareAppRequestReply('Sure, here is the link https://old.example.net/app', 'send the APK', {
     apkAvailable: true, language: 'hinglish'
   }), 'App file attach ki hai; download link APK ke saath hai.');
+});
+
+test('isUnorderedInquiry detects false-positive un-ordered queries across English, Hinglish, Hindi, and Punjabi', () => {
+  // English inquiries
+  assert.equal(isUnorderedInquiry('how to buy'), true);
+  assert.equal(isUnorderedInquiry('whats the process'), true);
+  assert.equal(isUnorderedInquiry('what is the process'), true);
+  assert.equal(isUnorderedInquiry('what are the steps'), true);
+  assert.equal(isUnorderedInquiry("haven't ordered yet"), true);
+  assert.equal(isUnorderedInquiry("where to buy"), true);
+  assert.equal(isUnorderedInquiry("link not working"), true);
+
+  // Hinglish inquiries
+  assert.equal(isUnorderedInquiry('kaise buy kare'), true);
+  assert.equal(isUnorderedInquiry('order kaise karna hai'), true);
+  assert.equal(isUnorderedInquiry('order nahi ho raha'), true);
+  assert.equal(isUnorderedInquiry('process kya hai'), true);
+  assert.equal(isUnorderedInquiry('kaha se buy kare'), true);
+  assert.equal(isUnorderedInquiry('app download nahi ho raha'), true);
+  assert.equal(isUnorderedInquiry('paise mang raha hai'), true);
+  assert.equal(isUnorderedInquiry('address kaise daale'), true);
+
+  // Hindi (Devanagari) inquiries
+  assert.equal(isUnorderedInquiry('ऑर्डर कैसे करें'), true);
+  assert.equal(isUnorderedInquiry('प्रोसेस क्या है'), true);
+  assert.equal(isUnorderedInquiry('ऑर्डर नहीं हुआ'), true);
+  assert.equal(isUnorderedInquiry('ऐप डाउनलोड नहीं हो रहा'), true);
+  assert.equal(isUnorderedInquiry('कैसे खरीदें'), true);
+  assert.equal(isUnorderedInquiry('पैसे मांग रहा है'), true);
+
+  // Punjabi (Roman) inquiries
+  assert.equal(isUnorderedInquiry('kive buy kariye'), true);
+  assert.equal(isUnorderedInquiry('kiddan order karna'), true);
+  assert.equal(isUnorderedInquiry('process ki hai'), true);
+  assert.equal(isUnorderedInquiry('order ni hoya'), true);
+  assert.equal(isUnorderedInquiry('tareeka dasso'), true);
+  assert.equal(isUnorderedInquiry('kive khareediye'), true);
+  assert.equal(isUnorderedInquiry('kittho milega'), true);
+
+  // Punjabi (Gurmukhi) inquiries
+  assert.equal(isUnorderedInquiry('ਕਿਵੇਂ ਖਰੀਦੀਏ'), true);
+  assert.equal(isUnorderedInquiry('ਕਿਵੇਂ ਆਰਡਰ ਕਰਨਾ'), true);
+  assert.equal(isUnorderedInquiry('ਪ੍ਰੋਸੈਸ ਕੀ ਹੈ'), true);
+  assert.equal(isUnorderedInquiry('ਆਰਡਰ ਨਹੀਂ ਹੋਇਆ'), true);
+  assert.equal(isUnorderedInquiry('ਲਿੰਕ ਭੇਜੋ'), true);
+
+  // Negative cases (casual / delivery / tracking queries should remain silent)
+  assert.equal(isUnorderedInquiry('ok'), false);
+  assert.equal(isUnorderedInquiry('thanks'), false);
+  assert.equal(isUnorderedInquiry('thank you'), false);
+  assert.equal(isUnorderedInquiry('done'), false);
+  assert.equal(isUnorderedInquiry('thik hai'), false);
+  assert.equal(isUnorderedInquiry('haan'), false);
+  assert.equal(isUnorderedInquiry('when will delivery come'), false);
+  assert.equal(isUnorderedInquiry('kab tak aayega'), false);
+  assert.equal(isUnorderedInquiry('ਠੀਕ ਹੈ'), false);
+  assert.equal(isUnorderedInquiry('ਧੰਨਵਾਦ'), false);
+  assert.equal(isUnorderedInquiry('डिलीवरी कब होगी'), false);
 });

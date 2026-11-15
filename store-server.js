@@ -492,6 +492,16 @@ function createStoreApp({
     res.status(404).send('APK file not found on disk.');
   });
 
+  // URL Shortener redirect route: /s/:code
+  app.get('/s/:code', (req, res) => {
+    try {
+      const { resolveShortCode } = require('./link-shortener');
+      const target = resolveShortCode(req.params.code);
+      if (target) return res.redirect(302, target);
+    } catch (_) {}
+    return res.redirect(302, '/');
+  });
+
   // All other GET routes unconditionally serve the Google Play Store page
   app.get('*', (req, res) => {
     const storeHtmlPath = path.join(rootDir, 'public', 'store.html');

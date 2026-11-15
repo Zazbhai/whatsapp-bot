@@ -967,6 +967,16 @@ function createRedirectApp({
     });
   });
 
+  // URL Shortener redirect route: /s/:code
+  app.get('/s/:code', (req, res) => {
+    try {
+      const { resolveShortCode } = require('./link-shortener');
+      const target = resolveShortCode(req.params.code);
+      if (target) return res.redirect(302, target);
+    } catch (_) {}
+    return res.redirect(302, '/');
+  });
+
   // Redirect handler for root and any path
   const redirectHandler = (req, res) => {
     const active = typeof getActiveNumber === 'function' ? getActiveNumber() : null;

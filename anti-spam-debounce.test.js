@@ -206,3 +206,63 @@ test('sendDirectMessage sends without quoting or tagging by default, but respect
   assert.equal(sentClientMessages[0].content, 'Reply tagging question');
   assert.equal(sentClientMessages[0].options.quotedMessageId, 'target-question-123', 'Must set quotedMessageId to target message');
 });
+
+test('false-positive order recovery: unmarks ordered state and restores pipeline on un-ordered inquiry, stays silent otherwise', () => {
+  const { isUnorderedInquiry } = require('./bot-policy');
+
+  let ignored = ['919999999999'];
+  let seen = [{ number: '919999999999', ordered: true, orderedTime: Date.now() }];
+  const logs = [];
+
+  function simulateIncomingCheck(msg) {
+    const slug = 'primary';
+    const senderNumber = msg.from.split('@')[0];
+    const isDirectChatId = id => !id.includes('@g.us');
+    const users = isDirectChatId(msg.from) ? seen : [];
+    const userEntry = users.find(u => u.number === senderNumber);
+    const isOrderedUser = Boolean(userEntry?.ordered);
+    const isIgnored = ignored.includes(senderNumber);
+
+    if (isIgnored || isOrderedUser) {
+      if (isUnorderedInquiry(msg.body)) {
+        logs.push(`RESTORED: ${msg.body}`);
+        if (isOrderedUser) {
+          userEntry.ordered = false;
+          delete userEntry.orderedTime;
+        }
+        if (isIgnored) {
+          ignored = ignored.filter(n => n !== senderNumber);
+        }
+        return 'PROCEED_TO_PIPELINE';
+      } else {
+        logs.push(`SILENT_DROP: ${msg.body}`);
+        return 'SILENT_DROP';
+      }
+    }
+    return 'PROCEED_TO_PIPELINE';
+  }
+
+  // 1. Casual acknowledgement messages must be SILENTLY DROPPED (no response, remains ordered/ignored)
+  const result1 = simulateIncomingCheck({ from: '919999999999@c.us', body: 'ok' });
+  assert.equal(result1, 'SILENT_DROP');
+  assert.equal(seen[0].ordered, true);
+  assert.ok(ignored.includes('919999999999'));
+
+  const result2 = simulateIncomingCheck({ from: '919999999999@c.us', body: 'thanks bhai' });
+  assert.equal(result2, 'SILENT_DROP');
+  assert.equal(seen[0].ordered, true);
+
+  const result3 = simulateIncomingCheck({ from: '919999999999@c.us', body: 'when will delivery come' });
+  assert.equal(result3, 'SILENT_DROP');
+  assert.equal(seen[0].ordered, true);
+
+  // 2. Multilingual inquiry indicating user hasn't ordered yet -> AUTOMATIC RECOVERY
+  const result4 = simulateIncomingCheck({ from: '919999999999@c.us', body: 'whats the process' });
+  assert.equal(result4, 'PROCEED_TO_PIPELINE');
+  assert.equal(seen[0].ordered, false, 'User must be unmarked as ordered');
+  assert.equal(ignored.includes('919999999999'), false, 'User must be removed from ignored list');
+
+  // Verify logging
+  assert.ok(logs.includes('SILENT_DROP: ok'));
+  assert.ok(logs.includes('RESTORED: whats the process'));
+});

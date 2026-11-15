@@ -2676,83 +2676,167 @@ if (addKeyForm) {
 // ============================================================
 let _copySettingsSrcSlug = null;
 
-window.openCopySettingsModal = function(srcSlug) {
+window.openCopySettingsModal = async function(srcSlug) {
   _copySettingsSrcSlug = srcSlug;
-  const srcInst = allInstances.find(i => i.slug === srcSlug);
-  document.getElementById('copy-settings-src-name').textContent = srcInst ? srcInst.name : srcSlug;
+  const modal = document.getElementById('copy-settings-modal');
+  if (!modal) return;
+
+  // Ensure instances list is populated
+  if (!allInstances || allInstances.length === 0) {
+    try {
+      const res = await apiFetch('/api/instances');
+      if (res.ok) allInstances = await res.json();
+    } catch (_) {}
+  }
+
+  const srcInst = (allInstances || []).find(i => i.slug === srcSlug);
+  const srcNameEl = document.getElementById('copy-settings-src-name');
+  if (srcNameEl) {
+    srcNameEl.textContent = srcInst ? `${srcInst.name} (${srcInst.slug})` : srcSlug;
+  }
 
   // Populate target checkboxes (all OTHER instances)
   const targetsContainer = document.getElementById('copy-settings-targets');
-  targetsContainer.innerHTML = '';
-  const others = allInstances.filter(i => i.slug !== srcSlug);
-  if (others.length === 0) {
-    targetsContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">No other instances available.</p>';
-  } else {
-    others.forEach(inst => {
-      const label = document.createElement('label');
-      label.style.cssText = 'display:flex; align-items:center; gap:10px; cursor:pointer; font-size:0.9rem;';
-      label.innerHTML = `
-        <input type="checkbox" class="copy-target-chk" data-slug="${escapeHtml(inst.slug)}" style="width:16px;height:16px;accent-color:#ff9500;">
-        ${escapeHtml(inst.name)} <span style="color:var(--text-muted); font-size:0.8rem;">(${escapeHtml(inst.slug)})</span>
+  const confirmBtn = document.getElementById('copy-settings-confirm-btn');
+  const toggleAllBtn = document.getElementById('copy-opt-toggle-all-btn');
+
+  if (targetsContainer) {
+    targetsContainer.innerHTML = '';
+    const others = (allInstances || []).filter(i => i.slug !== srcSlug);
+    if (others.length === 0) {
+      targetsContainer.innerHTML = `
+        <div style="padding: 14px; border-radius: 10px; background: rgba(255, 149, 0, 0.08); border: 1px dashed rgba(255, 149, 0, 0.3); text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+          <p style="margin: 0; color: #ff9500; font-weight: 500;">⚡ No other bot instances exist yet.</p>
+          <p style="margin: 4px 0 0; font-size: 0.8rem;">Click <strong>"+ New Bot"</strong> in the top right to create another bot first, then you can replicate all settings to it!</p>
+        </div>
       `;
-      targetsContainer.appendChild(label);
-    });
+      if (confirmBtn) confirmBtn.disabled = true;
+      if (toggleAllBtn) toggleAllBtn.style.display = 'none';
+    } else {
+      if (confirmBtn) confirmBtn.disabled = false;
+      if (toggleAllBtn) {
+        toggleAllBtn.style.display = 'inline-block';
+        toggleAllBtn.textContent = 'Deselect All';
+      }
+
+      others.forEach(inst => {
+        const label = document.createElement('label');
+        label.className = 'copy-target-card';
+        label.innerHTML = `
+          <input type="checkbox" class="copy-target-chk" data-slug="${escapeHtml(inst.slug)}" style="width:17px; height:17px; accent-color:#ff9500; cursor:pointer;" checked>
+          <div style="flex: 1; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <span style="font-weight: 500; font-size: 0.9rem; color: #fff;">${escapeHtml(inst.name)}</span>
+              <span style="color:var(--text-muted); font-size:0.8rem; margin-left: 6px;">(${escapeHtml(inst.slug)})</span>
+            </div>
+            <span class="connection-status-badge ${inst.status || 'disconnected'}" style="padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; display: inline-flex; align-items: center; gap: 4px;">
+              <span class="status-dot" style="width: 6px; height: 6px; border-radius: 50%;"></span>
+              <span style="text-transform: capitalize;">${(inst.status || 'disconnected').replace('_', ' ')}</span>
+            </span>
+          </div>
+        `;
+        targetsContainer.appendChild(label);
+      });
+    }
   }
 
-  // Reset checkboxes
-  document.getElementById('copy-opt-ai').checked = true;
-  document.getElementById('copy-opt-rules').checked = true;
-  document.getElementById('copy-opt-welcome').checked = true;
-  document.getElementById('copy-opt-all').checked = false;
+  // Reset checkboxes to default checked
+  const chkAi = document.getElementById('copy-opt-ai');
+  const chkRules = document.getElementById('copy-opt-rules');
+  const chkWelcome = document.getElementById('copy-opt-welcome');
+  const chkMemory = document.getElementById('copy-opt-memory');
+  if (chkAi) chkAi.checked = true;
+  if (chkRules) chkRules.checked = true;
+  if (chkWelcome) chkWelcome.checked = true;
+  if (chkMemory) chkMemory.checked = true;
 
-  document.getElementById('copy-settings-modal').classList.add('active');
+  modal.classList.add('active');
   if (window.lucide) lucide.createIcons();
 };
 
-document.getElementById('copy-opt-all').addEventListener('change', function() {
-  document.querySelectorAll('.copy-target-chk').forEach(chk => { chk.checked = this.checked; });
-});
-
-function closeCopySettingsModal() {
-  document.getElementById('copy-settings-modal').classList.remove('active');
+window.closeCopySettingsModal = function() {
+  const modal = document.getElementById('copy-settings-modal');
+  if (modal) modal.classList.remove('active');
   _copySettingsSrcSlug = null;
-}
-document.getElementById('copy-settings-modal-close').addEventListener('click', closeCopySettingsModal);
-document.getElementById('copy-settings-cancel-btn').addEventListener('click', closeCopySettingsModal);
+};
 
-document.getElementById('copy-settings-confirm-btn').addEventListener('click', async () => {
-  if (!_copySettingsSrcSlug) return;
-  const targetSlugs = Array.from(document.querySelectorAll('.copy-target-chk:checked')).map(c => c.dataset.slug);
-  if (targetSlugs.length === 0) { showToast('Select at least one target instance.', 'error'); return; }
+function initCopySettingsListeners() {
+  const modal = document.getElementById('copy-settings-modal');
+  const closeBtn = document.getElementById('copy-settings-modal-close');
+  const cancelBtn = document.getElementById('copy-settings-cancel-btn');
+  const confirmBtn = document.getElementById('copy-settings-confirm-btn');
+  const toggleAllBtn = document.getElementById('copy-opt-toggle-all-btn');
 
-  const includeAI = document.getElementById('copy-opt-ai').checked;
-  const includeRules = document.getElementById('copy-opt-rules').checked;
-  const includeWelcome = document.getElementById('copy-opt-welcome').checked;
+  if (closeBtn) closeBtn.onclick = closeCopySettingsModal;
+  if (cancelBtn) cancelBtn.onclick = closeCopySettingsModal;
 
-  const btn = document.getElementById('copy-settings-confirm-btn');
-  btn.disabled = true;
-  btn.querySelector('span').textContent = 'Copying...';
-
-  try {
-    const res = await apiFetch(`/api/instances/${_copySettingsSrcSlug}/copy-settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetSlugs, includeAI, includeRules, includeWelcome })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToast(`✅ Settings copied to: ${data.copied.join(', ') || 'none'}${data.failed.length ? ` | Failed: ${data.failed.map(f=>f.slug).join(', ')}` : ''}`, 'success');
-      closeCopySettingsModal();
-    } else {
-      showToast(data.error || 'Failed to copy settings.', 'error');
-    }
-  } catch {
-    showToast('Network error copying settings.', 'error');
-  } finally {
-    btn.disabled = false;
-    btn.querySelector('span').textContent = 'Copy Settings →';
+  if (modal) {
+    modal.onclick = (e) => {
+      if (e.target === modal) closeCopySettingsModal();
+    };
   }
-});
+
+  if (toggleAllBtn) {
+    toggleAllBtn.onclick = () => {
+      const chks = document.querySelectorAll('.copy-target-chk');
+      const someUnchecked = Array.from(chks).some(c => !c.checked);
+      chks.forEach(c => { c.checked = someUnchecked; });
+      toggleAllBtn.textContent = someUnchecked ? 'Deselect All' : 'Select All';
+    };
+  }
+
+  if (confirmBtn) {
+    confirmBtn.onclick = async () => {
+      if (!_copySettingsSrcSlug) return;
+      const targetSlugs = Array.from(document.querySelectorAll('.copy-target-chk:checked')).map(c => c.dataset.slug);
+      if (targetSlugs.length === 0) {
+        showToast('Please select at least one target instance.', 'error');
+        return;
+      }
+
+      const includeAI = Boolean(document.getElementById('copy-opt-ai')?.checked);
+      const includeRules = Boolean(document.getElementById('copy-opt-rules')?.checked);
+      const includeWelcome = Boolean(document.getElementById('copy-opt-welcome')?.checked);
+      const includeMemory = Boolean(document.getElementById('copy-opt-memory')?.checked);
+
+      if (!includeAI && !includeRules && !includeWelcome && !includeMemory) {
+        showToast('Please select at least one category of settings to copy.', 'error');
+        return;
+      }
+
+      confirmBtn.disabled = true;
+      const span = confirmBtn.querySelector('span');
+      if (span) span.textContent = 'Copying...';
+
+      try {
+        const res = await apiFetch(`/api/instances/${_copySettingsSrcSlug}/copy-settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetSlugs, includeAI, includeRules, includeWelcome, includeMemory })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(`✅ Settings copied successfully to: ${data.copied.join(', ') || 'selected bots'}!`, 'success');
+          closeCopySettingsModal();
+          if (typeof loadInstancesData === 'function') loadInstancesData();
+        } else {
+          showToast(data.error || 'Failed to copy settings.', 'error');
+        }
+      } catch (err) {
+        showToast('Network error while copying settings.', 'error');
+      } finally {
+        confirmBtn.disabled = false;
+        if (span) span.textContent = 'Copy Settings →';
+      }
+    };
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initCopySettingsListeners);
+} else {
+  initCopySettingsListeners();
+}
 
 // ============================================================
 // MEMORY MODE TOGGLE — on Bot Instances tab, inject a card above the table

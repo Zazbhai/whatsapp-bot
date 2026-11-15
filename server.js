@@ -5,9 +5,10 @@ const crypto = require('crypto');
 const { exec, fork } = require('child_process');
 const { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsComplete, downloadVoiceMedia, voiceMediaState } = require('./voice-runtime');
 const { sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech, buildAppLinkInstructions } = require('./reply-links');
+const { shortenAllLinksInText, shortenUrl, getShortLinkSync, shortenTextSync, resolveShortCode } = require('./link-shortener');
 const { readStoreMetrics } = require('./store-metrics');
 const { ReadFollowupScheduler, isEligibleFollowup } = require('./read-followups');
-const { detectLanguage: detectBotLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation, requestedAppAsset, prepareAppRequestReply } = require('./bot-policy');
+const { detectLanguage: detectBotLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation, requestedAppAsset, prepareAppRequestReply, isUnorderedInquiry } = require('./bot-policy');
 const {
   PROVIDERS,
   normalizeProviderId,
@@ -174,6 +175,13 @@ app.get(['/wa', '/chat', '/redirect'], (req, res) => {
   res.redirect(302, '/app');
 });
 
+// URL Shortener redirect route: /s/:code
+app.get('/s/:code', (req, res) => {
+  const target = resolveShortCode(req.params.code);
+  if (target) return res.redirect(302, target);
+  return res.redirect(302, '/');
+});
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -277,9 +285,10 @@ function createReadFollowupScheduler(slug) {
       const chat = await client.getChatById(chatId);
       if (!chat) throw new Error('WhatsApp chat was not found');
       if (!readFollowupSchedulers[slug]?.isPending(slug, entry.messageId)) throw new Error('Follow-up was cancelled before send');
-      await enqueueWhatsAppSend(slug, () => {
+      await enqueueWhatsAppSend(slug, async () => {
         if (!readFollowupSchedulers[slug]?.isPending(slug, entry.messageId)) throw new Error('Follow-up was cancelled before send');
-        return chat.sendMessage(reminder);
+        const finalReminder = typeof shortenAllLinksInText === 'function' ? await shortenAllLinksInText(reminder) : reminder;
+        return chat.sendMessage(finalReminder);
       });
       addToMemory(slug, entry.sender, 'assistant', reminder);
       logInstanceEvent(slug, 'send', `Read-triggered order follow-up sent to +${entry.sender} (${userLang})`);
@@ -618,6 +627,22 @@ function markUserAsOrdered(slug, number) {
       fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
     } catch (err) {
       console.error(`Failed to save ordered state for ${slug}:`, err);
+    }
+  }
+}
+
+function unmarkUserAsOrdered(slug, number) {
+  const users = loadSeenUsers(slug);
+  const userEntry = users.find(u => u.number === number);
+  if (userEntry && userEntry.ordered) {
+    userEntry.ordered = false;
+    delete userEntry.orderedTime;
+    delete userEntry.installScreenshotReceivedAt;
+    try {
+      const filePath = path.join(dataDir, `seen_users_${slug}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(users, null, 2), 'utf8');
+    } catch (err) {
+      console.error(`Failed to unmark ordered state for ${slug}:`, err);
     }
   }
 }
@@ -1003,7 +1028,7 @@ function userApkCaption(slug, senderNumber, caption) {
   // Every APK carries its link, even when ordinary text replies are on cooldown.
   const prepared = features.apkCaption(slug, caption);
   markStoreLinkSent(slug, senderNumber);
-  return prepared;
+  return typeof shortenTextSync === 'function' ? shortenTextSync(prepared) : prepared;
 }
 
 async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
@@ -1023,6 +1048,9 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
   const senderNumber = msg.from.split('@')[0];
   const preparedReply = prepareUserFacingLink(slug, senderNumber, replyText, assetRequested);
   replyText = preparedReply.text;
+  if (typeof shortenAllLinksInText === 'function') {
+    replyText = await shortenAllLinksInText(replyText);
+  }
   const users = loadSeenUsers(slug);
   const userEntry = users.find(u => u.number === senderNumber);
   
@@ -1070,6 +1098,9 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
 }
 
 async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, voiceMedia = null) {
+  if (typeof shortenAllLinksInText === 'function') {
+    replyText = await shortenAllLinksInText(replyText);
+  }
   if (voiceMedia) {
     try {
       const sentVoice = await sendDirectMessage(slug, msg, chat, voiceMedia, { sendAudioAsVoice: true });
@@ -1096,7 +1127,16 @@ async function sendDirectMessage(slug, msg, chat, content, options = {}) {
   const client = (typeof activeClients !== 'undefined' && activeClients[slug]) || null;
   const targetChatId = (msg && msg.from) || (chat && (chat.id?._serialized || chat.id)) || null;
 
+  let effectiveContent = content;
+  if (typeof effectiveContent === 'string' && typeof shortenAllLinksInText === 'function') {
+    effectiveContent = await shortenAllLinksInText(effectiveContent);
+  }
+
   const effectiveOptions = { ...options };
+  if (typeof effectiveOptions.caption === 'string' && typeof shortenAllLinksInText === 'function') {
+    effectiveOptions.caption = await shortenAllLinksInText(effectiveOptions.caption);
+  }
+
   // If this message requests quoting/tagging a specific target message:
   const tagTarget = (msg && msg._tagTarget) || null;
   const tagId = (tagTarget && (tagTarget.id?._serialized || tagTarget.id)) || (msg && msg._forceTag && (msg.id?._serialized || msg.id));
@@ -1108,7 +1148,7 @@ async function sendDirectMessage(slug, msg, chat, content, options = {}) {
   if (chat && typeof chat.sendMessage === 'function') {
     try {
       return await Promise.race([
-        chat.sendMessage(content, effectiveOptions),
+        chat.sendMessage(effectiveContent, effectiveOptions),
         new Promise((_, reject) => setTimeout(() => reject(new Error('chat.sendMessage timeout')), 30000))
       ]);
     } catch (chatErr) {
@@ -1123,7 +1163,7 @@ async function sendDirectMessage(slug, msg, chat, content, options = {}) {
   if (client && targetChatId && typeof client.sendMessage === 'function') {
     try {
       return await Promise.race([
-        client.sendMessage(targetChatId, content, effectiveOptions),
+        client.sendMessage(targetChatId, effectiveContent, effectiveOptions),
         new Promise((_, reject) => setTimeout(() => reject(new Error('client.sendMessage timeout')), 30000))
       ]);
     } catch (clientErr) {
@@ -1143,7 +1183,7 @@ async function sendDirectMessage(slug, msg, chat, content, options = {}) {
       ]);
       if (resolvedChat && typeof resolvedChat.sendMessage === 'function') {
         return await Promise.race([
-          resolvedChat.sendMessage(content, effectiveOptions),
+          resolvedChat.sendMessage(effectiveContent, effectiveOptions),
           new Promise((_, reject) => setTimeout(() => reject(new Error('resolvedChat.sendMessage timeout')), 30000))
         ]);
       }
@@ -1154,12 +1194,12 @@ async function sendDirectMessage(slug, msg, chat, content, options = {}) {
 
   // 4. If tagTarget itself has a reply method, reply to that target message!
   if (tagTarget && typeof tagTarget.reply === 'function') {
-    return await tagTarget.reply(content, undefined, effectiveOptions);
+    return await tagTarget.reply(effectiveContent, undefined, effectiveOptions);
   }
 
   // 5. Graceful fallback to msg.reply without quote if possible, or standard msg.reply (e.g. in test harness)
   if (msg && typeof msg.reply === 'function') {
-    return await msg.reply(content, undefined, effectiveOptions);
+    return await msg.reply(effectiveContent, undefined, effectiveOptions);
   }
 
   throw new Error(`Unable to send message to ${targetChatId || 'unknown recipient'}: no valid WhatsApp client or chat available`);
@@ -3649,12 +3689,31 @@ function initInstanceClient(slug, forcedSessionId) {
       }
     }
 
-    // Check if user is in the bot's ignore list — silently drop, no reply, no delete (delete triggers new events = infinite loop)
+    // Check if user is in the bot's ignore list or marked as ordered — silently drop, unless NLP detects false-positive un-ordered inquiry
     const senderNumber = msg.from.split('@')[0];
     const ignoredList = loadIgnoredUsers(slug);
-    if (ignoredList.includes(senderNumber)) {
-      logInstanceEvent(slug, 'system', `Ignored message from blacklisted user: +${senderNumber}`);
-      return; // Silent drop — no reply, no further processing
+    const users = isDirectChatId(msg.from) ? loadSeenUsers(slug) : [];
+    const userEntry = users.find(u => u.number === senderNumber);
+    const isOrderedUser = Boolean(userEntry?.ordered);
+    const isIgnored = ignoredList.includes(senderNumber);
+
+    if (isIgnored || isOrderedUser) {
+      if (isUnorderedInquiry(msg.body)) {
+        logInstanceEvent(slug, 'system', `🔄 False-positive order detected for +${senderNumber} ("${msg.body}"). NLP model identified user has not ordered yet. Restoring user to active chat pipeline.`);
+        if (isOrderedUser) {
+          unmarkUserAsOrdered(slug, senderNumber);
+        }
+        if (isIgnored) {
+          removeIgnoredUser(slug, senderNumber);
+        }
+      } else {
+        if (isOrderedUser) {
+          logInstanceEvent(slug, 'system', `Ignored message from ordered user: +${senderNumber} (no un-ordered inquiry detected)`);
+        } else {
+          logInstanceEvent(slug, 'system', `Ignored message from blacklisted user: +${senderNumber}`);
+        }
+        return; // Silent drop — no reply, AI will not respond
+      }
     }
     if (typeof cancelReadFollowupsForUser === 'function') cancelReadFollowupsForUser(slug, senderNumber);
 
@@ -4238,7 +4297,7 @@ app.delete('/api/instances/:slug', authenticateToken, async (req, res) => {
 // POST /api/instances/:slug/copy-settings — copy AI/rules/welcome settings to target instances
 app.post('/api/instances/:slug/copy-settings', authenticateToken, (req, res) => {
   const srcSlug = req.params.slug.trim().toLowerCase();
-  const { targetSlugs, includeAI = true, includeRules = true, includeWelcome = true } = req.body;
+  const { targetSlugs, includeAI = true, includeRules = true, includeWelcome = true, includeMemory = false } = req.body;
 
   if (!Array.isArray(targetSlugs) || targetSlugs.length === 0) {
     return res.status(400).json({ error: 'targetSlugs must be a non-empty array of instance slugs.' });
@@ -4249,7 +4308,7 @@ app.post('/api/instances/:slug/copy-settings', authenticateToken, (req, res) => 
   if (!src) return res.status(404).json({ error: 'Source instance not found.' });
 
   const AI_FIELDS = ['aiEnabled','aiSystemPrompt','aiProcessReply','aiApkInstructions','aiApkPreamble','aiSmartApkEnabled'];
-  const WELCOME_FIELDS = ['autoWelcomeMessage','autoWelcomeSendApk','autoMuteOlderThan12Hours','autoMuteHours','orderFollowupDelayMinutes','iphoneOfferDeadline','adminForwardNumber','blockTriggerText'];
+  const WELCOME_FIELDS = ['autoWelcomeMessage','autoWelcomeSendApk','autoMuteOlderThan12Hours','autoMuteHours','orderFollowupDelayMinutes','iphoneOfferDeadline','adminForwardNumber','blockTriggerText','apkLinkMessage'];
 
   const copied = [];
   const failed = [];
@@ -4274,10 +4333,27 @@ app.post('/api/instances/:slug/copy-settings', authenticateToken, (req, res) => 
       saveInstanceRules(tSlug, copiedRules);
       rulesCache[tSlug] = copiedRules;
     }
+    if (includeMemory) {
+      try {
+        const srcMemFile = path.join(dataDir, `memory_${srcSlug}.json`);
+        const targetMemFile = path.join(dataDir, `memory_${tSlug}.json`);
+        if (fs.existsSync(srcMemFile)) {
+          fs.copyFileSync(srcMemFile, targetMemFile);
+          if (typeof conversationMemories !== 'undefined' && conversationMemories[srcSlug]) {
+            conversationMemories[tSlug] = JSON.parse(JSON.stringify(conversationMemories[srcSlug]));
+          }
+        }
+      } catch (memErr) {
+        console.error(`[SYSTEM] Failed to copy memory from ${srcSlug} to ${tSlug}:`, memErr.message);
+      }
+    }
     copied.push(tSlug);
   }
 
   if (saveInstances(list)) {
+    if (typeof io !== 'undefined' && io && typeof io.emit === 'function') {
+      io.emit('instances_updated', list);
+    }
     res.json({ copied, failed });
   } else {
     res.status(500).json({ error: 'Failed to save instance changes.' });
@@ -5298,6 +5374,20 @@ server.listen(PORT, () => {
       console.warn('   To fix this: install FFmpeg on your system and make sure it is in your system PATH.\n');
     }
   });
+
+  // Warmup URL shortener for all instances so shortened store links are cached immediately
+  (async () => {
+    try {
+      const instances = loadInstances();
+      for (const inst of instances) {
+        const raw = features.rawStoreLink ? features.rawStoreLink(inst.slug) : features.storeLink(inst.slug);
+        if (raw) {
+          const short = await shortenUrl(raw);
+          console.log(`🔗 Shortened store link for ${inst.slug}: ${short}`);
+        }
+      }
+    } catch (_) {}
+  })();
 
   // Periodic auto-mute: run every 10 minutes to check and auto-mute users
   // who have been inactive beyond the configured cooldown window

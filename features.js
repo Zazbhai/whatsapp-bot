@@ -12,6 +12,7 @@ const path = require('path');
 const qrcode = require('qrcode');
 const tui = require('./telegram-ui');
 const { selectStoreBaseUrl, sanitizeReplyLinks, dedupeConfiguredLink } = require('./reply-links');
+const { getShortLinkSync, shortenTextSync } = require('./link-shortener');
 const { pickNextSession, pickAutoSession, autoSelectAction, isSessionFailure, closeSession } = require('./session-health');
 
 module.exports = function setupFeatures(ctx) {
@@ -563,13 +564,21 @@ module.exports = function setupFeatures(ctx) {
       process.env.PUBLIC_URL
     ], `http://localhost:${port}`);
   }
-  function storeLink(slug) { return `${baseUrl(getInst(slug))}/app/${slug}`; }
+  function rawStoreLink(slug) { return `${baseUrl(getInst(slug))}/app/${slug}`; }
+  function storeLink(slug) {
+    const raw = rawStoreLink(slug);
+    if (typeof getShortLinkSync === 'function') {
+      return getShortLinkSync(raw) || raw;
+    }
+    return raw;
+  }
   function apkCaption(slug, caption) {
     const inst = getInst(slug) || {};
     const link = storeLink(slug);
     const text = caption === undefined ? inst.apkLinkMessage || DEFAULT_LINK_MSG : caption;
     const prepared = dedupeConfiguredLink(sanitizeReplyLinks(text, link), link);
-    return prepared.includes(link) ? prepared : [prepared, link].filter(Boolean).join('\n\n');
+    const result = prepared.includes(link) ? prepared : [prepared, link].filter(Boolean).join('\n\n');
+    return typeof shortenTextSync === 'function' ? shortenTextSync(result) : result;
   }
   const apkInfo = (slug) => {
     const a = latestApkCache[slug];
@@ -1830,7 +1839,7 @@ module.exports = function setupFeatures(ctx) {
 
   return {
     resolveSession, clientOptionsFor, onSessionReady, handleSessionLoss, emitCode, emitQr,
-    emitSessions, requestCodeForNumber, apkCaption, storeLink, checkWatchWords,
+    emitSessions, requestCodeForNumber, apkCaption, storeLink, rawStoreLink, checkWatchWords,
     authDirFor, markSession, reportSessionError
   };
 };
