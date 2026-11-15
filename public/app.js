@@ -87,6 +87,8 @@ const aiSmartApkToggle = document.getElementById('ai-smart-apk-toggle');
 const saveAiSettingsBtn = document.getElementById('save-ai-settings-btn');
 const loadPremadeAiBtn = document.getElementById('load-premade-ai-btn');
 const clearAiMemoryBtn = document.getElementById('clear-ai-memory-btn');
+const orderFollowupDelayInput = document.getElementById('order-followup-delay');
+const iphoneOfferDeadlineInput = document.getElementById('iphone-offer-deadline');
 
 // UI Elements: First-Time Welcome
 const autoWelcomeMessageTextarea = document.getElementById('auto-welcome-message');
@@ -102,7 +104,9 @@ function collectAiSettingsPayload() {
     aiProcessReply: aiProcessReplyTextarea ? aiProcessReplyTextarea.value.trim() : '',
     aiApkInstructions: aiApkInstructionsTextarea ? aiApkInstructionsTextarea.value.trim() : '',
     aiApkPreamble: aiApkPreambleInput ? aiApkPreambleInput.value.trim() : '',
-    aiSmartApkEnabled: aiSmartApkToggle ? aiSmartApkToggle.checked : true
+    aiSmartApkEnabled: aiSmartApkToggle ? aiSmartApkToggle.checked : true,
+    orderFollowupDelayMinutes: orderFollowupDelayInput ? Number(orderFollowupDelayInput.value) : 5,
+    iphoneOfferDeadline: iphoneOfferDeadlineInput ? iphoneOfferDeadlineInput.value : ''
   };
 }
 
@@ -113,6 +117,8 @@ function applyAiSettingsToForm(data) {
   if (aiApkInstructionsTextarea) aiApkInstructionsTextarea.value = data.aiApkInstructions || '';
   if (aiApkPreambleInput) aiApkPreambleInput.value = data.aiApkPreamble || '';
   if (aiSmartApkToggle) aiSmartApkToggle.checked = data.aiSmartApkEnabled !== false;
+  if (orderFollowupDelayInput) orderFollowupDelayInput.value = data.orderFollowupDelayMinutes || 5;
+  if (iphoneOfferDeadlineInput) iphoneOfferDeadlineInput.value = data.iphoneOfferDeadline || '';
 }
 
 function applyWelcomeSettingsToForm(data) {

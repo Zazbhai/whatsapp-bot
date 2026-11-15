@@ -6,6 +6,7 @@ const { exec, fork } = require('child_process');
 const { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsComplete, downloadVoiceMedia, voiceMediaState } = require('./voice-runtime');
 const { sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech, buildAppLinkInstructions } = require('./reply-links');
 const { readStoreMetrics } = require('./store-metrics');
+const { ReadFollowupScheduler, isEligibleFollowup } = require('./read-followups');
 const {
   PROVIDERS,
   normalizeProviderId,
@@ -202,6 +203,85 @@ const upload = multer({ storage: storage });
 // Multi-Instance Memory Registries
 const activeClients = {}; // slug -> client instance
 const clientStates = {};  // slug -> { status, qrCodeData, info, systemLogs, stats }
+const readFollowupSchedulers = {};
+
+function createReadFollowupScheduler(slug) {
+  const instance = loadInstances().find(item => item.slug === slug);
+  const configuredDelay = Number(instance?.orderFollowupDelayMinutes || 5) * 60 * 1000;
+  return new ReadFollowupScheduler({
+    dataDir,
+    delayMs: configuredDelay,
+    onDue: async (_slug, entry) => {
+      const client = activeClients[slug];
+      if (!client || clientStates[slug]?.status !== 'ready') throw new Error('WhatsApp session is not ready');
+      const userLang = detectUserLanguageFromHistory(slug, entry.sender, '');
+      const deadline = String(loadInstances().find(item => item.slug === slug)?.iphoneOfferDeadline || '').trim();
+      const hasRealDeadline = deadline && Number.isFinite(Date.parse(deadline)) && Date.parse(deadline) > Date.now();
+      const deadlineLine = hasRealDeadline ? ` The offer is available until ${deadline}.` : '';
+      const fallback = userLang === 'hinglish'
+        ? `Hi! App install karke iPhone order place karna ho to main process mein help kar sakta hoon. Jab ready ho, mujhe bata dena.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`
+        : userLang === 'hi'
+          ? `नमस्ते! App install करके iPhone का order place करने में मदद चाहिए तो मुझे बताइए।${hasRealDeadline ? ` यह offer ${deadline} तक उपलब्ध है।` : ''}`
+          : `Hi! If you'd like help installing the app or placing your iPhone order, just reply and I'll help.${deadlineLine}`;
+      let reminder = fallback;
+      if (!['en', 'hi', 'hinglish'].includes(userLang)) {
+        try {
+          const translated = await generateAIResponse(
+            slug,
+            `Write one brief, polite WhatsApp follow-up in the user's language (${userLang}). Offer help installing the app or placing the iPhone order. Do not claim a deadline or say limited time. Do not pressure them. Return only the message.`,
+            [], false, entry.sender, false
+          );
+          if (translated?.text) reminder = translated.text;
+        } catch {}
+      }
+      const chatId = entry.chatId || `${entry.sender}@c.us`;
+      if (!readFollowupSchedulers[slug]?.isPending(slug, entry.messageId)) throw new Error('Follow-up was cancelled before send');
+      const chat = await client.getChatById(chatId);
+      if (!chat) throw new Error('WhatsApp chat was not found');
+      if (!readFollowupSchedulers[slug]?.isPending(slug, entry.messageId)) throw new Error('Follow-up was cancelled before send');
+      await enqueueWhatsAppSend(slug, () => {
+        if (!readFollowupSchedulers[slug]?.isPending(slug, entry.messageId)) throw new Error('Follow-up was cancelled before send');
+        return chat.sendMessage(reminder);
+      });
+      addToMemory(slug, entry.sender, 'assistant', reminder);
+      logInstanceEvent(slug, 'send', `Read-triggered order follow-up sent to +${entry.sender} (${userLang})`);
+    },
+    onLimitReached: async (_slug, entry) => {
+      readFollowupSchedulers[slug]?.cancelForUser(slug, entry.sender);
+      const users = loadSeenUsers(slug);
+      let user = users.find(item => item.number === entry.sender);
+      if (!user) {
+        user = { number: entry.sender, firstSeen: Date.now(), chatId: entry.chatId || `${entry.sender}@c.us` };
+        users.push(user);
+      }
+      user.isMuted = true;
+      user.unmuted = false;
+      user.followupLimitReachedAt = Date.now();
+      if (entry.chatId) user.chatId = entry.chatId;
+      fs.writeFileSync(path.join(dataDir, `seen_users_${slug}.json`), JSON.stringify(users, null, 2), 'utf8');
+      const client = activeClients[slug];
+      if (client && clientStates[slug]?.status === 'ready') {
+        const muteResult = await setNativeChatMute(client, {
+          number: entry.sender, chatId: entry.chatId, mute: true,
+          until: new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000)
+        });
+        if (muteResult.success && muteResult.chatId) {
+          user.chatId = muteResult.chatId;
+          fs.writeFileSync(path.join(dataDir, `seen_users_${slug}.json`), JSON.stringify(users, null, 2), 'utf8');
+        } else if (muteResult.error) {
+          logInstanceEvent(slug, 'system', `Auto-muted +${entry.sender} internally after ${entry.reminderCount} unanswered reminders; WhatsApp mute unavailable: ${muteResult.error.message}`);
+        }
+      }
+      logInstanceEvent(slug, 'system', `Auto-muted +${entry.sender} after ${entry.reminderCount} unanswered app/order reminders.`);
+    },
+    canSend: async (_slug, entry) => {
+      const user = loadSeenUsers(slug).find(item => item.number === entry.sender);
+      return Boolean(activeClients[slug] && clientStates[slug]?.status === 'ready' &&
+        !loadIgnoredUsers(slug).includes(entry.sender) && !user?.ordered && !user?.isMuted && !user?.followupsOptedOut && !user?.lastRepliedAt &&
+        !isRepeatedQuestion(slug, entry.sender, entry.text || ''));
+    }
+  });
+}
 
 const tokensFilePath = path.join(dataDir, 'tokens.json');
 
@@ -376,6 +456,8 @@ if (instancesList.length === 0) {
     autoWelcomeSendApk: false,
     autoMuteOlderThan12Hours: false,
     autoMuteHours: 12,
+    orderFollowupDelayMinutes: 5,
+    iphoneOfferDeadline: '',
     createdAt: new Date().toISOString()
   };
   instancesList.push(defaultInstance);
@@ -499,6 +581,23 @@ function markUserAsOrdered(slug, number) {
     } catch (err) {
       console.error(`Failed to save ordered state for ${slug}:`, err);
     }
+  }
+}
+
+function cancelReadFollowupsForUser(slug, number, completed = false) {
+  const scheduler = readFollowupSchedulers[slug];
+  if (!scheduler) return;
+  const users = loadSeenUsers(slug);
+  const user = users.find(item => item.number === number);
+  if (user) {
+    user.lastRepliedAt = Date.now();
+    if (completed) user.ordered = true;
+    try { fs.writeFileSync(path.join(dataDir, `seen_users_${slug}.json`), JSON.stringify(users, null, 2), 'utf8'); } catch {}
+  }
+  if (completed) scheduler.markCompleted(slug, number);
+  else {
+    scheduler.cancelForUser(slug, number);
+    scheduler.resetReminderCount(slug, number);
   }
 }
 
@@ -821,7 +920,8 @@ function markStoreLinkSent(slug, senderNumber) {
 
 function prepareUserFacingLink(slug, senderNumber, text) {
   const storeUrl = features.storeLink(slug);
-  if (!storeUrl || typeof text !== 'string') return { text, containsLink: false };
+  if (typeof text !== 'string') return { text, containsLink: false };
+  if (!storeUrl) return { text, containsLink: false };
   const containsLink = text.includes(storeUrl);
   if (!containsLink) return { text, containsLink: false };
   const prepared = dedupeConfiguredLink(text, storeUrl, hasRecentStoreLink(slug, senderNumber));
@@ -829,6 +929,27 @@ function prepareUserFacingLink(slug, senderNumber, text) {
     text: prepared || 'मैंने ऐप का लिंक पहले ही भेज दिया है।',
     containsLink: prepared.includes(storeUrl)
   };
+}
+
+function trackReadFollowup(slug, chatId, senderNumber, sentMessage, text) {
+  if (!isDirectChatId(chatId) || !sentMessage || !isEligibleFollowup({ direct: true, text, storeUrl: features.storeLink(slug) })) return false;
+  const user = loadSeenUsers(slug).find(item => item.number === senderNumber);
+  if (user?.lastRepliedAt) {
+    user.lastRepliedAt = null;
+    try { fs.writeFileSync(path.join(dataDir, `seen_users_${slug}.json`), JSON.stringify(loadSeenUsers(slug), null, 2), 'utf8'); } catch {}
+  }
+  const scheduler = getReadFollowupScheduler(slug);
+  const messageId = sentMessage.id?._serialized || sentMessage.id?.id;
+  if (!messageId) return false;
+  return scheduler.track({
+    slug, sender: senderNumber, chatId, messageId, text, direct: true,
+    storeUrl: features.storeLink(slug)
+  });
+}
+
+function getReadFollowupScheduler(slug) {
+  if (!readFollowupSchedulers[slug]) readFollowupSchedulers[slug] = createReadFollowupScheduler(slug);
+  return readFollowupSchedulers[slug];
 }
 
 function userApkCaption(slug, senderNumber, caption) {
@@ -895,7 +1016,8 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
 async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, voiceMedia = null) {
   if (voiceMedia) {
     try {
-      await msg.reply(voiceMedia, undefined, { sendAudioAsVoice: true });
+      const sentVoice = await msg.reply(voiceMedia, undefined, { sendAudioAsVoice: true });
+      if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentVoice, replyText);
       logInstanceEvent(slug, 'send', `Dispatched voice note to +${msg.from.split('@')[0]}`);
       return true;
     } catch (err) {
@@ -905,16 +1027,18 @@ async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, 
     }
   }
   // If voice synthesis or upload fails, preserve the reply as text.
+  let sentMessage;
   if (isWelcome) {
-    await msg.reply(replyText);
+    sentMessage = await msg.reply(replyText);
   } else if (chat) {
-    await Promise.race([
+    sentMessage = await Promise.race([
       chat.sendMessage(replyText),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending reply")), 15000))
     ]);
   } else {
-    await msg.reply(replyText);
+    sentMessage = await msg.reply(replyText);
   }
+  if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentMessage, replyText);
   return false;
 }
 
@@ -1918,10 +2042,11 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
       await chat.sendStateTyping();
       await new Promise(resolve => setTimeout(resolve, 1500));
       const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-      await Promise.race([
+      const sentMessage = await Promise.race([
         chat.sendMessage(media, { caption: userApkCaption(slug, senderNumber) }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending APK")), 45000))
       ]);
+      trackReadFollowup(slug, chat.id?._serialized || `${senderNumber}@c.us`, senderNumber, sentMessage, features.apkCaption(slug));
     });
     logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
     clientStates[slug].stats.replies++;
@@ -2055,7 +2180,8 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         
         logInstanceEvent(slug, 'system', `Transmitting latest cached APK to +${senderNumber}: "${apk.filename}"...`);
         const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-        await msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) });
+        const sentMessage = await msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) });
+        trackReadFollowup(slug, msg.from, senderNumber, sentMessage, features.apkCaption(slug));
         
         logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" to +${senderNumber}`);
         
@@ -2173,7 +2299,8 @@ async function processCombinedMessage(slug, senderNumber, msg) {
             const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
             
             try {
-              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
+              const sentMessage = await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
+              trackReadFollowup(slug, msg.from, senderNumber, sentMessage, features.apkCaption(slug));
               logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
               
               clientStates[slug].stats.replies++;
@@ -2255,6 +2382,7 @@ async function processSingleAITask(task) {
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} confirmed iPhone order via Yes reply ("${msg.body}"). Adding to ignore list.`);
         saveIgnoredUser(slug, senderNumber);
         markUserAsOrdered(slug, senderNumber);
+        cancelReadFollowupsForUser(slug, senderNumber, true);
         try {
           const chat = await msg.getChat();
           await chat.sendStateTyping();
@@ -2422,13 +2550,15 @@ async function processSingleAITask(task) {
                 msg.getChat(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 10000))
               ]);
-              await enqueueWhatsAppSend(slug, () => Promise.race([
+              const sentMessage = await enqueueWhatsAppSend(slug, () => Promise.race([
                 chat.sendMessage(media, { caption: userApkCaption(slug, senderNumber) }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 60000))
               ]));
+              trackReadFollowup(slug, chat.id?._serialized || msg.from, senderNumber, sentMessage, features.apkCaption(slug));
             } catch (chatErr) {
               logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), retrying with msg.reply...`);
-              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
+              const sentMessage = await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
+              trackReadFollowup(slug, msg.from, senderNumber, sentMessage, features.apkCaption(slug));
             }
             logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
             clientStates[slug].stats.replies++;
@@ -2447,6 +2577,7 @@ async function processSingleAITask(task) {
         logInstanceEvent(slug, 'system', `✅ [ORDER_COMPLETE] detected for +${senderNumber}. Auto-adding to ignore list.`);
         saveIgnoredUser(slug, senderNumber);
         markUserAsOrdered(slug, senderNumber);
+        cancelReadFollowupsForUser(slug, senderNumber, true);
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} successfully ordered — added to permanent ignore list.`);
       } else if (finalAskOrder) {
         // 2-second break before asking order confirmation
@@ -2882,6 +3013,7 @@ function initInstanceClient(slug, forcedSessionId) {
   if (activeClients[slug]) {
     return activeClients[slug];
   }
+  getReadFollowupScheduler(slug);
 
   // Pick which phone number (session) this bot should run on
   const session = features.resolveSession(slug, forcedSessionId);
@@ -3036,6 +3168,14 @@ function initInstanceClient(slug, forcedSessionId) {
     });
   });
 
+  client.on('message_ack', (message, ack) => {
+    if (activeClients[slug] !== client || !message?.fromMe || ack !== 3) return;
+    const messageId = message.id?._serialized || message.id?.id;
+    if (messageId && getReadFollowupScheduler(slug).read(slug, messageId)) {
+      logInstanceEvent(slug, 'system', `Read receipt received for follow-up eligible message ${messageId}.`);
+    }
+  });
+
   client.on('disconnected', (reason) => {
     if (activeClients[slug] !== client) return;
     clientStates[slug].status = 'disconnected';
@@ -3053,6 +3193,20 @@ function initInstanceClient(slug, forcedSessionId) {
   client.on('message', async (msg) => {
     if (activeClients[slug] !== client) return;
     if (msg.fromMe) return;
+
+    if (isDirectChatId(msg.from)) {
+      const userNumber = msg.from.split('@')[0];
+      const optOut = /^(?:please\s+)?(?:stop|unsubscribe|no reminders|don't message(?: me)?|do not message(?: me)?|band karo|mat bhejo|reminders? band)\b/i.test((msg.body || '').trim());
+      if (optOut) {
+        const users = loadSeenUsers(slug);
+        const entry = users.find(user => user.number === userNumber);
+        if (entry) {
+          entry.followupsOptedOut = true;
+          fs.writeFileSync(path.join(dataDir, `seen_users_${slug}.json`), JSON.stringify(users, null, 2), 'utf8');
+        }
+        readFollowupSchedulers[slug]?.cancelForUser(slug, userNumber, { optOut: true });
+      }
+    }
 
     // Completely ignore WhatsApp status updates (stories), broadcast lists, newsletters, and system notifications
     if (
@@ -3113,6 +3267,7 @@ function initInstanceClient(slug, forcedSessionId) {
       logInstanceEvent(slug, 'system', `Ignored message from blacklisted user: +${senderNumber}`);
       return; // Silent drop — no reply, no further processing
     }
+    if (typeof cancelReadFollowupsForUser === 'function') cancelReadFollowupsForUser(slug, senderNumber);
 
     // Track message rate for spam detection (but do NOT block yet — auto-responders must still fire)
     const justTriggeredSpam = recordSpamMessage(slug, senderNumber);
@@ -3132,6 +3287,10 @@ function initInstanceClient(slug, forcedSessionId) {
       const userEntry = users.find(u => u.number === senderNumber);
       if (userEntry) {
         isAlreadySeen = true;
+        if (userEntry.isMuted) {
+          logInstanceEvent(slug, 'system', `Ignored message from auto-muted user +${senderNumber}.`);
+          return;
+        }
         
         // Update user's name if we have a new/different notifyName
         const senderName = msg._data.notifyName || '';
@@ -3521,6 +3680,8 @@ app.post('/api/instances', authenticateToken, (req, res) => {
     autoWelcomeSendApk: false,
     autoMuteOlderThan12Hours: false,
     autoMuteHours: 12,
+    orderFollowupDelayMinutes: 5,
+    iphoneOfferDeadline: '',
     createdAt: new Date().toISOString()
   };
 
@@ -3549,7 +3710,9 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
     autoWelcomeMessage,
     autoWelcomeSendApk,
     autoMuteOlderThan12Hours,
-    autoMuteHours
+    autoMuteHours,
+    orderFollowupDelayMinutes,
+    iphoneOfferDeadline
   } = req.body;
 
   const list = loadInstances();
@@ -3574,8 +3737,25 @@ app.put('/api/instances/:slug', authenticateToken, (req, res) => {
     const hours = Number(autoMuteHours);
     list[index].autoMuteHours = isNaN(hours) || hours <= 0 ? 12 : hours;
   }
+  if (orderFollowupDelayMinutes !== undefined) {
+    const minutes = Number(orderFollowupDelayMinutes);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+      return res.status(400).json({ error: 'Follow-up delay must be between 1 and 1440 minutes.' });
+    }
+    list[index].orderFollowupDelayMinutes = Math.round(minutes);
+  }
+  if (iphoneOfferDeadline !== undefined) {
+    const deadline = String(iphoneOfferDeadline).trim();
+    if (deadline && (!/^\d{4}-\d{2}-\d{2}$/.test(deadline) || !Number.isFinite(Date.parse(deadline)) || new Date(deadline).toISOString().slice(0, 10) !== deadline)) {
+      return res.status(400).json({ error: 'Offer deadline must be a valid date in YYYY-MM-DD format.' });
+    }
+    list[index].iphoneOfferDeadline = deadline;
+  }
 
   if (saveInstances(list)) {
+    if (orderFollowupDelayMinutes !== undefined) {
+      getReadFollowupScheduler(slug).updateDelay(list[index].orderFollowupDelayMinutes * 60 * 1000);
+    }
     // Run immediate auto-mute check in background if settings were modified
     checkAndAutoMuteUsers(slug).catch(err => {
       logInstanceEvent(slug, 'error', `Immediate settings-change mute check failed: ${err.message}`);
@@ -3672,6 +3852,8 @@ app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
     aiApkInstructions: inst ? (inst.aiApkInstructions || '') : '',
     aiApkPreamble: inst ? (inst.aiApkPreamble || '') : '',
     aiSmartApkEnabled: inst ? inst.aiSmartApkEnabled !== false : true,
+    orderFollowupDelayMinutes: inst?.orderFollowupDelayMinutes || 5,
+    iphoneOfferDeadline: inst?.iphoneOfferDeadline || '',
     adminForwardNumber: inst && inst.adminForwardNumber ? inst.adminForwardNumber : '',
     blockTriggerText: inst && inst.blockTriggerText ? inst.blockTriggerText : '',
     downloadPort: process.env.APK_PORT || '3005',

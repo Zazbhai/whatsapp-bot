@@ -569,6 +569,18 @@
               <label for="ai-apk-preamble" style="font-size: 0.85rem; font-weight: 600; color: var(--text-light);">Short text before APK file (optional)</label>
               <input type="text" id="ai-apk-preamble" placeholder="Here is the app! Install and enter details inside the app." style="width: 100%; padding: 10px 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light); font-size: 0.85rem;">
             </div>
+            <div style="border-top: 1px solid var(--panel-border); margin: 16px 0; padding-top: 16px;">
+              <h4 style="margin: 0 0 8px;">Read follow-up</h4>
+              <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0 0 12px;">One polite follow-up after an app/order message is read and the user stays silent. “Limited time” appears only with a real deadline below.</p>
+              <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+                <label for="order-followup-delay">Wait after read (minutes)</label>
+                <input type="number" id="order-followup-delay" min="1" max="1440" value="5" style="width: 150px; padding: 10px 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light);">
+              </div>
+              <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+                <label for="iphone-offer-deadline">Real offer deadline (optional)</label>
+                <input type="date" id="iphone-offer-deadline" style="width: 210px; padding: 10px 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-light);">
+              </div>
+            </div>
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
               <button class="btn btn-danger btn-sm" id="clear-ai-memory-btn" style="padding: 6px 12px; font-size: 0.8rem; display: flex; align-items: center;" type="button">
                 <i data-lucide="trash-2" style="width: 14px; height: 14px; margin-right: 4px;"></i>
