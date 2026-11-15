@@ -109,7 +109,7 @@ class ReadFollowupScheduler {
       const previousReservation = state.lastSentByUser[entry.sender] || 0;
       state.lastSentByUser[entry.sender] = this.now();
       try {
-        await this.onDue(slug, { ...entry, messageId });
+        await this.onDue(slug, { ...entry, messageId, reminderCount: (state.reminderCountByUser[entry.sender] || 0) + 1 });
         entry.sentAt = this.now();
         state.lastSentByUser[entry.sender] = entry.sentAt;
         state.reminderCountByUser[entry.sender] = (state.reminderCountByUser[entry.sender] || 0) + 1;

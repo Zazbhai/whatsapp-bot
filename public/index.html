@@ -1354,5 +1354,61 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="app.js"></script>
   <script src="features.js"></script>
+
+  <!-- Copy Settings Modal -->
+  <div class="modal-overlay" id="copy-settings-modal">
+    <div class="modal-box" style="max-width: 480px;">
+      <div class="modal-header">
+        <h3 style="display:flex; align-items:center; gap: 10px;">
+          <i data-lucide="copy" style="width:20px; height:20px; color: #ff9500;"></i>
+          Copy Settings from <span id="copy-settings-src-name" style="color: #ff9500;"></span>
+        </h3>
+        <button class="modal-close-btn" id="copy-settings-modal-close" type="button">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 20px;">
+          Select what to copy and which instances to update. Existing rules will be fully replaced.
+        </p>
+
+        <div class="form-group" style="margin-bottom: 18px;">
+          <label style="font-weight: 600; margin-bottom: 10px; display: block;">📦 What to copy:</label>
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+              <input type="checkbox" id="copy-opt-ai" checked style="width: 16px; height: 16px; accent-color: #ff9500;">
+              🤖 AI Settings &amp; Persona (system prompt, APK instructions, etc.)
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+              <input type="checkbox" id="copy-opt-rules" checked style="width: 16px; height: 16px; accent-color: #ff9500;">
+              📋 Autoresponder Rules (all trigger-reply rules)
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+              <input type="checkbox" id="copy-opt-welcome" checked style="width: 16px; height: 16px; accent-color: #ff9500;">
+              👋 Auto-Welcome &amp; Auto-Mute settings
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="font-weight: 600; margin-bottom: 10px; display: block;">📲 Copy to:</label>
+          <div id="copy-settings-targets" style="display: flex; flex-direction: column; gap: 10px; max-height: 200px; overflow-y: auto; padding-right: 4px;"></div>
+          <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--panel-border);">
+            <input type="checkbox" id="copy-opt-all" style="width: 16px; height: 16px; accent-color: var(--primary);">
+            <strong>⚡ Select All Instances</strong>
+          </label>
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" id="copy-settings-cancel-btn" type="button" style="flex: 1;">Cancel</button>
+          <button class="btn btn-primary" id="copy-settings-confirm-btn" type="button" style="flex: 2; background: linear-gradient(135deg, #ff9500, #ff6b00); border-color: #ff9500;">
+            <i data-lucide="copy" style="width: 16px; height: 16px; margin-right: 6px;"></i>
+            <span>Copy Settings →</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

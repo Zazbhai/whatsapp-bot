@@ -37,8 +37,30 @@ function isInstallOnlyConfirmation(text) {
 
 function isExplicitOrderConfirmation(text) {
   const value = String(text || '').toLowerCase();
-  if (/\b(not|nahi|nhi|didn't|did not|abhi nahi)\b|(?:नहीं|नही)/i.test(value)) return false;
-  return /^(yes|yep|yeah|haan|han|ji|हो गया|हाँ|हां)[.!\s]*$/i.test(value) || /\b(order|purchase|checkout)\b.{0,35}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed|successfully ordered)\b|\b(order ho gaya|order kar diya|order place kar diya|haan order|yes order)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का)|आर्डर.{0,20}(हो गया|कर दिया))/i.test(value);
+  if (/\b(not|nahi|nhi|didn't|did not|abhi nahi|downloaded|download|installed|install)\b|(?:नहीं|नही|डाउनलोड|इंस्टॉल)/i.test(value)) return false;
+  return /^(yes|yep|yeah|haan|han|ji|ho gaya|haan kiya|yes i did|हो गया|हाँ|हां)[.!\s]*$/i.test(value) || /\b(order|purchase|checkout)\b.{0,45}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed|successfully ordered)\b|\b(order ho gaya|order kar diya|order place kar diya|haan order|yes order)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का)|आर्डर.{0,20}(हो गया|कर दिया))/i.test(value);
 }
 
-module.exports = { detectLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation };
+function requestedAppAsset(text) {
+  const value = String(text || '').toLowerCase();
+  if (/\b(send|share|give|need|want|where|get|link|url|apk|download)\b.{0,50}\b(app|application|apk|link|url)\b|\b(app|application|apk|link|url)\b.{0,50}\b(send|share|give|need|want|where|get|download|bhejo|bhej|chahiye|do|dedo|milega)\b|\b(send|share|give|need|want)\s+(it|that)\b/i.test(value)) return true;
+  return /ऐप|लिंक|डाउनलोड|apk/i.test(value) && /भेज|चाहिए|दो|दें|कहाँ|कहां/i.test(value);
+}
+
+function prepareAppRequestReply(text, userMessage, { storeUrl = '', apkAvailable = false, language = 'en' } = {}) {
+  const reply = String(text || '').trim();
+  if (!requestedAppAsset(userMessage)) return reply;
+  if (apkAvailable) {
+    const assetLine = language === 'hinglish'
+      ? 'App file attach ki hai; download link APK ke saath hai.'
+      : language === 'hi'
+        ? 'App file attach की है; download link APK के साथ है।'
+        : 'I’ve attached the app file with its download link.';
+    const cleaned = reply.replace(/https?:\/\/\S+/gi, '').replace(/\b(sure[,! ]*)?(here (is|are) (the )?(app|apk|download|link)|link (is|attached) below)\b[.! ]*/gi, '').trim();
+    return [cleaned, assetLine].filter(Boolean).join('\n');
+  }
+  if (!storeUrl || reply.includes(storeUrl)) return reply;
+  return `${reply || (language === 'hinglish' ? 'Ye raha app ka link:' : language === 'hi' ? 'यह रहा app का link:' : 'Here is the app link:')}\n${storeUrl}`;
+}
+
+module.exports = { detectLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation, requestedAppAsset, prepareAppRequestReply };

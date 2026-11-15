@@ -1305,8 +1305,12 @@ function renderInstances() {
             <span class="status-text" style="font-weight: 500;">${inst.status.charAt(0).toUpperCase() + inst.status.slice(1).replace('_', ' ')}</span>
           </span>
         </td>
-        <td style="padding: 16px 20px; text-align: right;">
-          <button class="btn btn-secondary btn-sm" onclick="selectBotInstance('${inst.slug}')" ${isActive ? 'disabled style="opacity: 0.55; cursor: default; margin-right: 8px;"' : 'style="margin-right: 8px;"'} title="${isActive ? 'Currently selected' : 'Switch dashboard to this bot'}">
+        <td style="padding: 16px 20px; text-align: right; display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="openCopySettingsModal('${inst.slug}')" title="Copy all settings from this instance to others" style="background: rgba(255,165,0,0.1); border-color: rgba(255,165,0,0.3); color: #ff9500;">
+            <i data-lucide="copy" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+            <span>Copy Settings</span>
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="selectBotInstance('${inst.slug}')" ${isActive ? 'disabled style="opacity: 0.55; cursor: default;"' : ''} title="${isActive ? 'Currently selected' : 'Switch dashboard to this bot'}">
             <span>${isActive ? 'Selected' : 'Select'}</span>
           </button>
           <button class="btn btn-danger btn-sm" onclick="deleteInstance('${inst.slug}')" ${allInstances.length <= 1 ? 'disabled style="opacity: 0.4; cursor: not-allowed;"' : ''} title="${allInstances.length <= 1 ? 'You must keep at least one active WhatsApp bot instance' : 'Delete bot instance'}">
@@ -2666,3 +2670,162 @@ if (addKeyForm) {
   });
 }
 
+
+// ============================================================
+// COPY SETTINGS MODAL
+// ============================================================
+let _copySettingsSrcSlug = null;
+
+window.openCopySettingsModal = function(srcSlug) {
+  _copySettingsSrcSlug = srcSlug;
+  const srcInst = allInstances.find(i => i.slug === srcSlug);
+  document.getElementById('copy-settings-src-name').textContent = srcInst ? srcInst.name : srcSlug;
+
+  // Populate target checkboxes (all OTHER instances)
+  const targetsContainer = document.getElementById('copy-settings-targets');
+  targetsContainer.innerHTML = '';
+  const others = allInstances.filter(i => i.slug !== srcSlug);
+  if (others.length === 0) {
+    targetsContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">No other instances available.</p>';
+  } else {
+    others.forEach(inst => {
+      const label = document.createElement('label');
+      label.style.cssText = 'display:flex; align-items:center; gap:10px; cursor:pointer; font-size:0.9rem;';
+      label.innerHTML = `
+        <input type="checkbox" class="copy-target-chk" data-slug="${escapeHtml(inst.slug)}" style="width:16px;height:16px;accent-color:#ff9500;">
+        ${escapeHtml(inst.name)} <span style="color:var(--text-muted); font-size:0.8rem;">(${escapeHtml(inst.slug)})</span>
+      `;
+      targetsContainer.appendChild(label);
+    });
+  }
+
+  // Reset checkboxes
+  document.getElementById('copy-opt-ai').checked = true;
+  document.getElementById('copy-opt-rules').checked = true;
+  document.getElementById('copy-opt-welcome').checked = true;
+  document.getElementById('copy-opt-all').checked = false;
+
+  document.getElementById('copy-settings-modal').classList.add('active');
+  if (window.lucide) lucide.createIcons();
+};
+
+document.getElementById('copy-opt-all').addEventListener('change', function() {
+  document.querySelectorAll('.copy-target-chk').forEach(chk => { chk.checked = this.checked; });
+});
+
+function closeCopySettingsModal() {
+  document.getElementById('copy-settings-modal').classList.remove('active');
+  _copySettingsSrcSlug = null;
+}
+document.getElementById('copy-settings-modal-close').addEventListener('click', closeCopySettingsModal);
+document.getElementById('copy-settings-cancel-btn').addEventListener('click', closeCopySettingsModal);
+
+document.getElementById('copy-settings-confirm-btn').addEventListener('click', async () => {
+  if (!_copySettingsSrcSlug) return;
+  const targetSlugs = Array.from(document.querySelectorAll('.copy-target-chk:checked')).map(c => c.dataset.slug);
+  if (targetSlugs.length === 0) { showToast('Select at least one target instance.', 'error'); return; }
+
+  const includeAI = document.getElementById('copy-opt-ai').checked;
+  const includeRules = document.getElementById('copy-opt-rules').checked;
+  const includeWelcome = document.getElementById('copy-opt-welcome').checked;
+
+  const btn = document.getElementById('copy-settings-confirm-btn');
+  btn.disabled = true;
+  btn.querySelector('span').textContent = 'Copying...';
+
+  try {
+    const res = await apiFetch(`/api/instances/${_copySettingsSrcSlug}/copy-settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetSlugs, includeAI, includeRules, includeWelcome })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`✅ Settings copied to: ${data.copied.join(', ') || 'none'}${data.failed.length ? ` | Failed: ${data.failed.map(f=>f.slug).join(', ')}` : ''}`, 'success');
+      closeCopySettingsModal();
+    } else {
+      showToast(data.error || 'Failed to copy settings.', 'error');
+    }
+  } catch {
+    showToast('Network error copying settings.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.querySelector('span').textContent = 'Copy Settings →';
+  }
+});
+
+// ============================================================
+// MEMORY MODE TOGGLE — on Bot Instances tab, inject a card above the table
+// ============================================================
+(async function initMemoryModeToggle() {
+  try {
+    const res = await apiFetch('/api/settings/memory-mode');
+    if (!res.ok) return;
+    const { mode } = await res.json();
+    _currentMemoryMode = mode;
+
+    // Inject memory mode card into the instances tab, above the table card
+    const instancesSection = document.getElementById('tab-instances');
+    if (!instancesSection) return;
+
+    const memCard = document.createElement('div');
+    memCard.className = 'glass-card full-width-card';
+    memCard.id = 'memory-mode-card';
+    memCard.style.cssText = 'margin-bottom: 20px;';
+    memCard.innerHTML = `
+      <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <h3 style="display:flex; align-items:center; gap:8px; margin:0;">
+          <i data-lucide="brain" style="width:18px;height:18px;color:var(--secondary);"></i>
+          🧠 Bot Memory Mode
+        </h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="mem-mode-shared-btn" class="btn btn-sm ${mode === 'shared' ? 'btn-primary' : 'btn-secondary'}" onclick="setMemoryMode('shared')" title="All instances share ONE combined memory">
+            🔗 Shared (Default)
+          </button>
+          <button id="mem-mode-isolated-btn" class="btn btn-sm ${mode === 'isolated' ? 'btn-primary' : 'btn-secondary'}" onclick="setMemoryMode('isolated')" title="Each instance has its own independent memory">
+            🔒 Isolated
+          </button>
+        </div>
+      </div>
+      <p id="memory-mode-desc" style="color:var(--text-muted); font-size:0.84rem; margin-top:10px;">
+        ${mode === 'shared'
+          ? '✅ <strong>Shared mode active.</strong> All bot instances share one combined conversation memory — users keep context regardless of which number they\'re talking to.'
+          : '🔒 <strong>Isolated mode active.</strong> Each bot instance maintains its own independent conversation memory.'}
+      </p>
+    `;
+    // Insert before the first .glass-card inside the section
+    const firstCard = instancesSection.querySelector('.glass-card');
+    if (firstCard) {
+      instancesSection.querySelector('.actions-bar + *') ? instancesSection.insertBefore(memCard, instancesSection.querySelector('.glass-card')) : instancesSection.appendChild(memCard);
+    } else {
+      instancesSection.appendChild(memCard);
+    }
+    if (window.lucide) lucide.createIcons();
+  } catch {}
+})();
+
+let _currentMemoryMode = 'shared';
+window.setMemoryMode = async function(mode) {
+  if (mode === _currentMemoryMode) return;
+  try {
+    const res = await apiFetch('/api/settings/memory-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode })
+    });
+    if (res.ok) {
+      _currentMemoryMode = mode;
+      document.getElementById('mem-mode-shared-btn').className = `btn btn-sm ${mode === 'shared' ? 'btn-primary' : 'btn-secondary'}`;
+      document.getElementById('mem-mode-isolated-btn').className = `btn btn-sm ${mode === 'isolated' ? 'btn-primary' : 'btn-secondary'}`;
+      document.getElementById('memory-mode-desc').innerHTML = mode === 'shared'
+        ? '✅ <strong>Shared mode active.</strong> All bot instances share one combined conversation memory — users keep context regardless of which number they\'re talking to.'
+        : '🔒 <strong>Isolated mode active.</strong> Each bot instance maintains its own independent conversation memory.';
+      showToast(`Memory mode switched to ${mode}.`, 'success');
+    } else {
+      const d = await res.json();
+      showToast(d.error || 'Failed to switch memory mode.', 'error');
+    }
+  } catch {
+    showToast('Network error switching memory mode.', 'error');
+  }
+};

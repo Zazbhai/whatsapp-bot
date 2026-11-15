@@ -7,7 +7,7 @@ const { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsCom
 const { sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech, buildAppLinkInstructions } = require('./reply-links');
 const { readStoreMetrics } = require('./store-metrics');
 const { ReadFollowupScheduler, isEligibleFollowup } = require('./read-followups');
-const { detectLanguage: detectBotLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation } = require('./bot-policy');
+const { detectLanguage: detectBotLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation, requestedAppAsset, prepareAppRequestReply } = require('./bot-policy');
 const {
   PROVIDERS,
   normalizeProviderId,
@@ -190,6 +190,23 @@ if (!fs.existsSync(dataDir)) {
 }
 acquireProcessLock();
 
+// =============================================================
+// GLOBAL SETTINGS — persistent key-value store in data/settings.json
+// =============================================================
+const globalSettingsPath = path.join(dataDir, 'settings.json');
+function loadGlobalSettings() {
+  try {
+    if (fs.existsSync(globalSettingsPath)) return JSON.parse(fs.readFileSync(globalSettingsPath, 'utf8'));
+  } catch {}
+  return {};
+}
+function saveGlobalSettings(settings) {
+  try { fs.writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2), 'utf8'); return true; } catch { return false; }
+}
+// Apply saved memory mode on startup
+const _savedSettings = loadGlobalSettings();
+if (_savedSettings.memoryMode) process.env.MEMORY_MODE = _savedSettings.memoryMode;
+
 // Multer storage configuration for manual file sending
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -218,13 +235,25 @@ function createReadFollowupScheduler(slug) {
       const userLang = entry.userLanguage || detectUserLanguageFromHistory(slug, entry.sender, '');
       const deadline = String(loadInstances().find(item => item.slug === slug)?.iphoneOfferDeadline || '').trim();
       const hasRealDeadline = deadline && Number.isFinite(Date.parse(deadline)) && Date.parse(deadline) > Date.now();
-      const deadlineLine = hasRealDeadline ? ` The offer is available until ${deadline}.` : '';
-      const fallback = userLang === 'hinglish'
-        ? `Hi! App install karke iPhone order place karna ho to main process mein help kar sakta hoon. Jab ready ho, mujhe bata dena.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`
+      const deadlineLine = hasRealDeadline ? ` Offer available until ${deadline}.` : '';
+      const reminderOptions = userLang === 'hinglish'
+        ? [
+            `Agar app install ya iPhone order ke kisi step mein help chahiye, bas reply kar dena—main guide kar dunga.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`,
+            `App open karne ya order place karne mein koi issue aa raha hai? Batao, main step-by-step help karunga.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`,
+            `Jab aap ready hon, app install aur iPhone order complete karne mein main help kar sakta hoon. Koi question ho to pooch lena.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`
+          ]
         : userLang === 'hi'
-          ? `नमस्ते! App install करके iPhone का order place करने में मदद चाहिए तो मुझे बताइए।${hasRealDeadline ? ` यह offer ${deadline} तक उपलब्ध है।` : ''}`
-          : `Hi! If you'd like help installing the app or placing your iPhone order, just reply and I'll help.${deadlineLine}`;
-      let reminder = fallback;
+          ? [
+              `App install करने या iPhone order के किसी step में मदद चाहिए तो reply करें—मैं guide कर दूँगा।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`,
+              `App open करने या order place करने में कोई issue है? बताइए, मैं step-by-step मदद करूँगा।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`,
+              `जब आप ready हों, app install और iPhone order के steps में मैं मदद कर सकता हूँ। कोई सवाल हो तो पूछें।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`
+            ]
+          : [
+              `If you need help with any app installation or iPhone order step, reply here and I’ll guide you.${deadlineLine}`,
+              `Is anything blocking you from opening the app or placing the order? Tell me and I can help with the next step.${deadlineLine}`,
+              `Whenever you’re ready, I can walk you through installing the app and placing the iPhone order.${deadlineLine}`
+            ];
+      let reminder = reminderOptions[Math.max(0, Math.min(2, (entry.reminderCount || 1) - 1))];
       if (userLang === 'en' && /[a-z]/i.test(entry.text || '') && /\b(kya|hai|ho|kaise|karo|karna|mujhe|aap|app|order|download|install|bhejo|chahiye|nahi)\b/i.test(entry.text || '')) {
         const inferred = detectUserLanguage(entry.text);
         if (inferred !== 'en') {
@@ -935,13 +964,13 @@ function markStoreLinkSent(slug, senderNumber) {
   recentStoreLinkSends.set(linkCooldownKey(slug, senderNumber), Date.now());
 }
 
-function prepareUserFacingLink(slug, senderNumber, text) {
+function prepareUserFacingLink(slug, senderNumber, text, forceLink = false) {
   const storeUrl = features.storeLink(slug);
   if (typeof text !== 'string') return { text, containsLink: false };
   if (!storeUrl) return { text, containsLink: false };
   const containsLink = text.includes(storeUrl);
   if (!containsLink) return { text, containsLink: false };
-  const prepared = dedupeConfiguredLink(text, storeUrl, hasRecentStoreLink(slug, senderNumber));
+  const prepared = dedupeConfiguredLink(text, storeUrl, hasRecentStoreLink(slug, senderNumber) && !forceLink);
   return {
     text: prepared || 'मैंने ऐप का लिंक पहले ही भेज दिया है।',
     containsLink: prepared.includes(storeUrl)
@@ -981,9 +1010,18 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
   if (!replyText || !msg || !msg.from) return;
   if (msg.from === 'status@broadcast' || msg.from.endsWith('@broadcast') || msg.from.endsWith('@newsletter')) return;
   replyText = sanitizeReplyLinks(replyText, features.storeLink(slug));
+  const assetRequested = typeof requestedAppAsset === 'function' && requestedAppAsset(msg.body || '');
+  const detectedLanguage = typeof detectUserLanguage === 'function' ? detectUserLanguage(msg.body || '') : 'en';
+  if (typeof prepareAppRequestReply === 'function') {
+    replyText = prepareAppRequestReply(replyText, msg.body || '', {
+      storeUrl: features.storeLink(slug),
+      apkAvailable: typeof latestApkCache !== 'undefined' && Boolean(latestApkCache[slug]?.data),
+      language: detectedLanguage
+    });
+  }
   const originatingClient = activeClients[slug];
   const senderNumber = msg.from.split('@')[0];
-  const preparedReply = prepareUserFacingLink(slug, senderNumber, replyText);
+  const preparedReply = prepareUserFacingLink(slug, senderNumber, replyText, assetRequested);
   replyText = preparedReply.text;
   const users = loadSeenUsers(slug);
   const userEntry = users.find(u => u.number === senderNumber);
@@ -1603,36 +1641,76 @@ function getMemoryFilePath(slug) {
   return path.join(dataDir, `memory_${slug}.json`);
 }
 
+function isSharedMemory() {
+  return (process.env.MEMORY_MODE || 'shared').toLowerCase() !== 'isolated';
+}
+function getEffectiveMemoryFilePath(slug) {
+  return isSharedMemory() ? path.join(dataDir, 'memory_shared.json') : getMemoryFilePath(slug);
+}
+
 function loadMemory(slug = 'primary') {
-  if (conversationMemory[slug]) {
-    return conversationMemory[slug];
+  const cacheKey = isSharedMemory() ? 'shared' : slug;
+  if (conversationMemory[cacheKey]) return conversationMemory[cacheKey];
+
+  const filePath = getEffectiveMemoryFilePath(slug);
+
+  if (isSharedMemory()) {
+    // Attempt to load existing shared file
+    let merged = {};
+    try {
+      if (fs.existsSync(filePath)) {
+        merged = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      } else {
+        // First-time migration: merge all existing per-slug memory files
+        const files = fs.existsSync(dataDir) ? fs.readdirSync(dataDir) : [];
+        for (const f of files) {
+          if (/^memory_[^.]+.json$/.test(f) && f !== 'memory_shared.json') {
+            try {
+              const data = JSON.parse(fs.readFileSync(path.join(dataDir, f), 'utf8'));
+              Object.assign(merged, data);
+            } catch {}
+          }
+        }
+        // Also check legacy global memory.json
+        if (fs.existsSync(globalMemoryFilePath)) {
+          try {
+            const globalData = JSON.parse(fs.readFileSync(globalMemoryFilePath, 'utf8'));
+            // legacy keys are "slug:number", strip slug prefix
+            for (const [key, val] of Object.entries(globalData)) {
+              const parts = key.split(':');
+              if (parts.length >= 2) merged[parts.slice(1).join(':')] = val;
+            }
+          } catch {}
+        }
+        fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf8');
+        console.log('[MEMORY] Migrated all instance memories into memory_shared.json');
+      }
+    } catch (err) {
+      console.error('[MEMORY] Failed to load shared memory:', err);
+    }
+    conversationMemory[cacheKey] = merged;
+    return merged;
   }
-  const filePath = getMemoryFilePath(slug);
+
+  // Isolated mode — original logic
   try {
     if (fs.existsSync(filePath)) {
       const data = fs.readFileSync(filePath, 'utf8');
       conversationMemory[slug] = JSON.parse(data);
       return conversationMemory[slug];
     } else {
-      // Check if global memory.json exists for migration
       if (fs.existsSync(globalMemoryFilePath)) {
         try {
           const globalData = JSON.parse(fs.readFileSync(globalMemoryFilePath, 'utf8'));
           const instanceMemory = {};
           let hasEntries = false;
-          // Extract entries matching this slug
           for (const [key, val] of Object.entries(globalData)) {
             if (key.startsWith(`${slug}:`)) {
               const senderNumber = key.split(':')[1];
-              if (senderNumber) {
-                instanceMemory[senderNumber] = val;
-                hasEntries = true;
-              }
+              if (senderNumber) { instanceMemory[senderNumber] = val; hasEntries = true; }
             }
           }
-          if (hasEntries) {
-            fs.writeFileSync(filePath, JSON.stringify(instanceMemory, null, 2), 'utf8');
-          }
+          if (hasEntries) fs.writeFileSync(filePath, JSON.stringify(instanceMemory, null, 2), 'utf8');
           conversationMemory[slug] = instanceMemory;
           return conversationMemory[slug];
         } catch (migErr) {
@@ -1648,14 +1726,15 @@ function loadMemory(slug = 'primary') {
 }
 
 function saveMemory(slug, memory) {
-  conversationMemory[slug] = memory;
-  if (pendingMemoryWriteTimeouts[slug]) return;
-  
-  pendingMemoryWriteTimeouts[slug] = setTimeout(() => {
-    delete pendingMemoryWriteTimeouts[slug];
-    const filePath = getMemoryFilePath(slug);
-    fs.promises.writeFile(filePath, JSON.stringify(conversationMemory[slug], null, 2), 'utf8')
-      .catch(err => console.error(`[SYSTEM] Async memory persist failed for ${slug}:`, err));
+  const cacheKey = isSharedMemory() ? 'shared' : slug;
+  conversationMemory[cacheKey] = memory;
+  if (pendingMemoryWriteTimeouts[cacheKey]) return;
+
+  pendingMemoryWriteTimeouts[cacheKey] = setTimeout(() => {
+    delete pendingMemoryWriteTimeouts[cacheKey];
+    const filePath = getEffectiveMemoryFilePath(slug);
+    fs.promises.writeFile(filePath, JSON.stringify(conversationMemory[cacheKey], null, 2), 'utf8')
+      .catch(err => console.error(`[SYSTEM] Async memory persist failed (${cacheKey}):`, err));
   }, 2000);
 }
 
@@ -2204,7 +2283,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   }
 
   // 3. Fast APK keyword path
-  const isApkKeyword = incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk';
+  const isApkKeyword = incomingText === 'apk' || incomingText === 'get apk' || incomingText === 'download apk' || incomingText === 'latest apk' || detectApkIntent(msg.body) || requestedAppAsset(msg.body);
   if (isApkKeyword && !aiHandlesApk) {
     logInstanceEvent(slug, 'system', `APK request keyword match from +${senderNumber}`);
     try {
@@ -2561,7 +2640,12 @@ async function processSingleAITask(task) {
         replyText = truncateToSentences(replyText, 2);
       }
 
-      const shouldSendApk = smartApkOn && (finalSendApk || detectApkIntent(msg.body));
+      const shouldSendApk = smartApkOn && (finalSendApk || detectApkIntent(msg.body) || requestedAppAsset(msg.body));
+      const recentAssistantOrderQuestion = getConversationHistory(slug, senderNumber)
+        .filter(item => item.role === 'assistant').slice(-4)
+        .some(item => /successfully place your iPhone order|Kya aapne app par iPhone order|order place hua hai|order confirmation ke liye|order confirmation screen/i.test(item.content || ''));
+      const explicitOrderDetails = /\b(order|purchase|checkout)\b.{0,50}\b(placed|ordered|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(order ho gaya|order kar diya|order place kar diya|successfully ordered)\b|(?:ऑर्डर.{0,25}(हो गया|कर दिया|पक्का))/i.test(msg.body || '') && !/\b(not|nahi|nhi|didn't|did not|abhi nahi)\b|(?:नहीं|नही)/i.test(msg.body || '');
+      finalOrderComplete = finalOrderComplete && (explicitOrderDetails || (recentAssistantOrderQuestion && isExplicitOrderConfirmation(msg.body)));
 
       if (shouldSendApk && !replyText) {
         const preamble = (inst && inst.aiApkPreamble ? inst.aiApkPreamble.trim() : '') || DEFAULT_AI_CONFIG.aiApkPreamble;
@@ -3911,6 +3995,55 @@ app.delete('/api/instances/:slug', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /api/instances/:slug/copy-settings — copy AI/rules/welcome settings to target instances
+app.post('/api/instances/:slug/copy-settings', authenticateToken, (req, res) => {
+  const srcSlug = req.params.slug.trim().toLowerCase();
+  const { targetSlugs, includeAI = true, includeRules = true, includeWelcome = true } = req.body;
+
+  if (!Array.isArray(targetSlugs) || targetSlugs.length === 0) {
+    return res.status(400).json({ error: 'targetSlugs must be a non-empty array of instance slugs.' });
+  }
+
+  const list = loadInstances();
+  const src = list.find(i => i.slug === srcSlug);
+  if (!src) return res.status(404).json({ error: 'Source instance not found.' });
+
+  const AI_FIELDS = ['aiEnabled','aiSystemPrompt','aiProcessReply','aiApkInstructions','aiApkPreamble','aiSmartApkEnabled'];
+  const WELCOME_FIELDS = ['autoWelcomeMessage','autoWelcomeSendApk','autoMuteOlderThan12Hours','autoMuteHours','orderFollowupDelayMinutes','iphoneOfferDeadline','adminForwardNumber','blockTriggerText'];
+
+  const copied = [];
+  const failed = [];
+
+  for (const targetSlug of targetSlugs) {
+    const tSlug = String(targetSlug).trim().toLowerCase();
+    if (tSlug === srcSlug) continue; // skip self
+
+    const tIdx = list.findIndex(i => i.slug === tSlug);
+    if (tIdx === -1) { failed.push({ slug: tSlug, reason: 'Instance not found' }); continue; }
+
+    if (includeAI) {
+      for (const f of AI_FIELDS) { if (src[f] !== undefined) list[tIdx][f] = src[f]; }
+    }
+    if (includeWelcome) {
+      for (const f of WELCOME_FIELDS) { if (src[f] !== undefined) list[tIdx][f] = src[f]; }
+    }
+    if (includeRules) {
+      // Replace target rules with source rules (new IDs to avoid collisions)
+      const srcRules = loadInstanceRules(srcSlug);
+      const copiedRules = srcRules.map(r => ({ ...r, id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2,7) }));
+      saveInstanceRules(tSlug, copiedRules);
+      rulesCache[tSlug] = copiedRules;
+    }
+    copied.push(tSlug);
+  }
+
+  if (saveInstances(list)) {
+    res.json({ copied, failed });
+  } else {
+    res.status(500).json({ error: 'Failed to save instance changes.' });
+  }
+});
+
 app.get('/api/default-ai-config', authenticateToken, (req, res) => {
   res.json(DEFAULT_AI_CONFIG);
 });
@@ -4187,6 +4320,28 @@ app.delete('/api/memory', authenticateToken, requireInstance, (req, res) => {
   
   logInstanceEvent(slug, 'system', `AI conversational memory cache cleared successfully (${deletedCount} contacts deleted).`);
   res.json({ message: 'Conversation memory cleared successfully.', deletedCount });
+});
+
+// GET /api/settings/memory-mode → returns { mode: 'shared' | 'isolated' }
+app.get('/api/settings/memory-mode', authenticateToken, (req, res) => {
+  const settings = loadGlobalSettings();
+  res.json({ mode: settings.memoryMode || process.env.MEMORY_MODE || 'shared' });
+});
+
+// POST /api/settings/memory-mode → saves mode to data/settings.json and applies it
+app.post('/api/settings/memory-mode', authenticateToken, (req, res) => {
+  const { mode } = req.body;
+  if (mode !== 'shared' && mode !== 'isolated') return res.status(400).json({ error: 'mode must be "shared" or "isolated"' });
+  const settings = loadGlobalSettings();
+  settings.memoryMode = mode;
+  if (saveGlobalSettings(settings)) {
+    process.env.MEMORY_MODE = mode;
+    // Clear in-memory cache so next access re-loads from correct file
+    Object.keys(conversationMemory).forEach(k => delete conversationMemory[k]);
+    res.json({ mode });
+  } else {
+    res.status(500).json({ error: 'Failed to save memory mode setting' });
+  }
 });
 
 // GET all users (seen + blocked) for an instance
