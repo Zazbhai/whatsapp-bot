@@ -313,6 +313,7 @@ activeInstanceSelect.addEventListener('change', () => {
   statReceived.textContent = '0';
   statReplies.textContent = '0';
   statUptime.textContent = '00:00';
+  resetStoreMetrics();
   currentStatus = 'disconnected';
   headerStatus.className = 'connection-status-badge disconnected';
   headerStatusText.textContent = 'Disconnected';
@@ -1446,6 +1447,7 @@ function escapeHtml(str) {
 }
 
 async function syncActiveInstanceData() {
+  updateStoreMetrics();
   try {
     const res = await apiFetch('/api/status');
     const data = await res.json();
@@ -2042,7 +2044,10 @@ async function init() {
 
     // 3. Start dashboard stats auto-refresh polling loop
     if (dashboardUsersInterval) clearInterval(dashboardUsersInterval);
-    dashboardUsersInterval = setInterval(updateDashboardUsers, 15000);
+    dashboardUsersInterval = setInterval(() => {
+      updateDashboardUsers();
+      updateStoreMetrics();
+    }, 15000);
   } catch (err) {
     if (err.message !== 'Unauthorized') {
       showToast('System backend is currently unresponsive. Ensure Node server is running.', 'error');
@@ -2076,6 +2081,32 @@ function escapeHtml(str) {
 }
 
 // ── Successful Orders & Today's Users Dash Rendering ──────────────────────────
+function resetStoreMetrics() {
+  document.getElementById('stat-install-clicks').textContent = '—';
+  document.getElementById('stat-install-visitors').textContent = '—';
+  document.getElementById('store-metrics-note').textContent = 'Loading install activity…';
+}
+
+async function updateStoreMetrics() {
+  const slug = activeInstanceSlug;
+  if (!slug) return;
+  try {
+    const res = await apiFetch('/api/store/metrics');
+    if (!res.ok) throw new Error('Failed to load store metrics');
+    const data = await res.json();
+    if (slug !== activeInstanceSlug) return;
+    document.getElementById('stat-install-clicks').textContent = Number(data.installClicks).toLocaleString();
+    document.getElementById('stat-install-visitors').textContent = Number(data.uniqueInstallVisitors).toLocaleString();
+    document.getElementById('store-metrics-note').textContent =
+      'Install button presses, not confirmed installations. Unique visitors are counted per browser. Updates every 15 seconds.';
+  } catch (error) {
+    if (slug !== activeInstanceSlug) return;
+    document.getElementById('stat-install-clicks').textContent = '—';
+    document.getElementById('stat-install-visitors').textContent = '—';
+    document.getElementById('store-metrics-note').textContent = 'Install activity is temporarily unavailable. Retrying automatically.';
+  }
+}
+
 async function updateDashboardUsers() {
   if (!activeInstanceSlug) return;
   try {

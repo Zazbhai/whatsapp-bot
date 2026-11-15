@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { selectStoreBaseUrl, sanitizeReplyLinks, buildAppLinkInstructions } = require('./reply-links');
+const { selectStoreBaseUrl, sanitizeReplyLinks, dedupeConfiguredLink, buildAppLinkInstructions } = require('./reply-links');
 const realLink = 'https://store.customer.app/app/primary';
 
 test('placeholder links are replaced with the configured app URL, including bare and formatted links', () => {
@@ -24,6 +24,18 @@ test('unrelated links, domain lookalikes, and email addresses are preserved', ()
   const text = 'See https://help.customer.app/example.com and example.com.customer.app or email help@example.com.';
   assert.equal(sanitizeReplyLinks(text, realLink), text);
   assert.equal(sanitizeReplyLinks(realLink, realLink), realLink);
+});
+
+test('store URLs appear once per reply and are omitted from a recent repeat', () => {
+  assert.equal(
+    dedupeConfiguredLink(`Get the app: ${realLink}. Download again: ${realLink}`, realLink),
+    `Get the app: ${realLink}. Download again:`
+  );
+  assert.equal(
+    dedupeConfiguredLink(`Get the app: ${realLink}. Another link: ${realLink}`, realLink, true),
+    'Get the app. Another link'
+  );
+  assert.equal(dedupeConfiguredLink('No link here.', realLink, true), 'No link here.');
 });
 
 test('a missing public URL removes placeholder destinations instead of inventing a link', () => {

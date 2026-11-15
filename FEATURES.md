@@ -93,6 +93,12 @@ Integrated permanent free-tier LLM providers from [awesome-free-llm-apis](https:
 - **Failover & Load-Balancing**: Add multiple keys across different providers. The bot will load-balance across active keys and failover if one hits rate limits (HTTP 429) or quota errors.
 - **Dedicated Environment Variables**: Supported in `.env` as `OPENROUTER_API_KEYS`, `GROQ_API_KEYS`, `GEMINI_API_KEYS`, `MISTRAL_API_KEYS`, `COHERE_API_KEYS`, `NVIDIA_API_KEYS`, etc., while maintaining 100% backwards compatibility with `LLM_API_KEYS` and `HF_TOKENS`.
 
+## Play Store install activity
+
+The WhatsApp dashboard shows Install Button Clicks and Unique Install Visitors for the selected bot's store page on port 3002, refreshing every 15 seconds. Tracking starts at zero when this feature is deployed; the listing's display download count is not used. Only Install button presses count, including repeat presses from the same visitor. Ordinary page views, direct APK downloads, and download retries do not count.
+
+An anonymous browser cookie identifies repeat visitors for up to one year. It is shared across rotating subdomains of the same configured wildcard domain; different browsers, cleared cookies, and unrelated domains count separately. These are click counts, not confirmed Android installations. Counts persist in `data/store_metrics/<slug>.json`, separate from bot configuration, and survive process restarts. The dashboard reads these files fresh so both PM2 processes must use the same data directory. Aggregate counts are available only through the authenticated dashboard API.
+
 ## Voice messages
 
 Incoming audio is transcribed from the first message. Configured Hugging Face speech tokens are used first; if no real token exists or inference fails, the bot uses local CPU Whisper. Set `VOICE_STT_MODE=local` to always transcribe locally, `LOCAL_STT_MODEL=small` to select the Whisper model, and `LOCAL_STT_THREADS=2` to limit its CPU threads.

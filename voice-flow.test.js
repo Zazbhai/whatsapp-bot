@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const { isSessionFailure } = require('./session-health');
-const { sanitizeReplyLinks } = require('./reply-links');
+const { sanitizeReplyLinks, dedupeConfiguredLink } = require('./reply-links');
 const { downloadVoiceMedia, describeVoiceError, voiceMediaState } = require('./voice-runtime');
 const source = fs.readFileSync(require.resolve('./server'), 'utf8').replace(/\r\n/g, '\n');
 
@@ -21,7 +21,9 @@ function replyHarness({ demanded = true, synthesize, uploadError, voiceRewrite, 
     isPureHindi,
     logInstanceEvent() {},
     isSessionFailure,
-    sanitizeReplyLinks, features: { storeLink: () => 'https://store.customer.app/app/main' },
+    sanitizeReplyLinks, dedupeConfiguredLink,
+    prepareUserFacingLink: (slug, number, text) => ({ text, containsLink: false }),
+    features: { storeLink: () => 'https://store.customer.app/app/main' },
     createVoiceReplyMedia: async () => { events.push('synthesize'); return synthesize ? synthesize(context) : media; },
     generateAIResponse: async (...args) => { events.push('voice-rewrite'); return voiceRewrite ? voiceRewrite(...args) : { text: 'ऐप डाउनलोड करके खोलें।' }; },
     enqueueWhatsAppSend: async (slug, task) => { events.push('queue'); return task(); }

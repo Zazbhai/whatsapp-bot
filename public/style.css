@@ -772,6 +772,16 @@ body {
 }
 
 /* Stats Layout */
+#store-metrics-card .stats-grid {
+  height: auto;
+}
+
+.store-metrics-note {
+  margin-top: 14px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

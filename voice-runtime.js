@@ -12,6 +12,13 @@ function describeVoiceError(error) {
   return details.join(' | ');
 }
 
+function audioConversionIsComplete(sourceDuration, encodedDuration) {
+  const source = Number(sourceDuration);
+  const encoded = Number(encodedDuration);
+  if (!Number.isFinite(source) || !Number.isFinite(encoded) || source <= 0 || encoded <= 0) return false;
+  return encoded >= source - Math.min(0.25, source * 0.05);
+}
+
 async function downloadVoiceMedia(msg, {
   isCurrent = () => true,
   onRetry = () => {},
@@ -82,4 +89,4 @@ function runVoiceProcess(command, args, { cwd, timeout = 90000 } = {}) {
   });
 }
 
-module.exports = { resolvePython, runVoiceProcess, describeVoiceError, downloadVoiceMedia, voiceMediaState };
+module.exports = { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsComplete, downloadVoiceMedia, voiceMediaState };

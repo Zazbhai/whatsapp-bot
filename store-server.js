@@ -9,6 +9,7 @@ const {
   getNextRotateRemainingSeconds
 } = require('./store-domain-rotator');
 const { getLocalIp } = require('./network-urls');
+const { recordInstallClick, storeVisitorId } = require('./store-metrics');
 
 // Load environment variables manually if executed standalone
 const envPath = path.join(__dirname, '.env');
@@ -352,7 +353,20 @@ function createStoreApp({
     });
   });
 
-  // 5-minute Cloudflare wildcard domain auto-redirect middleware
+  // Count explicit button presses separately from APK requests and their retries.
+  app.post('/api/public/store/:slug/install-click', (req, res) => {
+    const inst = findInstance(req.params.slug.toLowerCase());
+    if (!inst) return res.status(404).json({ error: 'App not found' });
+    try {
+      recordInstallClick(dataDir, inst.slug, storeVisitorId(req, res, wildcardDomain));
+      res.set('Cache-Control', 'no-store').status(204).end();
+    } catch (error) {
+      console.error('[STORE] Failed to record install click:', error.message);
+      res.status(503).json({ error: 'Install tracking temporarily unavailable' });
+    }
+  });
+
+  // Keep tracking POSTs on the original host when the active domain rotates.
   app.use(createDomainRedirectMiddleware({ wildcardDomain, rotateMinutes, prefix: subdomainPrefix }));
 
   // Serve static store images (/istore/*.jpg) strictly - never exposes dashboard assets
@@ -373,6 +387,9 @@ function createStoreApp({
     const listing = Object.assign({}, DEFAULT_LISTING, (inst && inst.storeListing) || {});
     const activeSlug = (inst && inst.slug) || slug;
     const apk = resolveApkToServe(activeSlug);
+
+    storeVisitorId(req, res, wildcardDomain);
+    res.set('Cache-Control', 'no-store');
 
     res.json({
       appName: listing.appName || DEFAULT_LISTING.appName,

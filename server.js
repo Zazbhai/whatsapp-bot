@@ -3,8 +3,9 @@ const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
 const { exec, fork } = require('child_process');
-const { resolvePython, runVoiceProcess, describeVoiceError, downloadVoiceMedia, voiceMediaState } = require('./voice-runtime');
-const { sanitizeReplyLinks, buildAppLinkInstructions } = require('./reply-links');
+const { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsComplete, downloadVoiceMedia, voiceMediaState } = require('./voice-runtime');
+const { sanitizeReplyLinks, dedupeConfiguredLink, buildAppLinkInstructions } = require('./reply-links');
+const { readStoreMetrics } = require('./store-metrics');
 const {
   PROVIDERS,
   normalizeProviderId,
@@ -678,8 +679,26 @@ async function createVoiceReplyMedia(slug, msg, text, voiceName) {
     // WhatsApp voice notes use mono Opus in an OGG container.
     await runVoiceProcess('ffmpeg', [
       '-y', '-i', wavPath, '-vn', '-ac', '1', '-ar', '48000',
-      '-c:a', 'libopus', '-b:a', '32k', '-application', 'voip', '-f', 'ogg', oggPath
-    ], { cwd: __dirname, timeout: 15000 });
+      '-c:a', 'libopus', '-b:a', '48k', '-vbr', 'on', '-frame_duration', '20',
+      '-application', 'voip', '-avoid_negative_ts', 'make_zero', '-f', 'ogg', oggPath
+    ], { cwd: __dirname, timeout: 60000 });
+
+    const sourceDurationOutput = await runVoiceProcess('ffprobe', [
+      '-v', 'error', '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1', wavPath
+    ], { cwd: __dirname, timeout: 10000 });
+    const durationOutput = await runVoiceProcess('ffprobe', [
+      '-v', 'error', '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1', oggPath
+    ], { cwd: __dirname, timeout: 10000 });
+    if (!audioConversionIsComplete(sourceDurationOutput, durationOutput)) {
+      throw new Error(`Voice note duration was truncated (${sourceDurationOutput.trim()}s source, ${durationOutput.trim()}s encoded).`);
+    }
+    const durationSeconds = Number.parseFloat(durationOutput);
+    if (!Number.isFinite(durationSeconds) || durationSeconds < 0.15) {
+      throw new Error(`Generated voice note has invalid duration (${durationOutput || 'unknown'}).`);
+    }
+    logInstanceEvent(slug, 'system', `Hindi voice note encoded successfully (${durationSeconds.toFixed(2)}s).`);
 
     // Load the media before cleanup; the send queue receives an in-memory copy.
     if (fs.existsSync(oggPath)) {
@@ -784,12 +803,48 @@ function enqueueWhatsAppSend(slug, task) {
   }, 1);
 }
 
+const recentStoreLinkSends = new Map();
+const STORE_LINK_REPEAT_WINDOW_MS = Number(process.env.STORE_LINK_REPEAT_WINDOW_MS || 5 * 60 * 1000);
+
+function linkCooldownKey(slug, senderNumber) {
+  return `${slug}:${senderNumber}`;
+}
+
+function hasRecentStoreLink(slug, senderNumber) {
+  const sentAt = recentStoreLinkSends.get(linkCooldownKey(slug, senderNumber));
+  return Number.isFinite(sentAt) && Date.now() - sentAt < STORE_LINK_REPEAT_WINDOW_MS;
+}
+
+function markStoreLinkSent(slug, senderNumber) {
+  recentStoreLinkSends.set(linkCooldownKey(slug, senderNumber), Date.now());
+}
+
+function prepareUserFacingLink(slug, senderNumber, text) {
+  const storeUrl = features.storeLink(slug);
+  if (!storeUrl || typeof text !== 'string') return { text, containsLink: false };
+  const containsLink = text.includes(storeUrl);
+  if (!containsLink) return { text, containsLink: false };
+  const prepared = dedupeConfiguredLink(text, storeUrl, hasRecentStoreLink(slug, senderNumber));
+  return {
+    text: prepared || 'मैंने ऐप का लिंक पहले ही भेज दिया है।',
+    containsLink: prepared.includes(storeUrl)
+  };
+}
+
+function userApkCaption(slug, senderNumber) {
+  const prepared = prepareUserFacingLink(slug, senderNumber, features.apkCaption(slug));
+  if (prepared.containsLink) markStoreLinkSent(slug, senderNumber);
+  return prepared.text;
+}
+
 async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
   if (!replyText || !msg || !msg.from) return;
   if (msg.from === 'status@broadcast' || msg.from.endsWith('@broadcast') || msg.from.endsWith('@newsletter')) return;
   replyText = sanitizeReplyLinks(replyText, features.storeLink(slug));
   const originatingClient = activeClients[slug];
   const senderNumber = msg.from.split('@')[0];
+  const preparedReply = prepareUserFacingLink(slug, senderNumber, replyText);
+  replyText = preparedReply.text;
   const users = loadSeenUsers(slug);
   const userEntry = users.find(u => u.number === senderNumber);
   
@@ -829,7 +884,9 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
     }
   }
   if (activeClients[slug] !== originatingClient) throw new Error('Session changed while generating reply; message was not replayed.');
-  return enqueueWhatsAppSend(slug, async () => sendSmartReplyNow(slug, msg, chat, replyText, isWelcome, voiceMedia));
+  const result = await enqueueWhatsAppSend(slug, async () => sendSmartReplyNow(slug, msg, chat, replyText, isWelcome, voiceMedia));
+  if (preparedReply.containsLink) markStoreLinkSent(slug, senderNumber);
+  return result;
 }
 
 async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, voiceMedia = null) {
@@ -1859,7 +1916,7 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
       await new Promise(resolve => setTimeout(resolve, 1500));
       const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
       await Promise.race([
-        chat.sendMessage(media, { caption: features.apkCaption(slug) }),
+        chat.sendMessage(media, { caption: userApkCaption(slug, senderNumber) }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending APK")), 45000))
       ]);
     });
@@ -1995,7 +2052,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         
         logInstanceEvent(slug, 'system', `Transmitting latest cached APK to +${senderNumber}: "${apk.filename}"...`);
         const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-        await msg.reply(media, undefined, { caption: features.apkCaption(slug) });
+        await msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) });
         
         logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" to +${senderNumber}`);
         
@@ -2074,7 +2131,10 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         }
 
         for (let i = 0; i < textReplies.length; i++) {
-          let replyText = sanitizeReplyLinks(textReplies[i], features.storeLink(slug));
+          const preparedReply = prepareUserFacingLink(
+            slug, senderNumber, sanitizeReplyLinks(textReplies[i], features.storeLink(slug))
+          );
+          let replyText = preparedReply.text;
           msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
           
           if (i > 0) {
@@ -2085,6 +2145,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
             if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
               const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
               await enqueueWhatsAppSend(slug, () => msg.reply(menuButtons));
+              if (preparedReply.containsLink) markStoreLinkSent(slug, senderNumber);
             } else {
               await sendSmartReply(slug, msg, null, replyText);
             }
@@ -2109,7 +2170,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
             const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
             
             try {
-              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: features.apkCaption(slug) }));
+              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
               logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
               
               clientStates[slug].stats.replies++;
@@ -2359,12 +2420,12 @@ async function processSingleAITask(task) {
                 new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 10000))
               ]);
               await enqueueWhatsAppSend(slug, () => Promise.race([
-                chat.sendMessage(media, { caption: features.apkCaption(slug) }),
+                chat.sendMessage(media, { caption: userApkCaption(slug, senderNumber) }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 60000))
               ]));
             } catch (chatErr) {
               logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), retrying with msg.reply...`);
-              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: features.apkCaption(slug) }));
+              await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
             }
             logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
             clientStates[slug].stats.replies++;
@@ -3575,6 +3636,15 @@ app.get('/api/default-ai-config', authenticateToken, (req, res) => {
 });
 
 // SELECTED INSTANCE CONTROLS
+app.get('/api/store/metrics', authenticateToken, requireInstance, (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store').json(readStoreMetrics(dataDir, req.instanceSlug));
+  } catch (error) {
+    console.error('[STORE] Failed to read install metrics:', error.message);
+    res.status(503).json({ error: 'Store metrics temporarily unavailable' });
+  }
+});
+
 app.get('/api/status', authenticateToken, requireInstance, (req, res) => {
   const slug = req.instanceSlug;
   const state = clientStates[slug] || {

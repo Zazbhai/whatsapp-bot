@@ -1,11 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolvePython, runVoiceProcess, downloadVoiceMedia, describeVoiceError, voiceMediaState } = require('./voice-runtime');
+const { resolvePython, runVoiceProcess, audioConversionIsComplete, downloadVoiceMedia, describeVoiceError, voiceMediaState } = require('./voice-runtime');
 
 test('resolvePython uses the configured executable and resolves relative paths from the project', () => {
   assert.equal(resolvePython(__dirname, { PYTHON_PATH: 'python-custom' }, 'linux'), 'python-custom');
   assert.equal(resolvePython(__dirname, { PYTHON_PATH: './missing-python' }, 'linux'), 'python3');
   assert.equal(resolvePython(__dirname, {}, 'win32'), 'python');
+});
+
+test('audio conversion rejects clipped output and accepts normal encoder padding', () => {
+  assert.equal(audioConversionIsComplete(4.2, 4.0), true);
+  assert.equal(audioConversionIsComplete(4.2, 3.4), false);
+  assert.equal(audioConversionIsComplete('bad', 4.2), false);
 });
 
 test('runVoiceProcess returns stdout and includes stderr in failures', async () => {

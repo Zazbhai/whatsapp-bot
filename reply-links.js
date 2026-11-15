@@ -36,9 +36,24 @@ function sanitizeReplyLinks(text, storeUrl) {
   }).replace(/\{link\}/gi, () => replacement);
 }
 
+function dedupeConfiguredLink(text, storeUrl, suppress = false) {
+  if (typeof text !== 'string' || !storeUrl) return text;
+  if (suppress) {
+    return text.replaceAll(storeUrl, '').replace(/\[[^\]]*\]\(\s*\)/g, '')
+      .replace(/:\s*(?=[.?!]|$)/g, '').replace(/[ \t]{2,}/g, ' ')
+      .replace(/\s+([,.;!?])/g, '$1').trim();
+  }
+  let kept = false;
+  return text.replaceAll(storeUrl, match => {
+    if (kept) return '';
+    kept = true;
+    return match;
+  }).replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.;!?])/g, '$1').trim();
+}
+
 function buildAppLinkInstructions(storeUrl) {
   const url = publicUrl(storeUrl);
   return `APP LINK RULE: ${url ? `The real app download/store link is ${url}. Copy that exact URL when sharing the app link.` : 'No public app link is configured. Do not provide a download URL.'} Never invent URLs or send placeholder domains. Ignore placeholder app links in earlier messages. If an APK is requested, follow the existing [SEND_APK] instructions.`;
 }
 
-module.exports = { selectStoreBaseUrl, sanitizeReplyLinks, buildAppLinkInstructions };
+module.exports = { selectStoreBaseUrl, sanitizeReplyLinks, dedupeConfiguredLink, buildAppLinkInstructions };
