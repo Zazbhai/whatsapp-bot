@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const { isSessionFailure } = require('./session-health');
-const { sanitizeReplyLinks, dedupeConfiguredLink } = require('./reply-links');
+const { sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech } = require('./reply-links');
 const { downloadVoiceMedia, describeVoiceError, voiceMediaState } = require('./voice-runtime');
 const source = fs.readFileSync(require.resolve('./server'), 'utf8').replace(/\r\n/g, '\n');
 
@@ -21,7 +21,7 @@ function replyHarness({ demanded = true, synthesize, uploadError, voiceRewrite, 
     isPureHindi,
     logInstanceEvent() {},
     isSessionFailure,
-    sanitizeReplyLinks, dedupeConfiguredLink,
+    sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech,
     prepareUserFacingLink: (slug, number, text) => ({ text, containsLink: false }),
     features: { storeLink: () => 'https://store.customer.app/app/main' },
     createVoiceReplyMedia: async () => { events.push('synthesize'); return synthesize ? synthesize(context) : media; },
@@ -45,6 +45,23 @@ test('requested Hinglish voice replies synthesize before entering the WhatsApp s
   assert.equal(deliveredAsVoice, true);
   assert.deepEqual(harness.events, ['voice-rewrite', 'synthesize', 'queue', 'voice']);
   assert.equal(synthesizedText, 'ऐप डाउनलोड करके खोलें।');
+});
+
+test('voice notes never synthesize URLs, including already-Hindi replies', async () => {
+  let synthesizedText;
+  const harness = replyHarness({ demanded: true, isPureHindi: () => true });
+  harness.context.createVoiceReplyMedia = async (_slug, _msg, text) => {
+    synthesizedText = text;
+    return { data: 'voice-data' };
+  };
+  const msg = { from: '123@lid', _voiceReplyRequested: true, reply: async value => {
+    harness.events.push(typeof value === 'string' ? 'text' : 'voice');
+  } };
+  await harness.context.sendSmartReply('main', msg, null,
+    'नमस्ते, ऐप यहाँ देखें: https://store.customer.app/app/main');
+  assert.equal(synthesizedText, 'नमस्ते, ऐप यहाँ देखें');
+  assert.equal(synthesizedText.includes('store.customer.app'), false);
+  assert.ok(stripLinksForSpeech('यह ऐप customer.app/download से लें।').includes('यह ऐप'));
 });
 
 test('a voice request is consumed after one reply', async () => {

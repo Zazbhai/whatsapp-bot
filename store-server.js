@@ -9,7 +9,7 @@ const {
   getNextRotateRemainingSeconds
 } = require('./store-domain-rotator');
 const { getLocalIp } = require('./network-urls');
-const { recordInstallClick, storeVisitorId } = require('./store-metrics');
+const { recordStoreVisit, recordInstallClick, storeVisitorId } = require('./store-metrics');
 
 // Load environment variables manually if executed standalone
 const envPath = path.join(__dirname, '.env');
@@ -496,6 +496,19 @@ function createStoreApp({
   app.get('*', (req, res) => {
     const storeHtmlPath = path.join(rootDir, 'public', 'store.html');
     if (fs.existsSync(storeHtmlPath)) {
+      const isStorePage = req.path === '/' || req.path === '/app' ||
+        req.path === '/store' || req.path === '/playstore' || /^\/app\/[^/]+$/.test(req.path);
+      if (isStorePage) {
+        const requestedSlug = req.path.startsWith('/app/') ? req.path.split('/')[2].toLowerCase() : 'primary';
+        const inst = findInstance(requestedSlug);
+        if (inst) {
+          try {
+            recordStoreVisit(dataDir, inst.slug, storeVisitorId(req, res, wildcardDomain));
+          } catch (error) {
+            console.error('[STORE] Failed to record store visit:', error.message);
+          }
+        }
+      }
       return res.sendFile(storeHtmlPath);
     }
     res.status(404).send('Play Store page template (public/store.html) not found.');

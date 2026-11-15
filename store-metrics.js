@@ -9,18 +9,32 @@ function metricsPath(dataDir, slug) {
 
 function loadMetrics(dataDir, slug) {
   try {
-    return JSON.parse(fs.readFileSync(metricsPath(dataDir, slug), 'utf8'));
+    const metrics = JSON.parse(fs.readFileSync(metricsPath(dataDir, slug), 'utf8'));
+    metrics.pageVisits ||= 0;
+    metrics.visitors ||= {};
+    // Migrate the previous format, where `visitors` meant install visitors.
+    metrics.installVisitors ||= { ...metrics.visitors };
+    metrics.trackingStartedAt ||= null;
+    metrics.lastVisitedAt ||= null;
+    metrics.lastClickedAt ||= null;
+    return metrics;
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
-    return { installClicks: 0, visitors: {}, trackingStartedAt: null, lastClickedAt: null };
+    return {
+      pageVisits: 0, installClicks: 0, visitors: {}, installVisitors: {},
+      trackingStartedAt: null, lastVisitedAt: null, lastClickedAt: null
+    };
   }
 }
 
 function summarizeMetrics(metrics) {
   return {
+    pageVisits: metrics.pageVisits,
+    uniqueVisitors: Object.keys(metrics.visitors).length,
     installClicks: metrics.installClicks,
-    uniqueInstallVisitors: Object.keys(metrics.visitors).length,
+    uniqueInstallVisitors: Object.keys(metrics.installVisitors).length,
     trackingStartedAt: metrics.trackingStartedAt,
+    lastVisitedAt: metrics.lastVisitedAt,
     lastClickedAt: metrics.lastClickedAt
   };
 }
@@ -30,13 +44,7 @@ function readStoreMetrics(dataDir, slug) {
   return summarizeMetrics(loadMetrics(dataDir, slug));
 }
 
-function recordInstallClick(dataDir, slug, visitorId) {
-  const metrics = loadMetrics(dataDir, slug);
-  const now = new Date().toISOString();
-  metrics.installClicks++;
-  metrics.visitors[visitorId] = true;
-  metrics.trackingStartedAt ||= now;
-  metrics.lastClickedAt = now;
+function persistMetrics(dataDir, slug, metrics) {
   const file = metricsPath(dataDir, slug);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporaryFile = `${file}.${process.pid}.tmp`;
@@ -47,6 +55,27 @@ function recordInstallClick(dataDir, slug, visitorId) {
     if (fs.existsSync(temporaryFile)) fs.unlinkSync(temporaryFile);
   }
   return summarizeMetrics(metrics);
+}
+
+function recordStoreVisit(dataDir, slug, visitorId) {
+  const metrics = loadMetrics(dataDir, slug);
+  const now = new Date().toISOString();
+  metrics.pageVisits++;
+  metrics.visitors[visitorId] = true;
+  metrics.trackingStartedAt ||= now;
+  metrics.lastVisitedAt = now;
+  return persistMetrics(dataDir, slug, metrics);
+}
+
+function recordInstallClick(dataDir, slug, visitorId) {
+  const metrics = loadMetrics(dataDir, slug);
+  const now = new Date().toISOString();
+  metrics.installClicks++;
+  metrics.visitors[visitorId] = true;
+  metrics.installVisitors[visitorId] = true;
+  metrics.trackingStartedAt ||= now;
+  metrics.lastClickedAt = now;
+  return persistMetrics(dataDir, slug, metrics);
 }
 
 function storeVisitorId(req, res, wildcardDomain = '') {
@@ -69,4 +98,4 @@ function storeVisitorId(req, res, wildcardDomain = '') {
   return id;
 }
 
-module.exports = { readStoreMetrics, recordInstallClick, storeVisitorId };
+module.exports = { readStoreMetrics, recordStoreVisit, recordInstallClick, storeVisitorId };

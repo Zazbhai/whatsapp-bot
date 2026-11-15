@@ -4,7 +4,7 @@ const net = require('net');
 const crypto = require('crypto');
 const { exec, fork } = require('child_process');
 const { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsComplete, downloadVoiceMedia, voiceMediaState } = require('./voice-runtime');
-const { sanitizeReplyLinks, dedupeConfiguredLink, buildAppLinkInstructions } = require('./reply-links');
+const { sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech, buildAppLinkInstructions } = require('./reply-links');
 const { readStoreMetrics } = require('./store-metrics');
 const {
   PROVIDERS,
@@ -855,16 +855,18 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
   msg._voiceReplyRequested = false;
   
   let voiceMedia = null;
-  let voiceText = replyText;
-  const needsHindiRewrite = requestedVoice && !isPureHindi(replyText);
+  const speechSource = stripLinksForSpeech(replyText);
+  let voiceText = speechSource;
+  const needsHindiRewrite = requestedVoice && !isPureHindi(speechSource);
   if (needsHindiRewrite) {
     try {
       const translated = await generateAIResponse(
         slug,
-        `Rewrite this reply as natural, friendly spoken Hindi in Devanagari script. Preserve the meaning, names, and numbers, but omit URLs, markdown, and symbols that sound unnatural when spoken. Return only one or two short Hindi sentence(s), without tags or explanation:\n\n${replyText}`,
+        `Rewrite this reply as natural, friendly spoken Hindi in Devanagari script. Preserve the meaning, names, and numbers, but omit URLs, markdown, and symbols that sound unnatural when spoken. Return only one or two short Hindi sentence(s), without tags or explanation:\n\n${speechSource}`,
         [], false, senderNumber, true
       );
-      if (translated?.text && isPureHindi(translated.text)) voiceText = translated.text;
+      const translatedSpeech = stripLinksForSpeech(translated?.text || '');
+      if (translatedSpeech && isPureHindi(translatedSpeech)) voiceText = translatedSpeech;
       else {
         voiceText = null;
         logInstanceEvent(slug, 'error', 'Hindi voice rewrite returned no Devanagari text; sending the original reply as text.');

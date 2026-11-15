@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { selectStoreBaseUrl, sanitizeReplyLinks, dedupeConfiguredLink, buildAppLinkInstructions } = require('./reply-links');
+const { selectStoreBaseUrl, sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech, buildAppLinkInstructions } = require('./reply-links');
 const realLink = 'https://store.customer.app/app/primary';
 
 test('placeholder links are replaced with the configured app URL, including bare and formatted links', () => {
@@ -36,6 +36,14 @@ test('store URLs appear once per reply and are omitted from a recent repeat', ()
     'Get the app. Another link'
   );
   assert.equal(dedupeConfiguredLink('No link here.', realLink, true), 'No link here.');
+});
+
+test('voice text removes URLs and link targets while preserving readable labels', () => {
+  assert.equal(
+    stripLinksForSpeech(`यह ऐप ${realLink} पर है। [डाउनलोड करें](${realLink}) www.customer.app`),
+    'यह ऐप पर है। डाउनलोड करें'
+  );
+  assert.equal(stripLinksForSpeech('सामान्य जवाब यहाँ है।'), 'सामान्य जवाब यहाँ है।');
 });
 
 test('a missing public URL removes placeholder destinations instead of inventing a link', () => {

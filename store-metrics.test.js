@@ -7,7 +7,7 @@ const http = require('node:http');
 const vm = require('node:vm');
 const express = require('express');
 const { createStoreApp } = require('./store-server');
-const { readStoreMetrics, recordInstallClick } = require('./store-metrics');
+const { readStoreMetrics, recordStoreVisit, recordInstallClick } = require('./store-metrics');
 
 function temporaryData(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-store-metrics-'));
@@ -33,11 +33,15 @@ async function serve(t, app) {
 test('install clicks start at zero, persist across readers, and separate visitors and bot instances', t => {
   const dataDir = temporaryData(t);
   assert.equal(readStoreMetrics(dataDir, 'primary').installClicks, 0);
+  recordStoreVisit(dataDir, 'primary', 'visitor-a');
+  recordStoreVisit(dataDir, 'primary', 'visitor-a');
   recordInstallClick(dataDir, 'primary', 'visitor-a');
   recordInstallClick(dataDir, 'primary', 'visitor-a');
   recordInstallClick(dataDir, 'primary', 'visitor-b');
   const freshReader = require('./store-metrics').readStoreMetrics;
   const metrics = freshReader(dataDir, 'primary');
+  assert.equal(metrics.pageVisits, 2);
+  assert.equal(metrics.uniqueVisitors, 2);
   assert.equal(metrics.installClicks, 3);
   assert.equal(metrics.uniqueInstallVisitors, 2);
   assert.ok(metrics.lastClickedAt);
@@ -55,6 +59,10 @@ test('port 3002 counts only Install POSTs, reuses browser cookies, and survives 
     latestApkCache: { primary: { data: Buffer.from('APK test').toString('base64') } }
   };
   const request = await serve(t, createStoreApp(options));
+  const page = await request('/app/primary');
+  assert.equal(page.status, 200);
+  assert.match(page.headers['set-cookie'][0], /store_visitor=/);
+  assert.equal(readStoreMetrics(dataDir, 'primary').pageVisits, 1);
   const listing = await request('/api/public/store/primary');
   const cookie = listing.headers['set-cookie'][0].split(';')[0];
   assert.equal(listing.headers['cache-control'], 'no-store');
@@ -67,6 +75,7 @@ test('port 3002 counts only Install POSTs, reuses browser cookies, and survives 
   const requestAfterRestart = await serve(t, createStoreApp(options));
   await requestAfterRestart('/api/public/store/primary/install-click', { method: 'POST' });
   assert.equal(readStoreMetrics(dataDir, 'primary').installClicks, 3);
+  assert.equal(readStoreMetrics(dataDir, 'primary').pageVisits, 1);
   assert.equal(readStoreMetrics(dataDir, 'primary').uniqueInstallVisitors, 2);
   assert.equal(readStoreMetrics(dataDir, 'other').installClicks, 0);
 });
@@ -141,7 +150,9 @@ test('the Install button still downloads when analytics fails and ignores double
 
 test('dashboard discards metrics from an old instance after switching bots', async () => {
   const source = fs.readFileSync(path.join(__dirname, 'public', 'app.js'), 'utf8');
-  const elements = Object.fromEntries(['stat-install-clicks', 'stat-install-visitors', 'store-metrics-note']
+  const elements = Object.fromEntries([
+    'stat-store-visits', 'stat-store-visitors', 'stat-install-clicks', 'stat-install-visitors', 'store-metrics-note'
+  ]
     .map(id => [id, { textContent: '—' }]));
   let resolveFetch;
   const context = vm.createContext({
@@ -151,11 +162,13 @@ test('dashboard discards metrics from an old instance after switching bots', asy
   vm.runInContext(source.slice(source.indexOf('function resetStoreMetrics()'), source.indexOf('async function updateDashboardUsers()')), context);
   const pending = context.updateStoreMetrics();
   context.activeInstanceSlug = 'other';
-  resolveFetch({ ok: true, json: async () => ({ installClicks: 8, uniqueInstallVisitors: 3 }) });
+  resolveFetch({ ok: true, json: async () => ({ pageVisits: 9, uniqueVisitors: 5, installClicks: 8, uniqueInstallVisitors: 3 }) });
   await pending;
   assert.equal(elements['stat-install-clicks'].textContent, '—');
-  context.apiFetch = async () => ({ ok: true, json: async () => ({ installClicks: 4, uniqueInstallVisitors: 2 }) });
+  context.apiFetch = async () => ({ ok: true, json: async () => ({ pageVisits: 7, uniqueVisitors: 4, installClicks: 4, uniqueInstallVisitors: 2 }) });
   await context.updateStoreMetrics();
+  assert.equal(elements['stat-store-visits'].textContent, '7');
+  assert.equal(elements['stat-store-visitors'].textContent, '4');
   assert.equal(elements['stat-install-clicks'].textContent, '4');
   assert.equal(elements['stat-install-visitors'].textContent, '2');
 });

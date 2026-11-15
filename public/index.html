@@ -342,16 +342,26 @@
 
         <div class="glass-card full-width-card" id="store-metrics-card">
           <div class="card-header">
-            <h3>Play Store Install Activity</h3>
+            <h3>Play Store Activity</h3>
           </div>
           <div class="stats-grid" aria-live="polite">
+            <div class="stat-box">
+              <div class="stat-icon active-time"><i data-lucide="eye"></i></div>
+              <div class="stat-number" id="stat-store-visits">—</div>
+              <div class="stat-label">Store Page Visits</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-icon received"><i data-lucide="users"></i></div>
+              <div class="stat-number" id="stat-store-visitors">—</div>
+              <div class="stat-label">Unique Store Visitors</div>
+            </div>
             <div class="stat-box">
               <div class="stat-icon sent"><i data-lucide="mouse-pointer-click"></i></div>
               <div class="stat-number" id="stat-install-clicks">—</div>
               <div class="stat-label">Install Button Clicks</div>
             </div>
             <div class="stat-box">
-              <div class="stat-icon received"><i data-lucide="users"></i></div>
+              <div class="stat-icon automated"><i data-lucide="user-check"></i></div>
               <div class="stat-number" id="stat-install-visitors">—</div>
               <div class="stat-label">Unique Install Visitors</div>
             </div>

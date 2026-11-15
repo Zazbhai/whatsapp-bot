@@ -99,9 +99,9 @@ Every outgoing APK includes the configured store link in its caption, including 
 
 ## Play Store install activity
 
-The WhatsApp dashboard shows Install Button Clicks and Unique Install Visitors for the selected bot's store page on port 3002, refreshing every 15 seconds. Tracking starts at zero when this feature is deployed; the listing's display download count is not used. Only Install button presses count, including repeat presses from the same visitor. Ordinary page views, direct APK downloads, and download retries do not count.
+The WhatsApp dashboard shows Store Page Visits, Unique Store Visitors, Install Button Clicks, and Unique Install Visitors for the selected bot's store page on port 3002, refreshing every 15 seconds. Tracking starts at zero when this feature is deployed; the listing's display download count is not used. Page views and Install button presses are recorded separately.
 
-An anonymous browser cookie identifies repeat visitors for up to one year. It is shared across rotating subdomains of the same configured wildcard domain; different browsers, cleared cookies, and unrelated domains count separately. These are click counts, not confirmed Android installations. Counts persist in `data/store_metrics/<slug>.json`, separate from bot configuration, and survive process restarts. The dashboard reads these files fresh so both PM2 processes must use the same data directory. Aggregate counts are available only through the authenticated dashboard API.
+An anonymous browser cookie identifies repeat visitors for up to one year. It is shared across rotating subdomains of the same configured wildcard domain; different browsers, cleared cookies, and unrelated domains count separately. These are page views and click counts, not confirmed Android installations. Counts persist in `data/store_metrics/<slug>.json`, separate from bot configuration, and survive process restarts. The dashboard reads these files fresh so both PM2 processes must use the same data directory. Aggregate counts are available only through the authenticated dashboard API.
 
 ## Voice messages
 
