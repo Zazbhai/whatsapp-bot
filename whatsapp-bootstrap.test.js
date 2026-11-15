@@ -60,12 +60,50 @@ test('a missing Socket module times out without creating a partial auth store', 
 
 test('compatibility installation patches the auth store before loading Client and remains idempotent', () => {
   const clientPath = require.resolve('whatsapp-web.js/src/Client');
+  const message = require('whatsapp-web.js/src/structures/Message');
   assert.equal(require.cache[clientPath], undefined);
   installWhatsAppCompatibility();
   const authStore = require('whatsapp-web.js/src/util/Injected/AuthStore/AuthStore');
   const patched = authStore.ExposeAuthStore;
   assert.equal(patched.__socketCompat, true);
+  assert.equal(message.prototype.downloadMedia.__mediaMimeCompat, true);
+  assert.match(message.prototype.downloadMedia.toString(), /mimetype:\s*msg\.mimetype/);
   assert.ok(require.cache[clientPath]);
   installWhatsAppCompatibility();
   assert.equal(authStore.ExposeAuthStore, patched);
+});
+
+test('patched media downloads pass the resolved MIME type to WhatsApp decryption', async () => {
+  const Message = require('whatsapp-web.js/src/structures/Message');
+  installWhatsAppCompatibility();
+  let downloadOptions;
+  const storedMessage = {
+    mediaData: { mediaStage: 'RESOLVED' },
+    directPath: '/media', encFilehash: 'enc-hash', filehash: 'hash',
+    mediaKey: 'key', mediaKeyTimestamp: 1, type: 'ptt',
+    mimetype: 'audio/ogg; codecs=opus', filename: 'voice.ogg', size: 3
+  };
+  const client = { pupPage: { evaluate: async (fn, id) => {
+    const context = {
+      AbortController,
+      Buffer,
+      window: {
+        require: name => name === 'WAWebCollections'
+          ? { Msg: { get: key => key === id ? storedMessage : null } }
+          : { downloadManager: { downloadAndMaybeDecrypt: async options => {
+            downloadOptions = options;
+            return new Uint8Array([1, 2, 3]).buffer;
+          } } },
+        WWebJS: { arrayBufferToBase64Async: async data => Buffer.from(data).toString('base64') }
+      }
+    };
+    return vm.runInNewContext(`(${fn.toString()})(${JSON.stringify(id)})`, context);
+  } } };
+  const media = await Message.prototype.downloadMedia.call({
+    hasMedia: true,
+    id: { _serialized: 'voice-id' },
+    client
+  });
+  assert.equal(downloadOptions.mimetype, 'audio/ogg; codecs=opus');
+  assert.equal(media.data, 'AQID');
 });

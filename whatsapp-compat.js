@@ -75,12 +75,35 @@ function normalizeStructureData(data) {
 
 const STRUCTURES = ['Message', 'Chat', 'Contact', 'ClientInfo', 'GroupNotification', 'Broadcast', 'Channel'];
 
+function patchMessageMediaDownload(proto) {
+  const original = proto && proto.downloadMedia;
+  if (typeof original !== 'function' || original.__mediaMimeCompat) return;
+  const source = original.toString();
+  if (!source.includes('downloadAndMaybeDecrypt')) return;
+  if (/type:\s*msg\.type,\s*mimetype:\s*msg\.mimetype,\s*signal:/.test(source)) return;
+  const patchedSource = source.replace(
+    /(type:\s*msg\.type,\s*)(signal:)/,
+    '$1mimetype: msg.mimetype,\n                        $2'
+  );
+  if (patchedSource === source) return;
+  try {
+    const MessageMedia = require('whatsapp-web.js/src/structures/MessageMedia');
+    const patched = new Function('MessageMedia', `return ({${patchedSource}}).downloadMedia;`)(MessageMedia);
+    patched.__mediaMimeCompat = true;
+    proto.downloadMedia = patched;
+  } catch (error) {
+    // Keep the upstream method if its source layout changes in a future release.
+  }
+}
+
 function patchStructures(load = (name) => require(`whatsapp-web.js/src/structures/${name}`)) {
   for (const name of STRUCTURES) {
     let Structure;
     try { Structure = load(name); } catch (_) { continue; }
     const proto = Structure && Structure.prototype;
-    if (!proto || typeof proto._patch !== 'function' || proto._patch.__idCompat) continue;
+    if (!proto) continue;
+    if (name === 'Message') patchMessageMediaDownload(proto);
+    if (typeof proto._patch !== 'function' || proto._patch.__idCompat) continue;
     const original = proto._patch;
     const patched = function (data) { return original.call(this, normalizeStructureData(data)); };
     patched.__idCompat = true;
