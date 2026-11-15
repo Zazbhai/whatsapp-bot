@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
 const tui = require('./telegram-ui');
-const { selectStoreBaseUrl, sanitizeReplyLinks } = require('./reply-links');
+const { selectStoreBaseUrl, sanitizeReplyLinks, dedupeConfiguredLink } = require('./reply-links');
 const { pickNextSession, pickAutoSession, autoSelectAction, isSessionFailure, closeSession } = require('./session-health');
 
 module.exports = function setupFeatures(ctx) {
@@ -564,9 +564,12 @@ module.exports = function setupFeatures(ctx) {
     ], `http://localhost:${port}`);
   }
   function storeLink(slug) { return `${baseUrl(getInst(slug))}/app/${slug}`; }
-  function apkCaption(slug) {
+  function apkCaption(slug, caption) {
     const inst = getInst(slug) || {};
-    return sanitizeReplyLinks(inst.apkLinkMessage || DEFAULT_LINK_MSG, storeLink(slug));
+    const link = storeLink(slug);
+    const text = caption === undefined ? inst.apkLinkMessage || DEFAULT_LINK_MSG : caption;
+    const prepared = dedupeConfiguredLink(sanitizeReplyLinks(text, link), link);
+    return prepared.includes(link) ? prepared : [prepared, link].filter(Boolean).join('\n\n');
   }
   const apkInfo = (slug) => {
     const a = latestApkCache[slug];

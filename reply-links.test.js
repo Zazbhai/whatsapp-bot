@@ -54,14 +54,28 @@ test('APK captions and store links share the real configured destination', () =>
   const featureSource = fs.readFileSync(require.resolve('./features'), 'utf8');
   const inst = { storeListing: { publicUrl: 'https://example.com' }, apkLinkMessage: 'Download https://example.com/app or {link}' };
   const context = {
-    selectStoreBaseUrl, sanitizeReplyLinks, getInst: () => inst,
+    selectStoreBaseUrl, sanitizeReplyLinks, dedupeConfiguredLink, getInst: () => inst,
     process: { env: { STORE_ENTRY_DOMAIN: 'https://store.customer.app' } },
     port: 3000, DEFAULT_LINK_MSG: 'Download {link}'
   };
   vm.createContext(context);
   vm.runInContext(featureSource.slice(featureSource.indexOf('  function baseUrl('), featureSource.indexOf('  const apkInfo =')), context);
   assert.equal(context.storeLink('primary'), realLink);
-  assert.equal(context.apkCaption('primary'), `Download ${realLink} or ${realLink}`);
+  assert.equal(context.apkCaption('primary').split(realLink).length - 1, 1);
+  inst.apkLinkMessage = 'Here is your app.';
+  assert.equal(context.apkCaption('primary'), `Here is your app.\n\n${realLink}`);
+  assert.equal(context.apkCaption('primary', 'Custom caption.'), `Custom caption.\n\n${realLink}`);
+  assert.equal(context.apkCaption('primary', ''), realLink);
+
+  // Exercise the shared APK send helper after a previous link starts the cooldown.
+  const serverSource = fs.readFileSync(require.resolve('./server'), 'utf8');
+  context.features = { apkCaption: context.apkCaption, storeLink: context.storeLink };
+  vm.runInContext(serverSource.slice(serverSource.indexOf('const recentStoreLinkSends ='), serverSource.indexOf('async function sendSmartReply(')), context);
+  context.markStoreLinkSent('primary', '1234');
+  for (let i = 0; i < 2; i++) {
+    assert.equal(context.userApkCaption('primary', '1234'), `Here is your app.\n\n${realLink}`);
+  }
+  assert.equal(context.prepareUserFacingLink('primary', '1234', `Get the app ${realLink}`).containsLink, false);
 });
 
 test('AI receives the real link and corrected assistant history; placeholder output is corrected before use', async () => {

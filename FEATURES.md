@@ -93,6 +93,10 @@ Integrated permanent free-tier LLM providers from [awesome-free-llm-apis](https:
 - **Failover & Load-Balancing**: Add multiple keys across different providers. The bot will load-balance across active keys and failover if one hits rate limits (HTTP 429) or quota errors.
 - **Dedicated Environment Variables**: Supported in `.env` as `OPENROUTER_API_KEYS`, `GROQ_API_KEYS`, `GEMINI_API_KEYS`, `MISTRAL_API_KEYS`, `COHERE_API_KEYS`, `NVIDIA_API_KEYS`, etc., while maintaining 100% backwards compatibility with `LLM_API_KEYS` and `HF_TOKENS`.
 
+## WhatsApp APK captions
+
+Every outgoing APK includes the configured store link in its caption, including manual APK sends from the dashboard. If a custom caption omits the link, it is appended automatically. APK captions keep one copy of the link even when a link was recently sent; the repeat-link cooldown still applies to ordinary text replies.
+
 ## Play Store install activity
 
 The WhatsApp dashboard shows Install Button Clicks and Unique Install Visitors for the selected bot's store page on port 3002, refreshing every 15 seconds. Tracking starts at zero when this feature is deployed; the listing's display download count is not used. Only Install button presses count, including repeat presses from the same visitor. Ordinary page views, direct APK downloads, and download retries do not count.

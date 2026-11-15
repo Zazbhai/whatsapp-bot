@@ -831,10 +831,11 @@ function prepareUserFacingLink(slug, senderNumber, text) {
   };
 }
 
-function userApkCaption(slug, senderNumber) {
-  const prepared = prepareUserFacingLink(slug, senderNumber, features.apkCaption(slug));
-  if (prepared.containsLink) markStoreLinkSent(slug, senderNumber);
-  return prepared.text;
+function userApkCaption(slug, senderNumber, caption) {
+  // Every APK carries its link, even when ordinary text replies are on cooldown.
+  const prepared = features.apkCaption(slug, caption);
+  markStoreLinkSent(slug, senderNumber);
+  return prepared;
 }
 
 async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
@@ -4133,7 +4134,12 @@ app.post('/api/send-file', authenticateToken, requireInstance, upload.single('fi
     }
 
     const media = MessageMedia.fromFilePath(file.path);
-    await client.sendMessage(formattedNum, media, { caption: caption || '' });
+    const isApk = path.extname(file.originalname).toLowerCase() === '.apk' ||
+      file.mimetype === 'application/vnd.android.package-archive';
+    const outgoingCaption = isApk
+      ? userApkCaption(slug, formattedNum.split('@')[0], caption || undefined)
+      : caption || '';
+    await client.sendMessage(formattedNum, media, { caption: outgoingCaption });
     logInstanceEvent(slug, 'send', `Media sent successfully: "${file.originalname}"`);
 
     state.stats.sent++;
