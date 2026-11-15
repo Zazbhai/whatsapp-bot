@@ -93,6 +93,22 @@ Integrated permanent free-tier LLM providers from [awesome-free-llm-apis](https:
 - **Failover & Load-Balancing**: Add multiple keys across different providers. The bot will load-balance across active keys and failover if one hits rate limits (HTTP 429) or quota errors.
 - **Dedicated Environment Variables**: Supported in `.env` as `OPENROUTER_API_KEYS`, `GROQ_API_KEYS`, `GEMINI_API_KEYS`, `MISTRAL_API_KEYS`, `COHERE_API_KEYS`, `NVIDIA_API_KEYS`, etc., while maintaining 100% backwards compatibility with `LLM_API_KEYS` and `HF_TOKENS`.
 
+## Voice messages
+
+Incoming audio is transcribed from the first message. Configured Hugging Face speech tokens are used first; if no real token exists or inference fails, the bot uses local CPU Whisper. Set `VOICE_STT_MODE=local` to always transcribe locally, `LOCAL_STT_MODEL=small` to select the Whisper model, and `LOCAL_STT_THREADS=2` to limit its CPU threads.
+
+Voice notes and requests such as `voice note bhejo` enable voice replies for that user, including Hinglish text. Hindi replies also retain their automatic voice behavior. Supertonic 3 generates Hindi speech, then FFmpeg converts it to mono OGG/Opus for WhatsApp. Speech generation happens before the WhatsApp send queue so a slow model cannot trigger session failover. Generation or media upload failures fall back to the text reply.
+
+On the bot server, install FFmpeg and use the Python executable configured in `PYTHON_PATH` (or `python3` when blank on Linux) to install and download the models once before restarting:
+
+```bash
+python3 -m pip install -U -r requirements.txt
+python3 -c "from supertonic import TTS; from faster_whisper import WhisperModel; TTS(model='supertonic-3'); WhisperModel('small', device='cpu', compute_type='int8')"
+pm2 restart bot
+```
+
+Use the same OS user and Python environment as PM2 so cached models and packages are available. Model downloads need internet access during setup; local speech recognition and synthesis then use the cached files.
+
 ## Sequential Message Processing & Anti-Ban Pacing
 
 To protect WhatsApp numbers and provide natural human-like cadence:

@@ -3,6 +3,8 @@ const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
 const { exec, fork } = require('child_process');
+const { resolvePython, runVoiceProcess } = require('./voice-runtime');
+const { sanitizeReplyLinks, buildAppLinkInstructions } = require('./reply-links');
 const {
   PROVIDERS,
   normalizeProviderId,
@@ -95,7 +97,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 require('./whatsapp-compat').installWhatsAppCompatibility();
-const { monitorSession } = require('./session-health');
+const { monitorSession, isSessionFailure } = require('./session-health');
 const { Client, LocalAuth, MessageMedia, Buttons } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const qrcode = require('qrcode');
@@ -660,7 +662,7 @@ function checkAndSetVoiceNoteDemand(slug, senderNumber, msg) {
   }
 }
 
-async function handleVoiceTtsReply(slug, msg, text, voiceName) {
+async function createVoiceReplyMedia(slug, msg, text, voiceName) {
   const tempId = Math.random().toString(36).substring(7);
   const textFilePath = path.join(uploadDir, `tts_text_${slug}_${tempId}.txt`);
   const wavPath = path.join(uploadDir, `tts_${slug}_${tempId}.wav`);
@@ -672,54 +674,26 @@ async function handleVoiceTtsReply(slug, msg, text, voiceName) {
     // Write text to temp file to bypass Windows console escaping issues
     fs.writeFileSync(textFilePath, text, 'utf8');
 
-    // Determine the Python executable path from environment config
-    let pythonPath = (process.env.PYTHON_PATH || '').trim();
-    // If a custom path was specified but does not exist on disk, fall back to system default
-    if (pythonPath && (pythonPath.includes('/') || pythonPath.includes('\\')) && !fs.existsSync(pythonPath)) {
-      console.warn(`[TTS] Configured PYTHON_PATH "${pythonPath}" does not exist on disk. Falling back to system default.`);
-      pythonPath = '';
-    }
-    if (!pythonPath) {
-      pythonPath = process.platform === 'win32' ? 'python' : 'python3';
-    }
+    await runVoiceProcess(resolvePython(__dirname), [
+      path.join(__dirname, 'generate_tts.py'), textFilePath, voiceName, wavPath
+    ], { cwd: __dirname, timeout: 90000 });
 
-    // Run Python TTS generator
-    await new Promise((resolve, reject) => {
-      const pythonCmd = `"${pythonPath}" generate_tts.py "${textFilePath}" "${voiceName}" "${wavPath}"`;
-      exec(pythonCmd, (err, stdout, stderr) => {
-        if (err) {
-          logInstanceEvent(slug, 'error', `Python TTS script output: ${stdout}`);
-          logInstanceEvent(slug, 'error', `Python TTS script error: ${stderr}`);
-          return reject(new Error(`Python TTS execution failed: ${err.message}`));
-        }
-        resolve();
-      });
-    });
+    // WhatsApp voice notes use mono Opus in an OGG container.
+    await runVoiceProcess('ffmpeg', [
+      '-y', '-i', wavPath, '-vn', '-ac', '1', '-ar', '48000',
+      '-c:a', 'libopus', '-b:a', '32k', '-application', 'voip', '-f', 'ogg', oggPath
+    ], { cwd: __dirname, timeout: 15000 });
 
-    // Convert WAV to OGG via FFmpeg
-    await new Promise((resolve, reject) => {
-      const ffmpegCmd = `ffmpeg -y -i "${wavPath}" -c:a libopus "${oggPath}"`;
-      exec(ffmpegCmd, (err, stdout, stderr) => {
-        if (err) {
-          return reject(new Error(`FFmpeg audio conversion failed: ${err.message}`));
-        }
-        resolve();
-      });
-    });
-
-    // Load OGG media and send
+    // Load the media before cleanup; the send queue receives an in-memory copy.
     if (fs.existsSync(oggPath)) {
       const media = MessageMedia.fromFilePath(oggPath);
-      const chat = await msg.getChat();
-      await chat.sendStateTyping();
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      await msg.reply(media, undefined, { sendAudioAsVoice: true });
-      logInstanceEvent(slug, 'send', `Dispatched TTS Hindi voice note to +${msg.from.split('@')[0]}`);
+      media.mimetype = 'audio/ogg; codecs=opus';
+      return media;
     } else {
       throw new Error("Generated OGG file not found.");
     }
   } catch (err) {
-    logInstanceEvent(slug, 'error', `Failed to generate and send voice note: ${err.message}`);
+    logInstanceEvent(slug, 'error', `Failed to generate voice note: ${err.message}`);
     throw err;
   } finally {
     // Clean up temporary files asynchronously
@@ -814,13 +788,10 @@ function enqueueWhatsAppSend(slug, task) {
 }
 
 async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
-  return enqueueWhatsAppSend(slug, async () => sendSmartReplyNow(slug, msg, chat, replyText, isWelcome));
-}
-
-async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false) {
   if (!replyText || !msg || !msg.from) return;
   if (msg.from === 'status@broadcast' || msg.from.endsWith('@broadcast') || msg.from.endsWith('@newsletter')) return;
-  
+  replyText = sanitizeReplyLinks(replyText, features.storeLink(slug));
+  const originatingClient = activeClients[slug];
   const senderNumber = msg.from.split('@')[0];
   const users = loadSeenUsers(slug);
   const userEntry = users.find(u => u.number === senderNumber);
@@ -828,7 +799,8 @@ async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false) 
   let voiceName = userEntry ? userEntry.voiceName : null;
   const demanded = userEntry ? !!userEntry.demandedVoiceNote : false;
   
-  if (isPureHindi(replyText)) {
+  let voiceMedia = null;
+  if (demanded || isPureHindi(replyText)) {
     if (!voiceName) {
       const voices = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'];
       const shuffled = [...voices].sort(() => Math.random() - 0.5);
@@ -837,14 +809,29 @@ async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false) 
     }
     
     try {
-      await handleVoiceTtsReply(slug, msg, replyText, voiceName);
-      return;
+      // Synthesis is not a WhatsApp operation: it must not trip the send timeout or rotate sessions.
+      voiceMedia = await createVoiceReplyMedia(slug, msg, replyText, voiceName);
     } catch (err) {
       logInstanceEvent(slug, 'error', `Fallback to text message due to TTS error: ${err.message}`);
     }
   }
-  
-  // If not demanded, not pure Hindi, or TTS fails, send as normal text
+  if (activeClients[slug] !== originatingClient) throw new Error('Session changed while generating reply; message was not replayed.');
+  return enqueueWhatsAppSend(slug, async () => sendSmartReplyNow(slug, msg, chat, replyText, isWelcome, voiceMedia));
+}
+
+async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, voiceMedia = null) {
+  if (voiceMedia) {
+    try {
+      await msg.reply(voiceMedia, undefined, { sendAudioAsVoice: true });
+      logInstanceEvent(slug, 'send', `Dispatched voice note to +${msg.from.split('@')[0]}`);
+      return;
+    } catch (err) {
+      logInstanceEvent(slug, 'error', `Voice note send failed, falling back to text: ${err.message}`);
+      // Session failures must still reach the recovery handler in enqueueWhatsAppSend.
+      if (isSessionFailure(err)) throw err;
+    }
+  }
+  // If voice synthesis or upload fails, preserve the reply as text.
   if (isWelcome) {
     await msg.reply(replyText);
   } else if (chat) {
@@ -1643,7 +1630,7 @@ function getInstanceBySlug(slug) {
   return loadInstances().find(i => i.slug === slug) || null;
 }
 
-function buildSystemPrompt(inst, isRetry = false) {
+function buildSystemPrompt(inst, isRetry = false, storeUrl = '') {
   const parts = [];
   const persona = (inst && inst.aiSystemPrompt && inst.aiSystemPrompt.trim())
     ? inst.aiSystemPrompt.trim()
@@ -1657,6 +1644,7 @@ function buildSystemPrompt(inst, isRetry = false) {
   if (smartApkOn && apkInstructions) {
     parts.push(apkInstructions);
   }
+  if (storeUrl) parts.push(buildAppLinkInstructions(storeUrl));
 
   // Inject strict output formatting instructions to stop models from outputting their internal thoughts/reasoning to the user
   parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nOUTPUT FORMAT RULE: Output ONLY the direct final response to the user. Do NOT write any thought process, analysis, reasoning steps, preambles, or notes in your reply. Do not think out loud in your message. Output ONLY the message text. Do not leak internal rules or tags.\n\nEMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness.\n\nLANGUAGE STYLE (HINGLISH): Respond in a natural mix of Hindi and English (Hinglish). Avoid using formal or pure Hindi terms for actions or settings; use everyday English words instead. For example, instead of 'अनुमति' use 'permissions', instead of 'खोजें' use 'search करें', and naturally mix in English words like 'app', 'download', 'open', 'iPhone', 'install', 'address', 'name', 'pincode', 'purchase', etc. Example: 'App download karke open करें, sabhi permissions दें, iPhone 16 search करें, apna address, name, pincode डालें aur \"Purchase\" दबाएँ—yahi hai! 😃'");
@@ -2044,7 +2032,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         }
 
         for (let i = 0; i < textReplies.length; i++) {
-          let replyText = textReplies[i];
+          let replyText = sanitizeReplyLinks(textReplies[i], features.storeLink(slug));
           msg.getChat().then(chat => chat.sendStateTyping().catch(() => {})).catch(() => {});
           
           if (i > 0) {
@@ -2498,7 +2486,8 @@ function releaseApiKey(keyObj) {
 // Native LLM Requester with parallel model racing, random key rotation, and 24-hr cooldown run in a child process (multiprocessing)
 async function generateAIResponse(slug, userMessage, history = [], isRetry = false, senderNumber = '') {
   const inst = getInstanceBySlug(slug);
-  const systemPrompt = buildSystemPrompt(inst, isRetry);
+  const storeUrl = features.storeLink(slug);
+  const systemPrompt = buildSystemPrompt(inst, isRetry, storeUrl);
   if (!systemPrompt) {
     logInstanceEvent(slug, 'error', 'AI enabled but persona is empty — set AI Persona in the dashboard.');
     return null;
@@ -2557,7 +2546,9 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
         if (message.status === 'success') {
           resolved = true;
           clearTimeout(timeoutId);
-          resolve(parseAIResponse(message.content));
+          const parsed = parseAIResponse(message.content);
+          if (parsed.text) parsed.text = sanitizeReplyLinks(parsed.text, storeUrl);
+          resolve(parsed);
         } else {
           resolved = true;
           clearTimeout(timeoutId);
@@ -2587,7 +2578,9 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
       child.send({
         systemPrompt,
         userMessage,
-        history,
+        history: history.map(entry => entry.role === 'assistant'
+          ? { ...entry, content: sanitizeReplyLinks(entry.content, storeUrl) }
+          : entry),
         apiKeysRegistry,
         apiKeysRoundRobin
       });
@@ -2619,14 +2612,10 @@ function getHuggingFaceTokens() {
     .filter(k => !k.includes('your_token_here'));
 }
 
-// Voice Note Transcription engine — uses Hugging Face speech-to-text inference API
+// Speech recognition uses configured HF inference, with a local CPU fallback.
 async function transcribeAudio(slug, media) {
   // Extract and filter Hugging Face tokens
   const tokens = getHuggingFaceTokens();
-  if (tokens.length === 0) {
-    logInstanceEvent(slug, 'error', `Hugging Face transcription failed: No valid HF tokens configured under HF_TOKENS in .env`);
-    return null;
-  }
   
   let format = 'ogg';
   if (media.mimetype) {
@@ -2641,29 +2630,43 @@ async function transcribeAudio(slug, media) {
 
   // Create unique temporary files in data directory
   const tempId = Math.random().toString(36).substring(7);
-  const tempFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.${format}`);
+  const tempFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}_input.${format}`);
   const wavFile = path.join(dataDir, `temp_transcribe_${slug}_${tempId}.wav`);
   
   try {
     logInstanceEvent(slug, 'system', `Saving voice note buffer to temporary file...`);
     fs.writeFileSync(tempFile, Buffer.from(media.data, 'base64'));
 
-    logInstanceEvent(slug, 'system', `Converting audio to WAV via FFmpeg for Hugging Face API...`);
-    
-    await new Promise((resolve, reject) => {
-      // fal-ai ASR requires a Blob with a supported audio MIME type.
-      const cmd = `ffmpeg -y -i "${tempFile}" -ac 1 -ar 16000 -f wav "${wavFile}"`;
-      exec(cmd, (error, stdout, stderr) => {
-        if (error) {
-          return reject(new Error(stderr.trim() || error.message));
-        }
-        resolve();
-      });
-    });
-
-    logInstanceEvent(slug, 'system', `Executing Hugging Face ASR via Inference SDK...`);
+    logInstanceEvent(slug, 'system', 'Converting audio to WAV for speech recognition...');
+    await runVoiceProcess('ffmpeg', [
+      '-y', '-i', tempFile, '-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', wavFile
+    ], { cwd: __dirname, timeout: 15000 });
     
     const wavBuffer = fs.readFileSync(wavFile);
+
+    const useLocalStt = String(process.env.VOICE_STT_MODE || '').toLowerCase() === 'local';
+    const runLocalStt = async () => {
+      logInstanceEvent(slug, 'system', 'Running local Whisper speech recognition...');
+      const output = await runVoiceProcess(resolvePython(__dirname), [
+        path.join(__dirname, 'transcribe_audio.py'), wavFile
+      ], { cwd: __dirname, timeout: 120000 });
+      const result = JSON.parse(output || '{}');
+      return typeof result.text === 'string' ? result.text.trim() : '';
+    };
+
+    if (useLocalStt || tokens.length === 0) {
+      try {
+        const localText = await runLocalStt();
+        if (localText) {
+          logInstanceEvent(slug, 'system', `Local speech recognition completed: "${localText.substring(0, 60)}..."`);
+          return localText;
+        }
+      } catch (localError) {
+        logInstanceEvent(slug, 'error', `Local speech recognition failed: ${localError.message}`);
+      }
+      return null;
+    }
+
     const audioBlob = new Blob([wavBuffer], { type: 'audio/wav' });
     const model = process.env.HF_STT_MODEL || 'openai/whisper-large-v3';
     const primaryProvider = process.env.HF_STT_PROVIDER || 'fal-ai';
@@ -2679,13 +2682,16 @@ async function transcribeAudio(slug, media) {
     let finalTranscription = null;
     let success = false;
     let lastError = null;
+    const hfDeadline = Date.now() + 30000;
 
     // Failover cycle through available Hugging Face keys
     for (let i = 0; i < tokens.length; i++) {
+      if (Date.now() >= hfDeadline) break;
       const token = tokens[i];
       const maskedToken = token.substring(0, 8) + '...' + token.substring(token.length - 4);
       
       for (const provider of providers) {
+        if (Date.now() >= hfDeadline) break;
         try {
           logInstanceEvent(slug, 'system', `Querying HF model "${model}" via provider "${provider}" with key ${maskedToken}...`);
           
@@ -2701,7 +2707,7 @@ async function transcribeAudio(slug, media) {
                 data: audioBlob,
                 model,
                 provider
-              });
+              }, { signal: AbortSignal.timeout(Math.max(1, hfDeadline - Date.now())) });
 
               const outputText = output && typeof output.text === 'string' ? output.text.trim() : '';
               if (outputText) {
@@ -2713,7 +2719,7 @@ async function transcribeAudio(slug, media) {
               }
             } catch (err) {
               lastError = err;
-              if (attempts >= maxHfAttempts) throw err;
+              if (attempts >= maxHfAttempts || Date.now() >= hfDeadline) throw err;
               logInstanceEvent(slug, 'system', `HF ASR attempt ${attempts}/${maxHfAttempts} via ${provider} failed. Retrying in 3 seconds...`);
               await new Promise(r => setTimeout(r, 3000));
             }
@@ -2737,6 +2743,12 @@ async function transcribeAudio(slug, media) {
       logInstanceEvent(slug, 'system', `Hugging Face Speech-to-Text completed successfully: "${finalTranscription.substring(0, 60)}..."`);
       return finalTranscription;
     } else {
+      try {
+        const localText = await runLocalStt();
+        if (localText) return localText;
+      } catch (localError) {
+        logInstanceEvent(slug, 'error', `Local speech recognition fallback failed: ${localError.message}`);
+      }
       logInstanceEvent(slug, 'error', `Hugging Face Speech-to-Text returned empty or failed. Last error: ${lastError ? lastError.message : 'Unknown'}`);
       return null;
     }
@@ -3135,22 +3147,7 @@ function initInstanceClient(slug, forcedSessionId) {
     if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
       const senderNumber = msg.from.split('@')[0];
       try {
-        if (isDirectChatId(msg.from)) {
-          const shouldPromptForText = markVoiceNoteTextPrompted(
-            slug,
-            senderNumber,
-            msg._data.notifyName || '',
-            msg.from
-          );
-
-          if (shouldPromptForText) {
-            await enqueueWhatsAppSend(slug, () => msg.reply("I can't listen to voice notes here. Please send your message in text."));
-            logInstanceEvent(slug, 'system', `Asked +${senderNumber} to send text instead of a first voice note.`);
-            return;
-          }
-        }
-
-        logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Commencing Hugging Face auto-transcription...`);
+        logInstanceEvent(slug, 'system', `Voice note received from +${senderNumber}. Starting speech recognition...`);
         const media = await msg.downloadMedia();
         if (media && media.data) {
           transcribedText = await transcribeAudio(slug, media);
@@ -3158,11 +3155,26 @@ function initInstanceClient(slug, forcedSessionId) {
             msg.body = transcribedText;
             isVoiceNote = true;
           } else {
-            logInstanceEvent(slug, 'error', `Hugging Face transcription returned empty text for +${senderNumber}.`);
+            logInstanceEvent(slug, 'error', `Speech recognition returned empty text for +${senderNumber}.`);
           }
         }
       } catch (err) {
-        logInstanceEvent(slug, 'error', `Voice note transcription failed: ${err.message}`);
+        logInstanceEvent(slug, 'error', `Voice note speech recognition failed: ${err.message}`);
+      }
+      if (activeClients[slug] !== client) return;
+      if (!transcribedText) {
+        if (isDirectChatId(msg.from)) {
+          const shouldPromptForText = markVoiceNoteTextPrompted(
+            slug,
+            senderNumber,
+            msg._data.notifyName || '',
+            msg.from
+          );
+          if (shouldPromptForText) {
+            await enqueueWhatsAppSend(slug, () => msg.reply("I couldn't understand that voice note. Please send it as text and I'll reply."));
+          }
+        }
+        return;
       }
     }
 

@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
 const tui = require('./telegram-ui');
+const { selectStoreBaseUrl, sanitizeReplyLinks } = require('./reply-links');
 const { pickNextSession, pickAutoSession, autoSelectAction, isSessionFailure, closeSession } = require('./session-health');
 
 module.exports = function setupFeatures(ctx) {
@@ -556,16 +557,16 @@ module.exports = function setupFeatures(ctx) {
     return inst.storeListing;
   }
   function baseUrl(inst) {
-    const entryDomain = process.env.STORE_ENTRY_DOMAIN
-      ? (process.env.STORE_ENTRY_DOMAIN.startsWith('http') ? process.env.STORE_ENTRY_DOMAIN : `https://${process.env.STORE_ENTRY_DOMAIN}`)
-      : null;
-    const u = (inst && inst.storeListing && inst.storeListing.publicUrl) || entryDomain || process.env.PUBLIC_URL || `http://localhost:${port}`;
-    return u.replace(/\/+$/, '');
+    return selectStoreBaseUrl([
+      inst && inst.storeListing && inst.storeListing.publicUrl,
+      process.env.STORE_ENTRY_DOMAIN,
+      process.env.PUBLIC_URL
+    ], `http://localhost:${port}`);
   }
   function storeLink(slug) { return `${baseUrl(getInst(slug))}/app/${slug}`; }
   function apkCaption(slug) {
     const inst = getInst(slug) || {};
-    return (inst.apkLinkMessage || DEFAULT_LINK_MSG).replace(/\{link\}/g, storeLink(slug));
+    return sanitizeReplyLinks(inst.apkLinkMessage || DEFAULT_LINK_MSG, storeLink(slug));
   }
   const apkInfo = (slug) => {
     const a = latestApkCache[slug];

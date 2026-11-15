@@ -22,6 +22,30 @@ function buildCompatibleUtils(loadUtils) {
   return new Function(`return (${source});`)();
 }
 
+// Debug.VERSION can be available before the Socket module finishes loading.
+// Keep this function self-contained: Puppeteer serializes it into the browser.
+function buildCompatibleAuthStore(exposeAuthStore) {
+  return new Function(`return async () => {
+    const deadline = Date.now() + 30000;
+    while (true) {
+      let socket;
+      try {
+        socket = typeof window.require === 'function'
+          ? window.require('WAWebSocketModel')?.Socket
+          : null;
+      } catch (_) {
+        // The module loader can also throw while the module is loading.
+      }
+      if (socket) break;
+      if (Date.now() >= deadline) {
+        throw new Error('WhatsApp bootstrap timeout: WAWebSocketModel.Socket unavailable after 30 seconds');
+      }
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    return (${exposeAuthStore.toString()})();
+  };`)();
+}
+
 // Node-side structures (Message.from/to/author, chat.id, client.info.wid) also read
 // _serialized; without this, msg.from is undefined and every incoming message crashes.
 const ID_KEYS = ['id', 'from', 'to', 'author', 'wid', 'participant', 'remote'];
@@ -108,6 +132,12 @@ function patchClient(loadClient = () => require('whatsapp-web.js/src/Client')) {
 }
 
 function installWhatsAppCompatibility() {
+  const authStore = require('whatsapp-web.js/src/util/Injected/AuthStore/AuthStore');
+  if (typeof authStore.ExposeAuthStore !== 'function') throw new Error('Unsupported WhatsApp auth store loader');
+  if (!authStore.ExposeAuthStore.__socketCompat) {
+    authStore.ExposeAuthStore = buildCompatibleAuthStore(authStore.ExposeAuthStore);
+    authStore.ExposeAuthStore.__socketCompat = true;
+  }
   const utilsPath = require.resolve('whatsapp-web.js/src/util/Injected/Utils');
   const utils = require(utilsPath);
   // Do not alter dependency files or the package lock on the owner's machine.
@@ -117,4 +147,4 @@ function installWhatsAppCompatibility() {
   patchClient();
 }
 
-module.exports = { buildCompatibleUtils, installWhatsAppCompatibility, normalizeStructureData, patchStructures, patchClient };
+module.exports = { buildCompatibleUtils, buildCompatibleAuthStore, installWhatsAppCompatibility, normalizeStructureData, patchStructures, patchClient };

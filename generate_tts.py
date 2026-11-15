@@ -1,10 +1,10 @@
 import sys
-import io
 import os
 
 # Fix Windows console encoding issues for non-ASCII characters
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, 'reconfigure'):
+        stream.reconfigure(encoding='utf-8')
 
 def main():
     if len(sys.argv) < 4:
@@ -49,7 +49,7 @@ def main():
         from supertonic import TTS
         
         # Instantiate TTS
-        tts = TTS(auto_download=True)
+        tts = TTS(model='supertonic-3', auto_download=True)
         style = tts.get_voice_style(voice_name=voice_name)
         
         # Synthesize audio. lang="hi" is forced as per user request:
