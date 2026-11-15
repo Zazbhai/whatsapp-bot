@@ -1072,30 +1072,97 @@ async function sendSmartReply(slug, msg, chat, replyText, isWelcome = false) {
 async function sendSmartReplyNow(slug, msg, chat, replyText, isWelcome = false, voiceMedia = null) {
   if (voiceMedia) {
     try {
-      const sentVoice = await msg.reply(voiceMedia, undefined, { sendAudioAsVoice: true });
+      const sentVoice = await sendDirectMessage(slug, msg, chat, voiceMedia, { sendAudioAsVoice: true });
       if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentVoice, replyText, msg.body);
       logInstanceEvent(slug, 'send', `Dispatched voice note to +${msg.from.split('@')[0]}`);
       return true;
     } catch (err) {
       logInstanceEvent(slug, 'error', `Voice note send failed, falling back to text: ${err.message}`);
       // Session failures must still reach the recovery handler in enqueueWhatsAppSend.
-      if (isSessionFailure(err)) throw err;
+      if (typeof isSessionFailure === 'function' && isSessionFailure(err)) throw err;
     }
   }
-  // If voice synthesis or upload fails, preserve the reply as text.
-  let sentMessage;
-  if (isWelcome) {
-    sentMessage = await msg.reply(replyText);
-  } else if (chat) {
-    sentMessage = await Promise.race([
-      chat.sendMessage(replyText),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout sending reply")), 15000))
-    ]);
-  } else {
-    sentMessage = await msg.reply(replyText);
-  }
+  // If voice synthesis or upload fails, preserve the reply as text without quoting/tagging
+  const sentMessage = await sendDirectMessage(slug, msg, chat, replyText);
   if (typeof trackReadFollowup === 'function') trackReadFollowup(slug, msg.from, msg.from.split('@')[0], sentMessage, replyText, msg.body);
   return false;
+}
+
+/**
+ * Send a message directly to the chat WITHOUT quoting or tagging the user's message.
+ * Priority: chat.sendMessage -> client.sendMessage -> msg.getChat().sendMessage -> msg.reply (fallback for test mocks)
+ */
+async function sendDirectMessage(slug, msg, chat, content, options = {}) {
+  const client = (typeof activeClients !== 'undefined' && activeClients[slug]) || null;
+  const targetChatId = (msg && msg.from) || (chat && (chat.id?._serialized || chat.id)) || null;
+
+  const effectiveOptions = { ...options };
+  // If this message requests quoting/tagging a specific target message:
+  const tagTarget = (msg && msg._tagTarget) || null;
+  const tagId = (tagTarget && (tagTarget.id?._serialized || tagTarget.id)) || (msg && msg._forceTag && (msg.id?._serialized || msg.id));
+  if (tagId && !effectiveOptions.quotedMessageId) {
+    effectiveOptions.quotedMessageId = tagId;
+  }
+
+  // 1. Try provided chat instance if available
+  if (chat && typeof chat.sendMessage === 'function') {
+    try {
+      return await Promise.race([
+        chat.sendMessage(content, effectiveOptions),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('chat.sendMessage timeout')), 30000))
+      ]);
+    } catch (chatErr) {
+      if (typeof isSessionFailure === 'function' && isSessionFailure(chatErr)) throw chatErr;
+      if (typeof logInstanceEvent === 'function') {
+        logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), falling back to client.sendMessage`);
+      }
+    }
+  }
+
+  // 2. Try client.sendMessage directly to recipient (with quotedMessageId if tagged)
+  if (client && targetChatId && typeof client.sendMessage === 'function') {
+    try {
+      return await Promise.race([
+        client.sendMessage(targetChatId, content, effectiveOptions),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('client.sendMessage timeout')), 30000))
+      ]);
+    } catch (clientErr) {
+      if (typeof isSessionFailure === 'function' && isSessionFailure(clientErr)) throw clientErr;
+      if (typeof logInstanceEvent === 'function') {
+        logInstanceEvent(slug, 'system', `client.sendMessage failed (${clientErr.message}), falling back to msg.getChat`);
+      }
+    }
+  }
+
+  // 3. Try resolving chat object via msg.getChat()
+  if (msg && typeof msg.getChat === 'function') {
+    try {
+      const resolvedChat = await Promise.race([
+        msg.getChat(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 5000))
+      ]);
+      if (resolvedChat && typeof resolvedChat.sendMessage === 'function') {
+        return await Promise.race([
+          resolvedChat.sendMessage(content, effectiveOptions),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('resolvedChat.sendMessage timeout')), 30000))
+        ]);
+      }
+    } catch (getChatErr) {
+      if (typeof isSessionFailure === 'function' && isSessionFailure(getChatErr)) throw getChatErr;
+    }
+  }
+
+  // 4. If tagTarget itself has a reply method, reply to that target message!
+  if (tagTarget && typeof tagTarget.reply === 'function') {
+    return await tagTarget.reply(content, undefined, effectiveOptions);
+  }
+
+  // 5. Graceful fallback to msg.reply without quote if possible, or standard msg.reply (e.g. in test harness)
+  if (msg && typeof msg.reply === 'function') {
+    return await msg.reply(content, undefined, effectiveOptions);
+  }
+
+  throw new Error(`Unable to send message to ${targetChatId || 'unknown recipient'}: no valid WhatsApp client or chat available`);
 }
 
 
@@ -2126,7 +2193,7 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
   if (!apk || !apk.data) {
     logInstanceEvent(slug, 'system', `Smart APK requested but cache is empty for +${senderNumber}`);
     try {
-      await msg.reply("❌ App file isn't ready yet — please wait a moment, sir! 🙏");
+      await sendDirectMessage(slug, msg, null, "❌ App file isn't ready yet — please wait a moment, sir! 🙏");
       clientStates[slug].stats.replies++;
       io.to(`instance_${slug}`).emit('stat_increment', 'replies');
       recordUserResponse(slug, senderNumber);
@@ -2158,14 +2225,138 @@ async function sendCachedApkReply(slug, msg, senderNumber) {
 }
 
 const pendingDebounces = {};
+const DEFAULT_MESSAGE_DEBOUNCE_MS = 10000; // 10 seconds default anti-spam aggregation window
+const MAX_MESSAGE_DEBOUNCE_MS = 30000;     // 30 seconds max window for continuous rapid messages
+
+function getDebounceDelay() {
+  const envVal = Number(process.env.MESSAGE_DEBOUNCE_MS);
+  return Number.isFinite(envVal) && envVal >= 0 ? envVal : DEFAULT_MESSAGE_DEBOUNCE_MS;
+}
+
+/**
+ * Classify a single message into semantic intent categories
+ */
+function categorizeMessage(text) {
+  const clean = String(text || '').toLowerCase().trim();
+  if (!clean) return 'EMPTY';
+  
+  // 1. Pure greetings
+  if ((typeof isGreetingOnly === 'function' && isGreetingOnly(clean)) || /^(hi|hello|hey|namaste|hlo|helo|hii+|heyy+)/i.test(clean)) {
+    const stripped = clean.replace(/^(hi|hello|hey|namaste|hlo|helo|hii+|heyy+|bhai|sir|mam|madam|ji|dear)\b/gi, '').trim();
+    if (!stripped || (typeof isGreetingOnly === 'function' && isGreetingOnly(stripped))) return 'GREETING';
+  }
+
+  // 2. Delivery & shipping timeframe
+  if (
+    /\b(delivery|deliver|shipping|ship|parcel|dispatch|reach|tracking|track)\b/i.test(clean) ||
+    /\b(kab aayega|kab milega|kitne din|kab tak|ghar kab|pahunch|pahunchne)\b/i.test(clean) ||
+    /(डिलीवरी|कब आएगा|कब मिलेगा|कितने दिन|पहुंचेगा|पार्सल)/i.test(clean)
+  ) {
+    return 'DELIVERY';
+  }
+
+  // 3. App, APK, installation, download, order process & claim steps
+  if (
+    /\b(apk|app|download|install|link|steps?|process|kaha se|kaise kare|kaise milega|claim|chahiye|bhejo|send|order process|kaise order|kya kare|iphone|get|how to|kaise)\b/i.test(clean) ||
+    /(ऐप|डाउनलोड|इंस्टॉल|लिंक|भेजो|प्रोसेस|स्टेप|कैसे करें|कैसे मिलेगा)/i.test(clean)
+  ) {
+    return 'APK_PROCESS';
+  }
+
+  // 4. Trust, authenticity, price, free, charges, scam
+  if (
+    /\b(sach|real|fake|scam|paise|charges?|cost|free|rupaye|kharcha|payment|price|fees?)\b/i.test(clean) ||
+    /(सच|फ्री|पैसे|चार्ज|असली|नकली|रुपये)/i.test(clean)
+  ) {
+    return 'TRUST_COST';
+  }
+
+  // 5. Order completion / already placed / screenshot
+  if (
+    /\b(order.*(done|placed|ho gaya|kar diya)|screenshot|already ordered|maine order kiya)\b/i.test(clean) ||
+    /(ऑर्डर.*(हो गया|कर दिया)|स्क्रीनशॉट)/i.test(clean)
+  ) {
+    return 'ORDER_STATUS';
+  }
+
+  // 6. Device specifications (color, model, storage, warranty)
+  if (
+    /\b(color|colour|gb|storage|model|pro max|iphone 15|iphone 16|iphone 14|warranty)\b/i.test(clean) ||
+    /(कलर|रंग|मॉडल)/i.test(clean)
+  ) {
+    return 'DEVICE_SPEC';
+  }
+
+  return 'OTHER';
+}
+
+/**
+ * Cluster rapid messages into semantic categories.
+ * Drops standalone greetings if substantive messages are present.
+ * Combines similar messages into one cluster, and separates distinct topics.
+ */
+function clusterMessagesByCategory(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  if (messages.length === 1) {
+    return [{
+      category: categorizeMessage(messages[0].body || ''),
+      messages: [messages[0]],
+      combinedBody: (messages[0].body || '').trim(),
+      tagMsg: messages[0]
+    }];
+  }
+
+  const categorized = messages.map(m => ({
+    msg: m,
+    text: (m.body || '').trim(),
+    category: categorizeMessage(m.body || '')
+  }));
+
+  const nonEmpty = categorized.filter(item => item.text.length > 0);
+  if (nonEmpty.length === 0) return [];
+
+  // Drop pure greetings if substantive messages are present
+  const substantive = nonEmpty.filter(item => item.category !== 'GREETING');
+  const itemsToCluster = substantive.length > 0 ? substantive : nonEmpty;
+
+  const clusters = [];
+  const categoryMap = new Map();
+
+  for (const item of itemsToCluster) {
+    if (!categoryMap.has(item.category)) {
+      const cluster = {
+        category: item.category,
+        messages: [item.msg],
+        texts: [item.text],
+        tagMsg: item.msg
+      };
+      categoryMap.set(item.category, cluster);
+      clusters.push(cluster);
+    } else {
+      const existing = categoryMap.get(item.category);
+      existing.messages.push(item.msg);
+      existing.texts.push(item.text);
+      existing.tagMsg = item.msg;
+    }
+  }
+
+  for (const cluster of clusters) {
+    cluster.combinedBody = cluster.texts.join('\n');
+  }
+
+  return clusters.slice(0, 3);
+}
 
 function enqueueMessage(slug, senderNumber, msg) {
   if (!senderNumber || senderNumber === 'status' || !msg || !msg.from || msg.from === 'status@broadcast' || msg.from.endsWith('@broadcast') || msg.from.endsWith('@newsletter')) return;
   const userLockKey = `${slug}:${senderNumber}`;
+  const now = Date.now();
   
   if (!pendingDebounces[userLockKey]) {
     pendingDebounces[userLockKey] = {
-      messages: []
+      messages: [],
+      firstSeenAt: now,
+      timer: null
     };
   }
   
@@ -2175,10 +2366,16 @@ function enqueueMessage(slug, senderNumber, msg) {
     clearTimeout(pendingDebounces[userLockKey].timer);
   }
   
-  let delay = 5000;
+  let baseDelay = getDebounceDelay();
   if (isSpamCoolingDown(slug, senderNumber)) {
-    const until = spamCooldowns[slug][senderNumber];
-    delay = Math.max(5000, until - Date.now());
+    const until = (spamCooldowns[slug] || {})[senderNumber] || now;
+    baseDelay = Math.max(baseDelay, until - now);
+  } else {
+    // If user sends messages continuously, cap total wait at MAX_MESSAGE_DEBOUNCE_MS
+    const elapsed = now - pendingDebounces[userLockKey].firstSeenAt;
+    if (elapsed + baseDelay > MAX_MESSAGE_DEBOUNCE_MS) {
+      baseDelay = Math.max(1000, MAX_MESSAGE_DEBOUNCE_MS - elapsed);
+    }
   }
   
   pendingDebounces[userLockKey].timer = setTimeout(() => {
@@ -2187,17 +2384,53 @@ function enqueueMessage(slug, senderNumber, msg) {
     
     if (!data || data.messages.length === 0) return;
     
-    const targetMsg = data.messages[0];
-    if (data.messages.length > 1) {
-      const combinedBody = data.messages.map(m => m.body).filter(Boolean).join('\n');
-      targetMsg.body = combinedBody;
+    const clusters = clusterMessagesByCategory(data.messages);
+    if (clusters.length === 0) return;
+
+    if (clusters.length === 1) {
+      // Single category (e.g. all greetings, or all questions in same topic) -> 1 unified reply without tagging
+      const cluster = clusters[0];
+      const targetMsg = cluster.tagMsg || data.messages[data.messages.length - 1];
+      targetMsg.body = cluster.combinedBody;
+      targetMsg._combinedCount = data.messages.length;
+      targetMsg._voiceReplyRequested = data.messages.some(m => m._voiceReplyRequested === true);
+
+      if (data.messages.length > 1) {
+        logInstanceEvent(slug, 'system', `⏳ Anti-spam 10s window: Combined ${data.messages.length} messages (single category: ${cluster.category}) from +${senderNumber} into 1 request.`);
+      }
+
+      enqueueIncomingProcessing(slug, () => processCombinedMessage(slug, senderNumber, targetMsg)).catch(err => {
+        logInstanceEvent(slug, 'error', `Failed to process combined message: ${err.message}`);
+      });
+    } else {
+      // Multiple distinct categories detected (e.g. APK + Delivery)
+      // Send distinct replies by tagging each specific question!
+      logInstanceEvent(slug, 'system', `🧠 Context-aware grouping: Detected ${clusters.length} distinct categories for +${senderNumber} (${clusters.map(c => c.category).join(', ')}). Sending ${clusters.length} tagged replies.`);
+
+      enqueueIncomingProcessing(slug, async () => {
+        for (let i = 0; i < clusters.length; i++) {
+          const cluster = clusters[i];
+          const clusterMsg = Object.create(cluster.tagMsg);
+          clusterMsg.body = cluster.combinedBody;
+          clusterMsg._tagTarget = cluster.tagMsg; // Tag/quote this question message!
+          clusterMsg._voiceReplyRequested = cluster.messages.some(m => m._voiceReplyRequested === true);
+          clusterMsg._category = cluster.category;
+          clusterMsg._clusterIndex = i;
+          clusterMsg._clusterTotal = clusters.length;
+
+          if (i > 0) {
+            // Anti-ban pacing: 2-second gap between successive category replies
+            await new Promise(r => setTimeout(r, 2000));
+          }
+
+          logInstanceEvent(slug, 'system', `🏷️ Category reply (${i + 1}/${clusters.length}) [${cluster.category}] tagging: "${(cluster.tagMsg.body || '').substring(0, 40)}"`);
+          await processCombinedMessage(slug, senderNumber, clusterMsg);
+        }
+      }).catch(err => {
+        logInstanceEvent(slug, 'error', `Failed to process multi-category message batch: ${err.message}`);
+      });
     }
-    targetMsg._voiceReplyRequested = data.messages.some(message => message._voiceReplyRequested === true);
-    
-    enqueueIncomingProcessing(slug, () => processCombinedMessage(slug, senderNumber, targetMsg)).catch(err => {
-      logInstanceEvent(slug, 'error', `Failed to process combined message: ${err.message}`);
-    });
-  }, delay);
+  }, baseDelay);
 }
 
 async function processCombinedMessage(slug, senderNumber, msg) {
@@ -2294,7 +2527,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         
         logInstanceEvent(slug, 'system', `Transmitting latest cached APK to +${senderNumber}: "${apk.filename}"...`);
         const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
-        const sentMessage = await msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) });
+        const sentMessage = await sendDirectMessage(slug, msg, chat, media, { caption: userApkCaption(slug, senderNumber) });
         trackReadFollowup(slug, msg.from, senderNumber, sentMessage, features.apkCaption(slug));
         
         logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" to +${senderNumber}`);
@@ -2303,7 +2536,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
         io.to(`instance_${slug}`).emit('stat_increment', 'replies');
         recordUserResponse(slug, senderNumber);
       } else {
-        await msg.reply("❌ *No APK File Available*\n\nNo APK has been uploaded yet. Please send the latest APK to the Telegram bot first!");
+        await sendDirectMessage(slug, msg, chat, "❌ *No APK File Available*\n\nNo APK has been uploaded yet. Please send the latest APK to the Telegram bot first!");
         logInstanceEvent(slug, 'send', `Replied to +${senderNumber} that no APK is available.`);
       }
     } catch (err) {
@@ -2387,7 +2620,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
           try {
             if (rule.format === 'buttons' && rule.buttons && rule.buttons.length > 0 && i === textReplies.length - 1) {
               const menuButtons = new Buttons(replyText, rule.buttons.map(b => ({ body: b.body, id: b.id })));
-              await enqueueWhatsAppSend(slug, () => msg.reply(menuButtons));
+              await enqueueWhatsAppSend(slug, () => sendDirectMessage(slug, msg, null, menuButtons));
               if (preparedReply.containsLink) markStoreLinkSent(slug, senderNumber);
             } else {
               await sendSmartReply(slug, msg, null, replyText);
@@ -2413,7 +2646,7 @@ async function processCombinedMessage(slug, senderNumber, msg) {
             const media = new MessageMedia(apk.mimetype, apk.data, apk.filename);
             
             try {
-              const sentMessage = await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
+              const sentMessage = await enqueueWhatsAppSend(slug, () => sendDirectMessage(slug, msg, null, media, { caption: userApkCaption(slug, senderNumber) }));
               trackReadFollowup(slug, msg.from, senderNumber, sentMessage, features.apkCaption(slug));
               logInstanceEvent(slug, 'send', `Successfully dispatched APK file "${apk.filename}" for rule "${rule.trigger}" to +${senderNumber}`);
               
@@ -2446,9 +2679,12 @@ async function processCombinedMessage(slug, senderNumber, msg) {
   if (!ruleMatched) {
     if (aiHandlesApk) {
       logInstanceEvent(slug, 'system', `No rule matched for +${senderNumber}. Asking AI for a reply...`);
-      globalAIQueue.push({ slug, senderNumber, msg });
-      processGlobalAIQueue().catch(err => {
-        logInstanceEvent(slug, 'error', `Global AI queue processor failed: ${err.message}`);
+      return new Promise((resolve) => {
+        globalAIQueue.push({ slug, senderNumber, msg, resolve });
+        processGlobalAIQueue().catch(err => {
+          logInstanceEvent(slug, 'error', `Global AI queue processor failed: ${err.message}`);
+          resolve();
+        });
       });
     } else {
       const reason = !instConfig || !instConfig.aiEnabled
@@ -2703,8 +2939,8 @@ async function processSingleAITask(task) {
               ]));
               trackReadFollowup(slug, chat.id?._serialized || msg.from, senderNumber, sentMessage, features.apkCaption(slug));
             } catch (chatErr) {
-              logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), retrying with msg.reply...`);
-              const sentMessage = await enqueueWhatsAppSend(slug, () => msg.reply(media, undefined, { caption: userApkCaption(slug, senderNumber) }));
+              logInstanceEvent(slug, 'system', `chat.sendMessage failed (${chatErr.message}), retrying with sendDirectMessage...`);
+              const sentMessage = await enqueueWhatsAppSend(slug, () => sendDirectMessage(slug, msg, null, media, { caption: userApkCaption(slug, senderNumber) }));
               trackReadFollowup(slug, msg.from, senderNumber, sentMessage, features.apkCaption(slug));
             }
             logInstanceEvent(slug, 'send', `Smart APK dispatched to +${senderNumber}: "${apk.filename}"`);
@@ -2744,7 +2980,7 @@ async function processSingleAITask(task) {
             fallbackText = textQuestion;
           }
 
-          await enqueueWhatsAppSend(slug, () => msg.reply(fallbackText));
+          await enqueueWhatsAppSend(slug, () => sendDirectMessage(slug, msg, null, fallbackText));
           logInstanceEvent(slug, 'send', `Order confirmation question sent to +${senderNumber} in language: ${userLang}`);
           
           // Add the confirmation question text to memory so the Yes/No intercept works
@@ -2760,6 +2996,10 @@ async function processSingleAITask(task) {
     }
   } catch (outerErr) {
     logInstanceEvent(task.slug, 'error', `Global AI queue item failed: ${outerErr.message}`);
+  } finally {
+    if (typeof task.resolve === 'function') {
+      try { task.resolve(); } catch (_) {}
+    }
   }
 }
 
@@ -3635,7 +3875,7 @@ function initInstanceClient(slug, forcedSessionId) {
             msg.from
           );
           if (shouldPromptForText) {
-            await enqueueWhatsAppSend(slug, () => msg.reply("I couldn't understand that voice note. Please send it as text and I'll reply."));
+            await enqueueWhatsAppSend(slug, () => (typeof sendDirectMessage === 'function' ? sendDirectMessage(slug, msg, null, "I couldn't understand that voice note. Please send it as text and I'll reply.") : msg.reply("I couldn't understand that voice note. Please send it as text and I'll reply.")));
           }
         }
         return;
