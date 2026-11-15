@@ -28,4 +28,17 @@ function greetingReply(language) {
   return 'Hello! I can help with downloading and installing the app, or with the iPhone order steps. What do you need help with?';
 }
 
-module.exports = { detectLanguage, isGreetingOnly, greetingReply };
+function isInstallOnlyConfirmation(text) {
+  const value = String(text || '').toLowerCase();
+  const install = /\b(installed|install ho gaya|install kar liya|app lag gaya|download kar liya|downloaded)\b|(?:इंस्टॉल|डाउनलोड कर लिया|ऐप install)/i.test(value);
+  const positiveOrder = /\b(order|purchase|checkout)\b.{0,35}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed)\b|\b(order ho gaya|order kar diya|order place kar diya)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का))/i.test(value);
+  return install && !positiveOrder;
+}
+
+function isExplicitOrderConfirmation(text) {
+  const value = String(text || '').toLowerCase();
+  if (/\b(not|nahi|nhi|didn't|did not|abhi nahi)\b|(?:नहीं|नही)/i.test(value)) return false;
+  return /^(yes|yep|yeah|haan|han|ji|हो गया|हाँ|हां)[.!\s]*$/i.test(value) || /\b(order|purchase|checkout)\b.{0,35}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed|successfully ordered)\b|\b(order ho gaya|order kar diya|order place kar diya|haan order|yes order)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का)|आर्डर.{0,20}(हो गया|कर दिया))/i.test(value);
+}
+
+module.exports = { detectLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation };

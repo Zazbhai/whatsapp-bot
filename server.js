@@ -7,7 +7,7 @@ const { resolvePython, runVoiceProcess, describeVoiceError, audioConversionIsCom
 const { sanitizeReplyLinks, dedupeConfiguredLink, stripLinksForSpeech, buildAppLinkInstructions } = require('./reply-links');
 const { readStoreMetrics } = require('./store-metrics');
 const { ReadFollowupScheduler, isEligibleFollowup } = require('./read-followups');
-const { detectLanguage: detectBotLanguage, isGreetingOnly, greetingReply } = require('./bot-policy');
+const { detectLanguage: detectBotLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation } = require('./bot-policy');
 const {
   PROVIDERS,
   normalizeProviderId,
@@ -591,6 +591,12 @@ function markUserAsOrdered(slug, number) {
       console.error(`Failed to save ordered state for ${slug}:`, err);
     }
   }
+}
+
+function hasRecentAppInstallEvidence(slug, number) {
+  const user = loadSeenUsers(slug).find(item => item.number === number);
+  const timestamp = Number(user?.installScreenshotReceivedAt || 0);
+  return timestamp > 0 && Date.now() - timestamp < 30 * 24 * 60 * 60 * 1000;
 }
 
 function cancelReadFollowupsForUser(slug, number, completed = false) {
@@ -1889,7 +1895,7 @@ function buildSystemPrompt(inst, isRetry = false, storeUrl = '', voiceReply = fa
 
   // Order completion detection instructions
   parts.push(`ORDER DETECTION RULES (follow exactly):
-Your job is to detect if the user has BOTH: (1) successfully installed the One Shop app AND (2) placed/confirmed an order for their iPhone.
+Your job is to help the user install the One Shop app and place/confirm the iPhone order. When they say the app is installed, ask for a screenshot showing the app open or its install confirmation, and ask whether the order was placed. Ask them to hide personal information before sharing screenshots. If they explicitly confirm the order, mark it complete. If they send an image after you asked for an app/order screenshot, mark it complete as requested by the bot owner.
 
 If you are CONFIDENT the user has done both — they clearly say something like "order ho gaya", "order placed", "done", "successfully ordered", "iphone mil gaya", "order complete" or similar — append the tag [ORDER_COMPLETE] at the very END of your reply (after your message text), on its own line.
 
@@ -2380,6 +2386,21 @@ async function processSingleAITask(task) {
     const inst = getInstanceBySlug(slug);
     const smartApkOn = !inst || inst.aiSmartApkEnabled !== false;
 
+    if (isInstallOnlyConfirmation(msg.body)) {
+      const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+      const installCheck = userLang === 'hinglish'
+        ? 'Thanks! App install ho gaya, noted. App open hone ya install confirmation screen ka screenshot bhej sakte hain (personal details hide karke). Uske baad order place hua hai ya nahi, woh bhi bata dena.'
+        : userLang === 'hi'
+          ? 'धन्यवाद! App install हो गया, noted. App open होने या install confirmation screen का screenshot भेज सकते हैं (personal details छिपाकर)। फिर बताइए कि order place हुआ है या नहीं।'
+          : 'Thanks, I’ve noted that the app is installed. You can share a screenshot of the app opening or installation confirmation screen with personal details hidden, then let me know whether you placed the order.';
+      try {
+        await sendSmartReply(slug, msg, await msg.getChat(), installCheck);
+        addToMemory(slug, senderNumber, 'user', msg.body);
+        addToMemory(slug, senderNumber, 'assistant', installCheck);
+        return;
+      } catch (err) { logInstanceEvent(slug, 'error', `Install check reply failed for +${senderNumber}: ${err.message}`); }
+    }
+
     // ── Order confirmation reply intercept (after [ASK_ORDER] was sent) ──────
     // If the user replies Yes/No to the order confirmation question, handle it directly
     const bodyLower = (msg.body || '').toLowerCase().trim();
@@ -2402,12 +2423,12 @@ async function processSingleAITask(task) {
       const assistantMessages = recentHistory.filter(m => m.role === 'assistant').slice(-3);
       const isAskOrderQ = assistantMessages.some(m => {
         const content = m.content || '';
-        return content.includes('Did you successfully place your iPhone order') ||
+        return content.includes('Did you successfully place your iPhone order') || /app install.*screenshot|install.*screenshot/i.test(content) ||
                content.includes('Kya aapne app par iPhone order') ||
                content.includes('क्या आपने ऐप पर iPhone ऑर्डर');
       });
       
-      if (isAskOrderQ) {
+      if ((isAskOrderQ || hasRecentAppInstallEvidence(slug, senderNumber)) && isExplicitOrderConfirmation(msg.body)) {
         logInstanceEvent(slug, 'system', `✅ User +${senderNumber} confirmed iPhone order via Yes reply ("${msg.body}"). Adding to ignore list.`);
         saveIgnoredUser(slug, senderNumber);
         markUserAsOrdered(slug, senderNumber);
@@ -2431,13 +2452,26 @@ async function processSingleAITask(task) {
           logInstanceEvent(slug, 'error', `Failed to send order confirmed message to +${senderNumber}: ${err.message}`);
         }
         return; // Skip AI, user is now ignored
+      } else if (isAskOrderQ && isInstallOnlyConfirmation(msg.body)) {
+        try {
+          const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+          const reply = userLang === 'hinglish'
+            ? 'Thanks! App install ho gaya, noted. Kya aapne iPhone order bhi place/confirm kar diya hai? Agar haan, order confirmation screen ka screenshot bhej sakte hain—personal details hide karke.'
+            : userLang === 'hi'
+              ? 'धन्यवाद! App install हो गया, noted. क्या आपने iPhone order भी place/confirm कर दिया है? अगर हाँ, personal details छिपाकर order confirmation screen का screenshot भेज सकते हैं।'
+              : 'Thanks, I’ve noted that the app is installed. Have you also placed and confirmed the iPhone order? If yes, you can share a screenshot of the order confirmation screen with personal details hidden.';
+          await sendSmartReply(slug, msg, await msg.getChat(), reply);
+          addToMemory(slug, senderNumber, 'user', msg.body);
+          addToMemory(slug, senderNumber, 'assistant', reply);
+        } catch (err) { logInstanceEvent(slug, 'error', `Install confirmation follow-up failed for +${senderNumber}: ${err.message}`); }
+        return;
       }
     } else if (isNoReply) {
       const recentHistory = getConversationHistory(slug, senderNumber);
       const assistantMessages = recentHistory.filter(m => m.role === 'assistant').slice(-3);
       const isAskOrderQ = assistantMessages.some(m => {
         const content = m.content || '';
-        return content.includes('Did you successfully place your iPhone order') ||
+        return content.includes('Did you successfully place your iPhone order') || /app install.*screenshot|install.*screenshot/i.test(content) ||
                content.includes('Kya aapne app par iPhone order') ||
                content.includes('क्या आपने ऐप पर iPhone ऑर्डर');
       });
@@ -2615,15 +2649,15 @@ async function processSingleAITask(task) {
         logInstanceEvent(slug, 'system', `❓ [ASK_ORDER] detected for +${senderNumber}. Sending order confirmation question.`);
         try {
           const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
-          let textQuestion = `Did you successfully place your iPhone order on the app? 😊`;
-          let fallbackText = `Did you successfully place your iPhone order on the app? Please reply *Yes* or *No* 😊`;
+          let textQuestion = `Have you installed the app and placed your iPhone order? If installed, please send a screenshot of the app open (hide personal details). If ordered, reply Yes or send the order confirmation screenshot.`;
+          let fallbackText = `Have you installed the app and placed your iPhone order? If installed, please send a screenshot of the app open (hide personal details). If ordered, reply *Yes* or send the order confirmation screenshot.`;
 
           if (userLang === 'hinglish') {
-            textQuestion = `Kya aapne app par iPhone order successfully place kar diya hai? 😊`;
-            fallbackText = `Kya aapne app par iPhone order successfully place kar diya hai? Please *Haan* ya *Nahi* reply karein 😊`;
+            textQuestion = `Kya aapne app install karke iPhone order place kiya? Install ho gaya ho to app open karke screenshot bhejein (personal details hide karke). Order ho gaya ho to *Haan* reply karein ya order confirmation screenshot bhejein.`;
+            fallbackText = textQuestion;
           } else if (userLang === 'hi') {
-            textQuestion = `क्या आपने ऐप पर iPhone ऑर्डर सफलतापूर्वक प्लेस कर दिया है? 😊`;
-            fallbackText = `क्या आपने ऐप पर iPhone ऑर्डर सफलतापूर्वक प्लेस कर दिया है? कृपया *हाँ* या *नहीं* लिखकर जवाब दें 😊`;
+            textQuestion = `क्या आपने app install करके iPhone order place किया? Install हो गया हो तो app open करके screenshot भेजें (personal details hide करके)। Order हो गया हो तो *हाँ* reply करें या order confirmation screenshot भेजें।`;
+            fallbackText = textQuestion;
           }
 
           await enqueueWhatsAppSend(slug, () => msg.reply(fallbackText));
@@ -3424,6 +3458,38 @@ function initInstanceClient(slug, forcedSessionId) {
 
     // Auto-forward incoming images to Admin if configured
     if (msg.hasMedia && msg.type === 'image') {
+      const recentHistory = getConversationHistory(slug, senderNumber);
+      const awaitingScreenshot = recentHistory.filter(m => m.role === 'assistant').slice(-4)
+        .some(m => /screenshot/i.test(m.content || '') && /install|app open|order confirmation/i.test(m.content || ''));
+      if (awaitingScreenshot) {
+        const screenshotLanguage = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+        const proofReply = screenshotLanguage === 'hinglish'
+          ? 'Screenshot mil gaya, thank you. Aapka order successful mark kar diya hai.'
+          : screenshotLanguage === 'hi'
+            ? 'Screenshot मिल गया, धन्यवाद। आपका order successful mark कर दिया है।'
+            : 'Screenshot received, thank you. I’ve marked your order as successful.';
+        try {
+          saveIgnoredUser(slug, senderNumber);
+          markUserAsOrdered(slug, senderNumber);
+          cancelReadFollowupsForUser(slug, senderNumber, true);
+          const seenUsers = loadSeenUsers(slug);
+          let seenUser = seenUsers.find(user => user.number === senderNumber);
+          if (!seenUser) {
+            seenUser = { number: senderNumber, firstSeen: Date.now(), chatId: msg.from };
+            seenUsers.push(seenUser);
+          }
+          seenUser.installScreenshotReceivedAt = Date.now();
+          seenUser.ordered = true;
+          seenUser.orderedTime = Date.now();
+          fs.writeFileSync(path.join(dataDir, `seen_users_${slug}.json`), JSON.stringify(seenUsers, null, 2), 'utf8');
+          saveIgnoredUser(slug, senderNumber);
+          cancelReadFollowupsForUser(slug, senderNumber, true);
+          await sendSmartReply(slug, msg, await msg.getChat(), proofReply);
+          addToMemory(slug, senderNumber, 'user', '[Order screenshot sent]');
+          addToMemory(slug, senderNumber, 'assistant', proofReply);
+          logInstanceEvent(slug, 'system', `Order marked successful for +${senderNumber} after screenshot was received.`);
+        } catch (err) { logInstanceEvent(slug, 'error', `Order screenshot acknowledgement failed for +${senderNumber}: ${err.message}`); }
+      }
       if (instConfig && instConfig.adminForwardNumber) {
         try {
           const senderNumber = msg.from.split('@')[0];
