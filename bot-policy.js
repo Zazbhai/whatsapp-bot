@@ -1,50 +1,62 @@
 'use strict';
 
 const HINGLISH_WORDS = new Set([
-  'aap', 'apka', 'apki', 'batao', 'bhejo', 'chahiye', 'dedo', 'diya', 'gaya', 'gayi',
-  'hai', 'haan', 'han', 'ho', 'hua', 'ka', 'kaise', 'kar', 'karo', 'karke', 'kya',
-  'mein', 'mujhe', 'nahi', 'nhi', 'order', 'par', 'please', 'raha', 'rahi', 'send',
-  'ya', 'karna', 'karein', 'milega', 'chahiye', 'karo'
+  'aap', 'apka', 'apki', 'apna', 'apni', 'batao', 'bhejo', 'chahiye', 'dedo', 'diya', 'gaya', 'gayi',
+  'hai', 'haan', 'han', 'ho', 'hua', 'ka', 'kaise', 'kar', 'karo', 'karke', 'karna', 'karein', 'kya',
+  'mein', 'mujhe', 'nahi', 'nhi', 'par', 'raha', 'rahi',
+  'ya', 'milega', 'hum', 'tum', 'kab', 'kaha', 'kahan', 'kidhar', 'pe', 'se', 'ko',
+  'sahi', 'galat', 'baat', 'bol', 'sunao', 'chal', 'chala'
+]);
+
+const PUNJABI_WORDS = new Set([
+  'kive', 'kiven', 'kiwe', 'kiddan', 'kida', 'kidda', 'dasso', 'daso',
+  'hunda', 'hundi', 'hunde', 'tusi', 'tussi', 'tuhanu', 'mainu', 'saanu',
+  'sanu', 'kitho', 'kithe', 'chahida', 'chahidi', 'paina', 'pau', 'hoya',
+  'hoyea', 'kita', 'kiti', 'kite', 'ni', 'nai', 'reha', 'laiye',
+  'layiye', 'lau', 'milu', 'milugi', 'mildi', 'aaji', 'veere', 'paaji'
 ]);
 
 function detectLanguage(text) {
   const value = String(text || '').trim().toLowerCase();
   if (!value) return 'en';
   if (/[\u0900-\u097f]/.test(value)) return 'hi';
+  if (/[\u0a00-\u0a7f]/.test(value)) return 'pa';
   const words = value.match(/[a-z]+/g) || [];
+  if (words.some(word => PUNJABI_WORDS.has(word))) return 'pa';
   if (words.some(word => HINGLISH_WORDS.has(word))) return 'hinglish';
   return 'en';
 }
 
 function isGreetingOnly(text) {
   const value = String(text || '').toLowerCase().normalize('NFKC')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
-  return /^(?:(?:hi|hello|hey|namaste|नमस्ते)(?:\s+(?:kaise ho|how are you|कैसे हो|कैसे हैं))?|(?:kaise ho|how are you|कैसे हो|कैसे हैं))$/i.test(value);
+    .replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return /^(?:(?:hi|hello|hey|namaste|नमस्ते|ਸਤਿ\s*ਸ੍ਰੀ\s*ਅਕਾਲ)(?:\s+(?:kaise ho|how are you|कैसे हो|कैसे हैं|ਕਿਵੇਂ ਹੋ))?|(?:kaise ho|how are you|कैसे हो|कैसे हैं|ਕਿਵੇਂ ਹੋ))$/i.test(value);
 }
 
 function greetingReply(language) {
   if (language === 'hinglish') return 'Hi! Main app download, install, aur iPhone order ke steps mein help karta hoon. Aapko kis step mein help chahiye?';
   if (language === 'hi') return 'नमस्ते! मैं ऐप डाउनलोड, इंस्टॉल और iPhone ऑर्डर के steps में मदद कर सकता हूँ। आपको किस step में मदद चाहिए?';
+  if (language === 'pa') return 'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ! ਮੈਂ ਐਪ ਡਾਊਨਲੋਡ, ਇੰਸਟਾਲ ਅਤੇ iPhone ਆਰਡਰ ਦੇ ਸਟੈਪਸ ਵਿੱਚ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ। ਤੁਹਾਨੂੰ ਕਿਸ ਸਟੈਪ ਵਿੱਚ ਮਦਦ ਚਾਹੀਦੀ ਹੈ?';
   return 'Hello! I can help with downloading and installing the app, or with the iPhone order steps. What do you need help with?';
 }
 
 function isInstallOnlyConfirmation(text) {
   const value = String(text || '').toLowerCase();
-  const install = /\b(installed|install ho gaya|install kar liya|app lag gaya|download kar liya|downloaded)\b|(?:इंस्टॉल|डाउनलोड कर लिया|ऐप install)/i.test(value);
-  const positiveOrder = /\b(order|purchase|checkout)\b.{0,35}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed)\b|\b(order ho gaya|order kar diya|order place kar diya)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का))/i.test(value);
+  const install = /\b(installed|install ho gaya|install kar liya|app lag gaya|download kar liya|downloaded)\b|(?:इंस्टॉल|डाउनलोड कर लिया|ऐप install|ਇੰਸਟਾਲ|ਡਾਊਨਲੋਡ)/i.test(value);
+  const positiveOrder = /\b(order|purchase|checkout)\b.{0,35}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed)\b|\b(order ho gaya|order kar diya|order place kar diya)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का)|ਆਰਡਰ.{0,20}(ਹੋ ਗਿਆ|ਕਰ ਦਿੱਤਾ|ਪੱਕਾ))/i.test(value);
   return install && !positiveOrder;
 }
 
 function isExplicitOrderConfirmation(text) {
   const value = String(text || '').toLowerCase();
-  if (/\b(not|nahi|nhi|didn't|did not|abhi nahi|downloaded|download|installed|install)\b|(?:नहीं|नही|डाउनलोड|इंस्टॉल)/i.test(value)) return false;
-  return /^(yes|yep|yeah|haan|han|ji|ho gaya|haan kiya|yes i did|हो गया|हाँ|हां)[.!\s]*$/i.test(value) || /\b(order|purchase|checkout)\b.{0,45}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed|successfully ordered)\b|\b(order ho gaya|order kar diya|order place kar diya|haan order|yes order)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का)|आर्डर.{0,20}(हो गया|कर दिया))/i.test(value);
+  if (/\b(not|nahi|nhi|didn't|did not|abhi nahi|downloaded|download|installed|install)\b|(?:नहीं|नही|डाउनलोड|इंस्टॉल|ਨਹੀਂ|ਡਾਊਨਲੋਡ|ਇੰਸਟਾਲ)/i.test(value)) return false;
+  return /^(yes|yep|yeah|haan|han|ji|ho gaya|haan kiya|yes i did|हो गया|हाँ|हां|ਹਾਂ|ਹੋ ਗਿਆ)[.!\s]*$/i.test(value) || /\b(order|purchase|checkout)\b.{0,45}\b(placed|done|confirmed|complete|completed|success|successfully|ho gaya|kar diya)\b|\b(placed|ordered|confirmed|completed|successfully ordered)\b|\b(order ho gaya|order kar diya|order place kar diya|haan order|yes order)\b|(?:ऑर्डर.{0,20}(हो गया|कर दिया|पक्का)|आर्डर.{0,20}(हो गया|कर दिया)|ਆਰਡਰ.{0,20}(ਹੋ ਗਿਆ|ਕਰ ਦਿੱਤਾ))/i.test(value);
 }
 
 function requestedAppAsset(text) {
   const value = String(text || '').toLowerCase();
   if (/\b(send|share|give|need|want|where|get|link|url|apk|download)\b.{0,50}\b(app|application|apk|link|url)\b|\b(app|application|apk|link|url)\b.{0,50}\b(send|share|give|need|want|where|get|download|bhejo|bhej|chahiye|do|dedo|milega)\b|\b(send|share|give|need|want)\s+(it|that)\b/i.test(value)) return true;
-  return /ऐप|लिंक|डाउनलोड|apk/i.test(value) && /भेज|चाहिए|दो|दें|कहाँ|कहां/i.test(value);
+  return /(?:ऐप|एप|लिंक|ਐਪ|ਲਿੰਕ)/i.test(value) && /(?:भेज|चाहिए|दो|ਦੋ|ਦਿਓ|दें|ਦੇਵੋ|ਭੇਜੋ|ਦੇਓ|कहाँ|कहां|ਕਿੱਥੇ)/i.test(value);
 }
 
 function prepareAppRequestReply(text, userMessage, { storeUrl = '', apkAvailable = false, language = 'en' } = {}) {
@@ -55,12 +67,14 @@ function prepareAppRequestReply(text, userMessage, { storeUrl = '', apkAvailable
       ? 'App file attach ki hai; download link APK ke saath hai.'
       : language === 'hi'
         ? 'App file attach की है; download link APK के साथ है।'
-        : 'I’ve attached the app file with its download link.';
+        : language === 'pa'
+          ? 'ਐਪ ਫਾਈਲ ਅਟੈਚ ਕੀਤੀ ਹੈ; ਡਾਊਨਲੋਡ ਲਿੰਕ APK ਦੇ ਨਾਲ ਹੈ।'
+          : 'I’ve attached the app file with its download link.';
     const cleaned = reply.replace(/https?:\/\/\S+/gi, '').replace(/\b(sure[,! ]*)?(here (is|are) (the )?(app|apk|download|link)|link (is|attached) below)\b[.! ]*/gi, '').trim();
     return [cleaned, assetLine].filter(Boolean).join('\n');
   }
   if (!storeUrl || reply.includes(storeUrl)) return reply;
-  return `${reply || (language === 'hinglish' ? 'Ye raha app ka link:' : language === 'hi' ? 'यह रहा app का link:' : 'Here is the app link:')}\n${storeUrl}`;
+  return `${reply || (language === 'hinglish' ? 'Ye raha app ka link:' : language === 'hi' ? 'यह रहा app का link:' : language === 'pa' ? 'ਇਹ ਰਿਹਾ ਐਪ ਦਾ ਲਿੰਕ:' : 'Here is the app link:')}\n${storeUrl}`;
 }
 
 function isUnorderedInquiry(text) {

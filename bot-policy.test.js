@@ -4,18 +4,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { detectLanguage, isGreetingOnly, greetingReply, isInstallOnlyConfirmation, isExplicitOrderConfirmation, requestedAppAsset, prepareAppRequestReply, isUnorderedInquiry } = require('./bot-policy');
 
-test('detects Roman Hinglish and Devanagari Hindi separately from English', () => {
+test('detects Roman Hinglish and Devanagari Hindi separately from English and Punjabi', () => {
   assert.equal(detectLanguage('hi kaise ho'), 'hinglish');
   assert.equal(detectLanguage('App download karna hai'), 'hinglish');
   assert.equal(detectLanguage('नमस्ते, app kaise install karun?'), 'hi');
   assert.equal(detectLanguage('How do I install the app?'), 'en');
+  assert.equal(detectLanguage('ਕਿਵੇਂ ਆਰਡਰ ਕਰਨਾ ਹੈ?'), 'pa');
+  assert.equal(detectLanguage('kive order karna dasso'), 'pa');
 });
 
 test('recognizes only standalone casual greetings and redirects in the detected style', () => {
   assert.equal(isGreetingOnly('hi kaise ho'), true);
   assert.equal(isGreetingOnly('Hello!'), true);
+  assert.equal(isGreetingOnly('ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ'), true);
   assert.equal(isGreetingOnly('Hi, app kaise download karu?'), false);
   assert.match(greetingReply('hinglish'), /app download.*help/i);
+  assert.match(greetingReply('hi'), /ऐप डाउनलोड.*मदद/i);
+  assert.match(greetingReply('pa'), /ਐਪ ਡਾਊਨਲੋਡ.*ਮਦਦ/i);
   assert.match(greetingReply('en'), /downloading and installing the app/i);
 });
 

