@@ -231,6 +231,106 @@ const activeClients = {}; // slug -> client instance
 const clientStates = {};  // slug -> { status, qrCodeData, info, systemLogs, stats }
 const readFollowupSchedulers = {};
 
+// Localized, high-converting urgency reminder pools tailored to user's native language
+const URGENCY_REMINDER_POOLS = {
+  hinglish: {
+    1: [
+      '⚠️ *Offer Limited Hai!* Free iPhone ke limited slots hi bache hain. Jaldi app install karke order place karein nahi toh offer expire ho jayega! 📱✨',
+      '🔥 *Hurry Up!* Free iPhone offer limited time ke liye hai. Abhi app open karke apna order confirm karein warna offer miss ho jayega! 📲🎁',
+      '⚡ *Order Fast!* Free iPhone stock bahut tezi se khatam ho raha hai. Jaldi se app me jakar order complete karein! 🚀'
+    ],
+    2: [
+      '⏳ *Aaj Last Date Hai!* Free iPhone claim karne ka aakhri mauka hai, jaldi karein! App open karke abhi order confirm karein taaki parcel dispatch ho sake. 🎁📦',
+      '⏰ *Offer Expiring Soon!* Aaj last chance hai free iPhone claim karne ka. Jaldi app me order place karein, time khatam ho raha hai! ⏳⚡',
+      '🚨 *Don\'t Miss Out!* Aaj free iPhone offer ka last day hai! Abhi apna order confirm karein warna offer close ho jayega. 📲✨'
+    ],
+    3: [
+      '🚨 *Final Reminder:* Aapka reserved free iPhone offer kuch hi der mein expire hone wala hai! Abhi order karein warna kisi aur user ko allot ho jayega. 📲⚡',
+      '⚠️ *Last Call:* Free iPhone lene ka aakhri reminder! Abhi app open karke apna order confirm karein, offer permanently band hone wala hai. 🎁🛑',
+      '⏱️ *Order Fast or Expire!* Aapka free iPhone booking cancel hone wala hai. Abhi jaldi se app me order complete karein! 🚀📱'
+    ]
+  },
+
+  hi: {
+    1: [
+      '⚠️ *ऑफर सीमित है!* फ्री iPhone के कुछ ही यूनिट्स बचे हैं। जल्दी ऐप इंस्टॉल करके ऑर्डर करें नहीं तो यह ऑफर एक्सपायर हो जाएगा! 📱✨',
+      '🔥 *जल्दी करें!* फ्री iPhone का ऑफर सीमित समय के लिए ही है। अभी ऐप खोलकर अपना ऑर्डर कन्फर्म करें ताकि यह मौका हाथ से न निकले! 📲🎁',
+      '⚡ *तुरंत ऑर्डर करें!* फ्री iPhone का स्टॉक तेजी से खत्म हो रहा है। ऐप में जाकर अभी अपना ऑर्डर पूरा करें! 🚀'
+    ],
+    2: [
+      '⏳ *आज आख़िरी तारीख़ है!* फ्री iPhone पाने का यह अंतिम मौका है, जल्दी करें! ऐप खोलकर अभी ऑर्डर कन्फर्म करें ताकि आपका पार्सल डिस्पैच हो सके। 🎁📦',
+      '⏰ *ऑफर जल्द समाप्त हो रहा है!* आज फ्री iPhone क्लेम करने का आखिरी अवसर है। जल्दी ऐप में ऑर्डर प्लेस करें, समय खत्म हो रहा है! ⏳⚡',
+      '🚨 *मौका न गंवाएं!* आज फ्री iPhone ऑफर का आखिरी दिन है! अभी अपना ऑर्डर पूरा करें वरना ऑफर हमेशा के लिए बंद हो जाएगा। 📲✨'
+    ],
+    3: [
+      '🚨 *अंतिम रिमाइंडर:* आपका रिज़र्व किया गया फ्री iPhone ऑफर कुछ ही देर में समाप्त होने वाला है! जल्दी ऑर्डर करें वरना यह स्लॉट किसी और को मिल जाएगा। 📲⚡',
+      '⚠️ *लास्ट कॉल:* फ्री iPhone पाने का यह आखिरी मौका है! अभी ऐप खोलकर अपना ऑर्डर कन्फर्म करें, ऑफर हमेशा के लिए बंद होने वाला है। 🎁🛑',
+      '⏱️ *जल्दी ऑर्डर करें वरना ऑफर एक्सपायर!* आपकी फ्री iPhone बुकिंग रद्द होने वाली है। ऐप में तुरंत जाकर अपना ऑर्डर पूरा करें! 🚀📱'
+    ]
+  },
+
+  en: {
+    1: [
+      '⚠️ *Limited Offer!* Only a few free iPhone units are remaining. Install the app and place your order fast before the offer expires! 📱✨',
+      '🔥 *Hurry Up!* The free iPhone offer is for a limited time only. Open the app and confirm your order now before stock runs out! 📲🎁',
+      '⚡ *Order Fast!* Limited free iPhone stock remaining. Complete your order in the app now to claim yours! 🚀'
+    ],
+    2: [
+      '⏳ *Today is the Last Date!* This is your last chance to claim your free iPhone, act fast! Open the app and confirm your order now so your parcel can be dispatched. 🎁📦',
+      '⏰ *Offer Expiring Soon!* Today is the final chance to get your free iPhone. Place your order in the app before time runs out! ⏳⚡',
+      '🚨 *Don\'t Miss Out!* Today is the last day for the free iPhone offer! Complete your order in the app now before the offer closes. 📲✨'
+    ],
+    3: [
+      '🚨 *Final Reminder:* Your reserved free iPhone offer is about to expire shortly! Complete your order fast now or your slot will be given to someone else. 📲⚡',
+      '⚠️ *Last Call:* Final reminder to claim your free iPhone! Open the app and confirm your order now, the offer is closing permanently. 🎁🛑',
+      '⏱️ *Order Fast or Offer Expires!* Your free iPhone reservation is about to be cancelled. Complete your order now! 🚀📱'
+    ]
+  },
+
+  pa: {
+    1: [
+      '⚠️ *ਆਫਰ ਸੀਮਤ ਹੈ!* ਮੁਫ਼ਤ iPhone ਦੇ ਕੁਝ ਹੀ ਯੂਨਿਟ ਬਾਕੀ ਹਨ। ਜਲਦੀ ਐਪ ਇੰਸਟਾਲ ਕਰਕੇ ਆਰਡਰ ਕਰੋ ਨਹੀਂ ਤਾਂ ਆਫਰ ਖ਼ਤਮ ਹੋ ਜਾਵੇਗਾ! 📱✨',
+      '🔥 *ਜਲਦੀ ਕਰੋ!* ਮੁਫ਼ਤ iPhone ਦਾ ਇਹ ਆਫਰ ਸੀਮਤ ਸਮੇਂ ਲਈ ਹੈ। ਹੁਣੇ ਐਪ ਖੋਲ੍ਹ ਕੇ ਆਪਣਾ ਆਰਡਰ ਕਨਫਰਮ ਕਰੋ ਤਾਂ ਜੋ ਮੌਕਾ ਹੱਥੋਂ ਨਾ ਨਿਕਲੇ! 📲🎁',
+      '⚡ *ਹੁਣੇ ਆਰਡਰ ਕਰੋ!* ਮੁਫ਼ਤ iPhone ਦਾ ਬਹੁਤ ਘੱਟ ਸਟਾਕ ਬਚਿਆ ਹੈ। ਐਪ ਵਿੱਚ ਜਾ ਕੇ ਹੁਣੇ ਆਪਣਾ ਆਰਡਰ ਪੂਰਾ ਕਰੋ! 🚀'
+    ],
+    2: [
+      '⏳ *ਅੱਜ ਆਖਰੀ ਤਾਰੀਖ਼ ਹੈ!* ਮੁਫ਼ਤ iPhone ਲੈਣ ਦਾ ਇਹ ਆਖਰੀ ਮੌਕਾ ਹੈ, ਜਲਦੀ ਕਰੋ! ਐਪ ਖੋਲ੍ਹ ਕੇ ਹੁਣੇ ਆਰਡਰ ਕਨਫਰਮ ਕਰੋ ਤਾਂ ਜੋ ਪਾਰਸਲ ਡਿਸਪੈਚ ਹੋ ਸਕੇ। 🎁📦',
+      '⏰ *ਆਫਰ ਜਲਦ ਖਤਮ ਹੋ ਰਿਹਾ ਹੈ!* ਅੱਜ ਮੁਫ਼ਤ iPhone ਕਲੇਮ ਕਰਨ ਦਾ ਆਖਰੀ ਮੌਕਾ ਹੈ। ਜਲਦੀ ਐਪ ਵਿੱਚ ਆਰਡਰ ਪਲੇਸ ਕਰੋ, ਸਮਾਂ ਖਤਮ ਹੋ ਰਿਹਾ ਹੈ! ⏳⚡',
+      '🚨 *ਮੌਕਾ ਨਾ ਗੁਆਓ!* ਅੱਜ ਮੁਫ਼ਤ iPhone ਆਫਰ ਦਾ ਆਖਰੀ ਦਿਨ ਹੈ! ਹੁਣੇ ਆਪਣਾ ਆਰਡਰ ਪੂਰਾ ਕਰੋ ਨਹੀਂ ਤਾਂ ਆਫਰ ਹਮੇਸ਼ਾ ਲਈ ਬੰਦ ਹੋ ਜਾਵੇਗਾ। 📲✨'
+    ],
+    3: [
+      '🚨 *ਆਖਰੀ ਰਿਮਾਈਂਡਰ:* ਤੁਹਾਡਾ ਰਿਜ਼ਰਵ ਕੀਤਾ ਮੁਫ਼ਤ iPhone ਆਫਰ ਕੁਝ ਹੀ ਸਮੇਂ ਵਿੱਚ ਖਤਮ ਹੋਣ ਵਾਲਾ ਹੈ! ਜਲਦੀ ਆਰਡਰ ਕਰੋ ਨਹੀਂ ਤਾਂ ਸਲਾਟ ਕਿਸੇ ਹੋਰ ਨੂੰ ਦੇ ਦਿੱਤਾ ਜਾਵੇਗਾ। 📲⚡',
+      '⚠️ *ਲਾਸਟ ਕਾਲ:* ਮੁਫ਼ਤ iPhone ਲੈਣ ਦਾ ਆਖਰੀ ਰਿਮਾਈਂਡਰ! ਹੁਣੇ ਐਪ ਖੋਲ੍ਹ ਕੇ ਆਪਣਾ ਆਰਡਰ ਕਨਫਰਮ ਕਰੋ, ਆਫਰ ਬੰਦ ਹੋਣ ਵਾਲਾ ਹੈ। 🎁🛑',
+      '⏱️ *ਜਲਦੀ ਆਰਡਰ ਕਰੋ!* ਤੁਹਾਡੀ ਮੁਫ਼ਤ iPhone ਬੁਕਿੰਗ ਰੱਦ ਹੋਣ ਵਾਲੀ ਹੈ। ਐਪ ਵਿੱਚ ਜਾ ਕੇ ਹੁਣੇ ਆਰਡਰ ਪੂਰਾ ਕਰੋ! 🚀📱'
+    ]
+  }
+};
+
+function getLocalizedUrgencyReminder(userLang = 'hinglish', reminderCount = 1, deadline = '', sender = '') {
+  const lang = ['hi', 'en', 'pa', 'hinglish'].includes(userLang) ? userLang : 'hinglish';
+  const stage = Math.max(1, Math.min(3, Number(reminderCount) || 1));
+  const pool = (URGENCY_REMINDER_POOLS[lang] && URGENCY_REMINDER_POOLS[lang][stage]) || URGENCY_REMINDER_POOLS.hinglish[stage];
+  
+  const seed = String(sender || '').split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  const variantIndex = (seed + stage) % pool.length;
+  let reminder = pool[variantIndex] || pool[0];
+
+  if (deadline) {
+    const trimmedDeadline = String(deadline).trim();
+    if (trimmedDeadline) {
+      if (lang === 'hi') {
+        reminder += ` ⏰ (डेडलाइन: ${trimmedDeadline})`;
+      } else if (lang === 'pa') {
+        reminder += ` ⏰ (ਆਖਰੀ ਸਮਾਂ: ${trimmedDeadline})`;
+      } else {
+        reminder += ` ⏰ (Deadline: ${trimmedDeadline})`;
+      }
+    }
+  }
+
+  return reminder;
+}
+
 function createReadFollowupScheduler(slug) {
   const instance = loadInstances().find(item => item.slug === slug);
   const configuredDelay = Number(instance?.orderFollowupDelayMinutes || 5) * 60 * 1000;
@@ -240,46 +340,11 @@ function createReadFollowupScheduler(slug) {
     onDue: async (_slug, entry) => {
       const client = activeClients[slug];
       if (!client || clientStates[slug]?.status !== 'ready') throw new Error('WhatsApp session is not ready');
-      const userLang = entry.userLanguage || detectUserLanguageFromHistory(slug, entry.sender, '');
+      const userLang = detectUserLanguageFromHistory(slug, entry.sender, '') || entry.userLanguage || 'hinglish';
       const deadline = String(loadInstances().find(item => item.slug === slug)?.iphoneOfferDeadline || '').trim();
-      const hasRealDeadline = deadline && Number.isFinite(Date.parse(deadline)) && Date.parse(deadline) > Date.now();
-      const deadlineLine = hasRealDeadline ? ` Offer available until ${deadline}.` : '';
-      const reminderOptions = userLang === 'hinglish'
-        ? [
-            `Agar app install ya iPhone order ke kisi step mein help chahiye, bas reply kar dena—main guide kar dunga.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`,
-            `App open karne ya order place karne mein koi issue aa raha hai? Batao, main step-by-step help karunga.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`,
-            `Jab aap ready hon, app install aur iPhone order complete karne mein main help kar sakta hoon. Koi question ho to pooch lena.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`
-          ]
-        : userLang === 'hi'
-          ? [
-              `App install करने या iPhone order के किसी step में मदद चाहिए तो reply करें—मैं guide कर दूँगा।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`,
-              `App open करने या order place करने में कोई issue है? बताइए, मैं step-by-step मदद करूँगा।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`,
-              `जब आप ready हों, app install और iPhone order के steps में मैं मदद कर सकता हूँ। कोई सवाल हो तो पूछें।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`
-            ]
-          : [
-              `If you need help with any app installation or iPhone order step, reply here and I’ll guide you.${deadlineLine}`,
-              `Is anything blocking you from opening the app or placing the order? Tell me and I can help with the next step.${deadlineLine}`,
-              `Whenever you’re ready, I can walk you through installing the app and placing the iPhone order.${deadlineLine}`
-            ];
-      let reminder = reminderOptions[Math.max(0, Math.min(2, (entry.reminderCount || 1) - 1))];
-      if (userLang === 'en' && /[a-z]/i.test(entry.text || '') && /\b(kya|hai|ho|kaise|karo|karna|mujhe|aap|app|order|download|install|bhejo|chahiye|nahi)\b/i.test(entry.text || '')) {
-        const inferred = detectUserLanguage(entry.text);
-        if (inferred !== 'en') {
-          reminder = inferred === 'hinglish'
-            ? `Hi! App install karke iPhone order place karne mein help chahiye to reply karo. Ready ho to bata dena.${hasRealDeadline ? ` Offer ${deadline} tak available hai.` : ''}`
-            : `नमस्ते! App install करके iPhone order place करने में मदद चाहिए तो reply करें।${hasRealDeadline ? ` Offer ${deadline} तक available है।` : ''}`;
-        }
-      }
-      if (!['en', 'hi', 'hinglish'].includes(userLang)) {
-        try {
-          const translated = await generateAIResponse(
-            slug,
-            `Write one brief, polite WhatsApp follow-up in the user's language (${userLang}). Offer help installing the app or placing the iPhone order. Do not claim a deadline or say limited time. Do not pressure them. Return only the message.`,
-            [], false, entry.sender, false
-          );
-          if (translated?.text) reminder = translated.text;
-        } catch {}
-      }
+      
+      const reminder = getLocalizedUrgencyReminder(userLang, entry.reminderCount || 1, deadline, entry.sender);
+
       const chatId = entry.chatId || `${entry.sender}@c.us`;
       if (!readFollowupSchedulers[slug]?.isPending(slug, entry.messageId)) throw new Error('Follow-up was cancelled before send');
       const chat = await client.getChatById(chatId);
@@ -291,7 +356,7 @@ function createReadFollowupScheduler(slug) {
         return chat.sendMessage(finalReminder);
       });
       addToMemory(slug, entry.sender, 'assistant', reminder);
-      logInstanceEvent(slug, 'send', `Read-triggered order follow-up sent to +${entry.sender} (${userLang})`);
+      logInstanceEvent(slug, 'send', `Read-triggered urgency order follow-up sent to +${entry.sender} (${userLang}, #${entry.reminderCount || 1})`);
     },
     onLimitReached: async (_slug, entry) => {
       readFollowupSchedulers[slug]?.cancelForUser(slug, entry.sender);

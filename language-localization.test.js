@@ -41,6 +41,11 @@ function createServerContext() {
   const endPrompt = serverSource.indexOf('function detectProcessIntent', startPrompt);
   vm.runInContext('function buildAppLinkInstructions(url) { return "URL: " + url; }\n' + serverSource.slice(startPrompt, endPrompt), context);
 
+  // Load URGENCY_REMINDER_POOLS and getLocalizedUrgencyReminder
+  const startReminder = serverSource.indexOf('const URGENCY_REMINDER_POOLS =');
+  const endReminder = serverSource.indexOf('function createReadFollowupScheduler', startReminder);
+  vm.runInContext(serverSource.slice(startReminder, endReminder), context);
+
   return context;
 }
 
@@ -176,4 +181,57 @@ test('greetingReply and prepareAppRequestReply provide Punjabi, Hindi, Hinglish,
 
   const hiAsset = prepareAppRequestReply('Sure', 'ऐप भेजें', { apkAvailable: true, language: 'hi' });
   assert.match(hiAsset, /App file attach की है/);
+});
+
+test('getLocalizedUrgencyReminder delivers unique urgency messages in user\'s native language across reminder stages', () => {
+  const ctx = createServerContext();
+
+  // 1. Hinglish stage progression
+  const h1 = ctx.getLocalizedUrgencyReminder('hinglish', 1, '', '9876543210');
+  const h2 = ctx.getLocalizedUrgencyReminder('hinglish', 2, '', '9876543210');
+  const h3 = ctx.getLocalizedUrgencyReminder('hinglish', 3, '', '9876543210');
+  assert.ok(h1.includes('Offer Limited Hai') || h1.includes('Hurry Up') || h1.includes('Order Fast'));
+  assert.ok(h2.includes('Aaj Last Date Hai') || h2.includes('Offer Expiring Soon') || h2.includes("Don't Miss Out"));
+  assert.ok(h3.includes('Final Reminder') || h3.includes('Last Call') || h3.includes('Order Fast or Expire'));
+  assert.notEqual(h1, h2);
+  assert.notEqual(h2, h3);
+
+  // 2. Hindi (Devanagari) stage progression
+  const hi1 = ctx.getLocalizedUrgencyReminder('hi', 1, 'आज रात 12 बजे', '9876543210');
+  const hi2 = ctx.getLocalizedUrgencyReminder('hi', 2, 'आज रात 12 बजे', '9876543210');
+  const hi3 = ctx.getLocalizedUrgencyReminder('hi', 3, 'आज रात 12 बजे', '9876543210');
+  assert.ok(/[\u0900-\u097F]/.test(hi1));
+  assert.ok(/[\u0900-\u097F]/.test(hi2));
+  assert.ok(/[\u0900-\u097F]/.test(hi3));
+  assert.ok(hi1.includes('ऑफर सीमित है') || hi1.includes('जल्दी करें') || hi1.includes('तुरंत ऑर्डर'));
+  assert.ok(hi2.includes('आज आख़िरी तारीख़ है') || hi2.includes('ऑफर जल्द समाप्त') || hi2.includes('मौका न गंवाएं'));
+  assert.ok(hi3.includes('अंतिम रिमाइंडर') || hi3.includes('लास्ट कॉल') || hi3.includes('जल्दी ऑर्डर करें वरना ऑफर'));
+  assert.ok(hi1.includes('डेडलाइन: आज रात 12 बजे'));
+  assert.notEqual(hi1, hi2);
+  assert.notEqual(hi2, hi3);
+
+  // 3. English stage progression
+  const en1 = ctx.getLocalizedUrgencyReminder('en', 1, 'Tonight 12 PM', '9876543210');
+  const en2 = ctx.getLocalizedUrgencyReminder('en', 2, 'Tonight 12 PM', '9876543210');
+  const en3 = ctx.getLocalizedUrgencyReminder('en', 3, 'Tonight 12 PM', '9876543210');
+  assert.ok(en1.includes('Limited Offer') || en1.includes('Hurry Up') || en1.includes('Order Fast'));
+  assert.ok(en2.includes('Today is the Last Date') || en2.includes('Offer Expiring Soon') || en2.includes("Don't Miss Out"));
+  assert.ok(en3.includes('Final Reminder') || en3.includes('Last Call') || en3.includes('Order Fast or Offer Expires'));
+  assert.ok(en1.includes('Deadline: Tonight 12 PM'));
+  assert.notEqual(en1, en2);
+  assert.notEqual(en2, en3);
+
+  // 4. Punjabi stage progression
+  const pa1 = ctx.getLocalizedUrgencyReminder('pa', 1, 'ਅੱਜ ਰਾਤ', '9876543210');
+  const pa2 = ctx.getLocalizedUrgencyReminder('pa', 2, 'ਅੱਜ ਰਾਤ', '9876543210');
+  const pa3 = ctx.getLocalizedUrgencyReminder('pa', 3, 'ਅੱਜ ਰਾਤ', '9876543210');
+  assert.ok(/[\u0A00-\u0A7F]/.test(pa1));
+  assert.ok(/[\u0A00-\u0A7F]/.test(pa2));
+  assert.ok(/[\u0A00-\u0A7F]/.test(pa3));
+  assert.ok(pa1.includes('ਆਫਰ ਸੀਮਤ ਹੈ') || pa1.includes('ਜਲਦੀ ਕਰੋ') || pa1.includes('ਹੁਣੇ ਆਰਡਰ'));
+  assert.ok(pa2.includes('ਅੱਜ ਆਖਰੀ ਤਾਰੀਖ਼ ਹੈ') || pa2.includes('ਆਫਰ ਜਲਦ ਖਤਮ') || pa2.includes('ਮੌਕਾ ਨਾ ਗੁਆਓ'));
+  assert.ok(pa3.includes('ਆਖਰੀ ਰਿਮਾਈਂਡਰ') || pa3.includes('ਲਾਸਟ ਕਾਲ') || pa3.includes('ਜਲਦੀ ਆਰਡਰ ਕਰੋ'));
+  assert.ok(pa1.includes('ਆਖਰੀ ਸਮਾਂ: ਅੱਜ ਰਾਤ'));
+  assert.notEqual(pa1, pa2);
+  assert.notEqual(pa2, pa3);
 });
